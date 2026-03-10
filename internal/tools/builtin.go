@@ -372,8 +372,12 @@ func toolMkdir(workDir string, args map[string]string) (string, error) {
 
 func toolTree(workDir string, args map[string]string) (string, error) {
 	base := workDir
-	if v, ok := args["path"]; ok && v != "" {
-		base = resolvePath(workDir, v)
+	if v, ok := args["path"]; ok && v != "" && v != "." {
+		resolved := resolvePath(workDir, v)
+		if info, err := os.Stat(resolved); err == nil && info.IsDir() {
+			base = resolved
+		}
+		// If path doesn't exist, silently fall back to workDir
 	}
 
 	maxDepth := 3

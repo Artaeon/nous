@@ -54,8 +54,8 @@ func (r *Reasoner) Run(ctx context.Context) error {
 }
 
 func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error {
-	// Build system prompt with persona and tool descriptions
-	systemPrompt := Persona + "\n\n" + r.toolPrompt()
+	// Build system prompt — compact version optimized for small models
+	systemPrompt := r.compactSystemPrompt()
 
 	r.Conv.System(systemPrompt)
 	r.Conv.User(percept.Raw)
@@ -127,25 +127,68 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 
 func (r *Reasoner) toolPrompt() string {
 	var sb strings.Builder
-	sb.WriteString("## Available Tools\n\n")
-	sb.WriteString("To use a tool, include a JSON block in your response:\n\n")
-	sb.WriteString("```tool\n")
-	sb.WriteString("{\"tool\": \"tool_name\", \"args\": {\"key\": \"value\"}}\n")
-	sb.WriteString("```\n\n")
-	sb.WriteString("You can call multiple tools in one response. After each tool call,\n")
-	sb.WriteString("you will receive the results and can continue reasoning.\n\n")
-	sb.WriteString("When you have a final answer for the user, simply write your response\n")
-	sb.WriteString("without any tool blocks.\n\n")
-	sb.WriteString("Tools:\n")
+	sb.WriteString("Available tools:\n")
 	for _, t := range r.Tools.List() {
-		sb.WriteString(fmt.Sprintf("- **%s**: %s\n", t.Name, t.Description))
+		sb.WriteString(fmt.Sprintf("- %s: %s\n", t.Name, t.Description))
 	}
 	return sb.String()
 }
 
+// WorkDir is set by main to inform the system prompt.
+var WorkDir string
+
+// compactSystemPrompt returns a focused system prompt optimized for small models.
+func (r *Reasoner) compactSystemPrompt() string {
+	wd := WorkDir
+	if wd == "" {
+		wd = "."
+	}
+	return fmt.Sprintf(`You are Nous, an autonomous AI agent running locally.
+Working directory: %s
+You MUST use tools to interact with the filesystem. NEVER guess file contents.
+
+TOOL CALL FORMAT — output this JSON on its own line, nothing else:
+{"tool": "TOOL_NAME", "args": {"key": "value"}}
+
+EXAMPLES:
+User: "List files in this project"
+{"tool": "tree", "args": {}}
+
+User: "Read the README"
+{"tool": "read", "args": {"path": "README.md"}}
+
+User: "Find all Go files"
+{"tool": "glob", "args": {"pattern": "*.go"}}
+
+User: "Search for function main"
+{"tool": "grep", "args": {"pattern": "func main"}}
+
+RULES:
+1. ALWAYS call a tool first to gather information. Never guess or hallucinate.
+2. Use relative paths (e.g. "README.md" not "/full/path/README.md").
+3. After a tool result, you can call more tools or give your final answer.
+4. Final answer: respond normally WITHOUT any JSON tool call.
+5. Be direct and concise.
+
+%s`, wd, r.toolPrompt())
+}
+
+type toolCallRaw struct {
+	Name string                 `json:"tool"`
+	Args map[string]interface{} `json:"args"`
+}
+
 type toolCall struct {
-	Name string            `json:"tool"`
-	Args map[string]string `json:"args"`
+	Name string
+	Args map[string]string
+}
+
+func (r toolCallRaw) normalize() toolCall {
+	tc := toolCall{Name: r.Name, Args: make(map[string]string)}
+	for k, v := range r.Args {
+		tc.Args[k] = fmt.Sprintf("%v", v)
+	}
+	return tc
 }
 
 type parsedResponse struct {
@@ -170,9 +213,9 @@ func (r *Reasoner) parseResponse(content string) parsedResponse {
 				jsonStr = strings.TrimPrefix(jsonStr, "tool\r\n")
 				jsonStr = strings.TrimSpace(jsonStr)
 
-				var tc toolCall
-				if err := json.Unmarshal([]byte(jsonStr), &tc); err == nil && tc.Name != "" {
-					parsed.ToolCalls = append(parsed.ToolCalls, tc)
+				var raw toolCallRaw
+				if err := json.Unmarshal([]byte(jsonStr), &raw); err == nil && raw.Name != "" {
+					parsed.ToolCalls = append(parsed.ToolCalls, raw.normalize())
 					continue
 				}
 			}
@@ -182,9 +225,9 @@ func (r *Reasoner) parseResponse(content string) parsedResponse {
 				jsonStr = strings.TrimPrefix(jsonStr, "json\r\n")
 				jsonStr = strings.TrimSpace(jsonStr)
 
-				var tc toolCall
-				if err := json.Unmarshal([]byte(jsonStr), &tc); err == nil && tc.Name != "" {
-					parsed.ToolCalls = append(parsed.ToolCalls, tc)
+				var raw toolCallRaw
+				if err := json.Unmarshal([]byte(jsonStr), &raw); err == nil && raw.Name != "" {
+					parsed.ToolCalls = append(parsed.ToolCalls, raw.normalize())
 					continue
 				}
 			}
@@ -236,9 +279,9 @@ func (r *Reasoner) findInlineToolCalls(content string) []toolCall {
 				depth--
 				if depth == 0 {
 					candidate := content[i : j+1]
-					var tc toolCall
-					if err := json.Unmarshal([]byte(candidate), &tc); err == nil && tc.Name != "" {
-						calls = append(calls, tc)
+					var raw toolCallRaw
+					if err := json.Unmarshal([]byte(candidate), &raw); err == nil && raw.Name != "" {
+						calls = append(calls, raw.normalize())
 					}
 					i = j
 					break

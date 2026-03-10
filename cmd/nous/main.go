@@ -85,6 +85,7 @@ func main() {
 	// Initialize tool registry
 	toolReg := tools.NewRegistry()
 	tools.RegisterBuiltins(toolReg, workDir, *allowShell)
+	cognitive.WorkDir = workDir
 
 	// Initialize core systems
 	board := blackboard.New()
