@@ -17,6 +17,7 @@ import (
 	"github.com/artaeon/nous/internal/cognitive"
 	"github.com/artaeon/nous/internal/memory"
 	"github.com/artaeon/nous/internal/ollama"
+	"github.com/artaeon/nous/internal/tools"
 )
 
 const banner = `
@@ -27,7 +28,7 @@ const banner = `
                 ╚═══════════════════════════════════╝
 `
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 func main() {
 	// Flags
@@ -78,17 +79,23 @@ func main() {
 		}
 	}
 
+	// Get working directory
+	workDir, _ := os.Getwd()
+
+	// Initialize tool registry
+	toolReg := tools.NewRegistry()
+	tools.RegisterBuiltins(toolReg, workDir, *allowShell)
+
 	// Initialize core systems
 	board := blackboard.New()
 
 	// Memory systems
 	wm := memory.NewWorkingMemory(64)
 	ltm := memory.NewLongTermMemory(*memoryPath)
-	_, _ = wm, ltm // Will be integrated in later iterations
 
 	// Create cognitive streams
 	perceiver := cognitive.NewPerceiver(board, llm)
-	reasoner := cognitive.NewReasoner(board, llm)
+	reasoner := cognitive.NewReasoner(board, llm, toolReg)
 	planner := cognitive.NewPlanner(board, llm)
 	executor := cognitive.NewExecutor(board, llm)
 	reflector := cognitive.NewReflector(board, llm)
@@ -102,6 +109,11 @@ func main() {
 		if done {
 			fmt.Println()
 		}
+	}
+
+	// Tool status updates
+	reasoner.OnStatus = func(status string) {
+		fmt.Printf("\033[90m%s\033[0m\n", status)
 	}
 
 	// Start cognitive streams
@@ -119,11 +131,19 @@ func main() {
 		}()
 	}
 
-	fmt.Printf("  %d cognitive streams active", len(streams))
-	if *allowShell {
-		fmt.Print(" | shell: ENABLED")
+	// Print status
+	toolList := toolReg.List()
+	toolNames := make([]string, len(toolList))
+	for i, t := range toolList {
+		toolNames[i] = t.Name
 	}
-	fmt.Println()
+
+	fmt.Printf("  6 cognitive streams active\n")
+	fmt.Printf("  %d tools: %s\n", len(toolList), strings.Join(toolNames, ", "))
+	if *allowShell {
+		fmt.Println("  shell execution: ENABLED")
+	}
+	fmt.Printf("  working directory: %s\n", workDir)
 	fmt.Println()
 	fmt.Println("  I am Nous. I think, therefore I am — locally.")
 	fmt.Println("  type /help for commands, /quit to exit")
@@ -154,7 +174,7 @@ func main() {
 
 		// Handle commands
 		if strings.HasPrefix(input, "/") {
-			if handleCommand(input, board, llm, wm, ltm) {
+			if handleCommand(input, board, llm, toolReg, wm, ltm) {
 				continue
 			}
 		}
@@ -169,7 +189,7 @@ func main() {
 	}
 }
 
-func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Client, wm *memory.WorkingMemory, ltm *memory.LongTermMemory) bool {
+func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Client, toolReg *tools.Registry, wm *memory.WorkingMemory, ltm *memory.LongTermMemory) bool {
 	parts := strings.Fields(input)
 	cmd := strings.ToLower(parts[0])
 
@@ -187,6 +207,7 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
     /longterm      Show long-term memory entries
     /goals         Show active goals
     /model         Show current model info
+    /tools         List available tools
     /clear         Clear working memory
     /quit          Exit Nous
 `)
@@ -235,6 +256,11 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 			}
 		}
 
+	case "/tools":
+		for _, t := range toolReg.List() {
+			fmt.Printf("  %-10s %s\n", t.Name, t.Description)
+		}
+
 	case "/clear":
 		fmt.Println("  working memory cleared")
 
@@ -246,8 +272,7 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 }
 
 func waitForAnswer(board *blackboard.Blackboard) {
-	// Poll the blackboard for an answer (set by the reasoner)
-	deadline := time.After(120 * time.Second)
+	deadline := time.After(300 * time.Second)
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -259,9 +284,6 @@ func waitForAnswer(board *blackboard.Blackboard) {
 		case <-ticker.C:
 			if answer, ok := board.Get("last_answer"); ok {
 				board.Delete("last_answer")
-				// If streaming was used, the answer was already printed token by token.
-				// Only print if it wasn't streamed (i.e., the answer is non-empty and
-				// wasn't already output via OnToken).
 				_ = answer
 				return
 			}
@@ -280,8 +302,6 @@ func defaultMemoryPath() string {
 func formatMemory() string {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-
-	// Get total system memory (approximation via Go's view)
 	totalMB := m.Sys / 1024 / 1024
 	if totalMB < 1024 {
 		return fmt.Sprintf("%d MB", totalMB)
