@@ -1,5 +1,5 @@
-# Binaries
-nous
+# Binaries (output in project root)
+/nous
 *.exe
 *.dll
 *.so
