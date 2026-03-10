@@ -282,7 +282,7 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 		os.Exit(0)
 
 	case "/help", "/h":
-		fmt.Println(`
+		fmt.Print(`
   Commands:
     /help              Show this help
     /status            Show cognitive system status
