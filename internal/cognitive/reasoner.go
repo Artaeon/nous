@@ -22,7 +22,11 @@ type Reasoner struct {
 	Conv     *Conversation
 	OnToken  func(token string, done bool)
 	OnStatus func(status string)
+	Confirm  ConfirmFunc
 }
+
+// CurrentProject holds the scanned project info for the system prompt.
+var CurrentProject *ProjectInfo
 
 func NewReasoner(board *blackboard.Blackboard, llm *ollama.Client, toolReg *tools.Registry) *Reasoner {
 	return &Reasoner{
@@ -143,8 +147,14 @@ func (r *Reasoner) compactSystemPrompt() string {
 	if wd == "" {
 		wd = "."
 	}
+	projectCtx := ""
+	if CurrentProject != nil {
+		projectCtx = "\n" + CurrentProject.ContextString() + "\n"
+	}
+
 	return fmt.Sprintf(`You are Nous, an autonomous AI agent running locally.
 Working directory: %s
+%s
 You MUST use tools to interact with the filesystem. NEVER guess file contents.
 
 TOOL CALL FORMAT — output this JSON on its own line, nothing else:
@@ -170,7 +180,7 @@ RULES:
 4. Final answer: respond normally WITHOUT any JSON tool call.
 5. Be direct and concise.
 
-%s`, wd, r.toolPrompt())
+%s`, wd, projectCtx, r.toolPrompt())
 }
 
 type toolCallRaw struct {
@@ -303,7 +313,31 @@ func (r *Reasoner) executeTool(tc toolCall) (string, error) {
 		tc.Args = make(map[string]string)
 	}
 
+	// Check if this is a dangerous action requiring confirmation
+	if r.Confirm != nil {
+		if reason, dangerous := IsDangerous(tc.Name); dangerous {
+			detail := fmt.Sprintf("%s: %s %v", reason, tc.Name, tc.Args)
+			if !r.Confirm(tc.Name+" "+formatArgs(tc.Args), detail) {
+				return "Action denied by user.", nil
+			}
+		}
+	}
+
 	return tool.Execute(tc.Args)
+}
+
+func formatArgs(args map[string]string) string {
+	if path, ok := args["path"]; ok {
+		return path
+	}
+	if cmd, ok := args["command"]; ok {
+		return cmd
+	}
+	parts := make([]string, 0, len(args))
+	for k, v := range args {
+		parts = append(parts, k+"="+v)
+	}
+	return strings.Join(parts, " ")
 }
 
 func (r *Reasoner) streamCall() (string, error) {
