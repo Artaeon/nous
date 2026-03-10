@@ -28,7 +28,7 @@ const banner = `
                 ╚═══════════════════════════════════╝
 `
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 func main() {
 	// Flags
@@ -36,6 +36,8 @@ func main() {
 	host := flag.String("host", ollama.DefaultHost, "Ollama server address")
 	memoryPath := flag.String("memory", defaultMemoryPath(), "Path for persistent memory storage")
 	allowShell := flag.Bool("allow-shell", false, "Enable shell command execution")
+	trustMode := flag.Bool("trust", false, "Skip confirmation prompts for file operations")
+	sessionID := flag.String("resume", "", "Resume a previous session by ID")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 	flag.Parse()
 
@@ -81,11 +83,17 @@ func main() {
 
 	// Get working directory
 	workDir, _ := os.Getwd()
+	cognitive.WorkDir = workDir
+
+	// Project auto-scan
+	fmt.Print("  scanning project... ")
+	projectInfo := cognitive.ScanProject(workDir)
+	cognitive.CurrentProject = projectInfo
+	fmt.Printf("%s (%s, %d files)\n", projectInfo.Name, projectInfo.Language, projectInfo.FileCount)
 
 	// Initialize tool registry
 	toolReg := tools.NewRegistry()
 	tools.RegisterBuiltins(toolReg, workDir, *allowShell)
-	cognitive.WorkDir = workDir
 
 	// Initialize core systems
 	board := blackboard.New()
@@ -93,6 +101,27 @@ func main() {
 	// Memory systems
 	wm := memory.NewWorkingMemory(64)
 	ltm := memory.NewLongTermMemory(*memoryPath)
+
+	// Session management
+	sessionStore := cognitive.NewSessionStore(*memoryPath)
+	currentSession := &cognitive.Session{
+		ID:        cognitive.GenerateSessionID(),
+		Name:      "session-" + time.Now().Format("2006-01-02-15-04"),
+		Model:     *model,
+		CreatedAt: time.Now(),
+		Metadata:  map[string]string{"workdir": workDir},
+	}
+
+	// Resume previous session if requested
+	if *sessionID != "" {
+		loaded, err := sessionStore.Load(*sessionID)
+		if err != nil {
+			fmt.Printf("  warning: could not resume session %s: %v\n", *sessionID, err)
+		} else {
+			currentSession = loaded
+			fmt.Printf("  resumed session: %s (%d messages)\n", loaded.Name, len(loaded.Messages))
+		}
+	}
 
 	// Create cognitive streams
 	perceiver := cognitive.NewPerceiver(board, llm)
@@ -104,11 +133,50 @@ func main() {
 
 	executor.AllowShell = *allowShell
 
-	// Enable streaming output
+	// Set up confirmation for dangerous actions
+	if *trustMode {
+		reasoner.Confirm = cognitive.AutoApprove
+	} else {
+		reasoner.Confirm = cognitive.TerminalConfirm
+	}
+
+	// Load resumed session messages into conversation
+	if *sessionID != "" && len(currentSession.Messages) > 0 {
+		for _, msg := range currentSession.Messages {
+			switch msg.Role {
+			case "user":
+				reasoner.Conv.User(msg.Content)
+			case "assistant":
+				reasoner.Conv.Assistant(msg.Content)
+			}
+		}
+	}
+
+	// Enable streaming output — filter tool JSON from display
+	var streamBuf strings.Builder
+	inToolCall := false
+
 	reasoner.OnToken = func(token string, done bool) {
-		fmt.Print(token)
-		if done {
-			fmt.Println()
+		streamBuf.WriteString(token)
+
+		if !done {
+			// Detect tool call JSON — suppress from display
+			current := streamBuf.String()
+			if !inToolCall {
+				// Check if we're starting a tool call
+				trimmed := strings.TrimSpace(current)
+				if strings.HasPrefix(trimmed, "{\"tool\"") || strings.HasPrefix(trimmed, "```tool") {
+					inToolCall = true
+					return
+				}
+				fmt.Print(token)
+			}
+		} else {
+			if !inToolCall {
+				fmt.Println()
+			}
+			inToolCall = false
+			streamBuf.Reset()
 		}
 	}
 
@@ -139,23 +207,30 @@ func main() {
 		toolNames[i] = t.Name
 	}
 
-	fmt.Printf("  6 cognitive streams active\n")
+	fmt.Printf("  %d cognitive streams active\n", len(streams))
 	fmt.Printf("  %d tools: %s\n", len(toolList), strings.Join(toolNames, ", "))
 	if *allowShell {
-		fmt.Println("  shell execution: ENABLED")
+		fmt.Print("  shell: ENABLED")
+		if *trustMode {
+			fmt.Print(" | trust mode: ON")
+		}
+		fmt.Println()
 	}
-	fmt.Printf("  working directory: %s\n", workDir)
+	fmt.Printf("  session: %s\n", currentSession.ID)
 	fmt.Println()
 	fmt.Println("  I am Nous. I think, therefore I am — locally.")
 	fmt.Println("  type /help for commands, /quit to exit")
 	fmt.Println()
 
-	// Handle graceful shutdown
+	// Handle graceful shutdown — save session
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		fmt.Println("\n\n  shutting down...")
+		fmt.Println("\n\n  saving session...")
+		currentSession.Messages = reasoner.Conv.Messages()
+		sessionStore.Save(currentSession)
+		fmt.Println("  goodbye.")
 		cancel()
 		os.Exit(0)
 	}()
@@ -175,7 +250,7 @@ func main() {
 
 		// Handle commands
 		if strings.HasPrefix(input, "/") {
-			if handleCommand(input, board, llm, toolReg, wm, ltm) {
+			if handleCommand(input, board, llm, toolReg, wm, ltm, sessionStore, currentSession, reasoner, projectInfo) {
 				continue
 			}
 		}
@@ -187,30 +262,40 @@ func main() {
 		// Wait for the answer to appear on the blackboard
 		waitForAnswer(board)
 		fmt.Println()
+
+		// Auto-save session after each exchange
+		currentSession.Messages = reasoner.Conv.Messages()
+		go sessionStore.Save(currentSession)
 	}
 }
 
-func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Client, toolReg *tools.Registry, wm *memory.WorkingMemory, ltm *memory.LongTermMemory) bool {
+func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Client, toolReg *tools.Registry, wm *memory.WorkingMemory, ltm *memory.LongTermMemory, sessions *cognitive.SessionStore, current *cognitive.Session, reasoner *cognitive.Reasoner, project *cognitive.ProjectInfo) bool {
 	parts := strings.Fields(input)
 	cmd := strings.ToLower(parts[0])
 
 	switch cmd {
 	case "/quit", "/exit", "/q":
+		fmt.Println("  saving session...")
+		current.Messages = reasoner.Conv.Messages()
+		sessions.Save(current)
 		fmt.Println("  goodbye.")
 		os.Exit(0)
 
 	case "/help", "/h":
 		fmt.Println(`
   Commands:
-    /help          Show this help
-    /status        Show cognitive system status
-    /memory        Show working memory contents
-    /longterm      Show long-term memory entries
-    /goals         Show active goals
-    /model         Show current model info
-    /tools         List available tools
-    /clear         Clear working memory
-    /quit          Exit Nous
+    /help              Show this help
+    /status            Show cognitive system status
+    /memory            Show working memory contents
+    /longterm          Show long-term memory entries
+    /goals             Show active goals
+    /model             Show current model info
+    /tools             List available tools
+    /project           Show project info
+    /sessions          List saved sessions
+    /save [name]       Save current session with a name
+    /clear             Clear conversation context
+    /quit              Exit Nous (auto-saves session)
 `)
 
 	case "/status":
@@ -219,6 +304,8 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 		fmt.Printf("  Working memory: %d items\n", wm.Size())
 		fmt.Printf("  Long-term memory: %d entries\n", ltm.Size())
 		fmt.Printf("  Recent actions: %d\n", len(board.RecentActions(100)))
+		fmt.Printf("  Conversation: %s\n", reasoner.Conv.Summary())
+		fmt.Printf("  Session: %s (%s)\n", current.Name, current.ID)
 
 	case "/memory":
 		items := wm.MostRelevant(10)
@@ -262,8 +349,40 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 			fmt.Printf("  %-10s %s\n", t.Name, t.Description)
 		}
 
+	case "/project":
+		fmt.Print(project.ContextString())
+
+	case "/sessions":
+		list, err := sessions.List()
+		if err != nil || len(list) == 0 {
+			fmt.Println("  no saved sessions")
+		} else {
+			for _, s := range list {
+				marker := " "
+				if s.ID == current.ID {
+					marker = "*"
+				}
+				fmt.Printf("  %s %s  %-30s  %d msgs  %s\n",
+					marker, s.ID, s.Name, len(s.Messages),
+					s.UpdatedAt.Format("2006-01-02 15:04"))
+			}
+			fmt.Println("\n  resume with: nous --resume <ID>")
+		}
+
+	case "/save":
+		if len(parts) > 1 {
+			current.Name = strings.Join(parts[1:], " ")
+		}
+		current.Messages = reasoner.Conv.Messages()
+		if err := sessions.Save(current); err != nil {
+			fmt.Printf("  error saving: %v\n", err)
+		} else {
+			fmt.Printf("  session saved: %s (%s)\n", current.Name, current.ID)
+		}
+
 	case "/clear":
-		fmt.Println("  working memory cleared")
+		reasoner.Conv = cognitive.NewConversation(20)
+		fmt.Println("  conversation cleared")
 
 	default:
 		fmt.Printf("  unknown command: %s (try /help)\n", cmd)
