@@ -119,11 +119,13 @@ func main() {
 		}()
 	}
 
-	fmt.Printf("  %d cognitive streams active\n", len(streams))
+	fmt.Printf("  %d cognitive streams active", len(streams))
 	if *allowShell {
-		fmt.Println("  shell execution: ENABLED")
+		fmt.Print(" | shell: ENABLED")
 	}
 	fmt.Println()
+	fmt.Println()
+	fmt.Println("  I am Nous. I think, therefore I am — locally.")
 	fmt.Println("  type /help for commands, /quit to exit")
 	fmt.Println()
 

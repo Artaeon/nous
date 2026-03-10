@@ -75,7 +75,7 @@ QUALITY: good|questionable|bad
 ISSUE: <description if not good, otherwise "none">`, action.Tool, action.Input, truncate(action.Output, 500))
 
 	resp, err := r.LLM.Chat([]ollama.Message{
-		{Role: "system", Content: "You are a quality monitor. Evaluate action results briefly."},
+		{Role: "system", Content: ReflectPrompt},
 		{Role: "user", Content: prompt},
 	}, &ollama.ModelOptions{
 		Temperature: 0.1,

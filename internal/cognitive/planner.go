@@ -54,7 +54,7 @@ Available tools: shell (run commands), read (read files), write (write files), s
 Goal: %s`, goal.Description)
 
 	resp, err := p.LLM.Chat([]ollama.Message{
-		{Role: "system", Content: "You are a task planner. Break goals into concrete, executable steps. Be specific and practical."},
+		{Role: "system", Content: PlanPrompt},
 		{Role: "user", Content: prompt},
 	}, &ollama.ModelOptions{
 		Temperature: 0.3,

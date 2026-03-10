@@ -63,7 +63,7 @@ ENTITIES: <key1=value1, key2=value2>
 User input: %s`, raw)
 
 	resp, err := p.LLM.Chat([]ollama.Message{
-		{Role: "system", Content: "You are a perception module. Extract intent and entities from input. Be concise."},
+		{Role: "system", Content: PerceivePrompt},
 		{Role: "user", Content: prompt},
 	}, &ollama.ModelOptions{
 		Temperature: 0.1,

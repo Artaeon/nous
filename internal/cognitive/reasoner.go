@@ -50,8 +50,11 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 	// Build context from working memory
 	contextStr := r.buildContext()
 
-	systemPrompt := `You are Nous, a cognitive reasoning engine. Think step by step.
-You have access to tools and can execute actions. When you need to perform an action, respond with:
+	systemPrompt := Persona + `
+
+## Response Format
+
+When you need to perform an action, respond with:
 THINK: <your reasoning>
 ACTION: <tool_name> <args>
 
@@ -59,7 +62,7 @@ When you have a final answer, respond with:
 THINK: <your reasoning>
 ANSWER: <your response to the user>
 
-Be concise and direct.`
+You may omit the THINK line for simple, direct responses.`
 
 	messages := []ollama.Message{
 		{Role: "system", Content: systemPrompt},
