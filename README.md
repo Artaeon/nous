@@ -1,112 +1,88 @@
-# Nous
+<h1 align="center">
+  🧠 Nous
+</h1>
 
-**Native Orchestration of Unified Streams**
+<p align="center">
+  <strong>Native Orchestration of Unified Streams</strong>
+</p>
 
-> *"Nous (νοῦς) — the highest form of intellect; the faculty by which first principles are known."*
-> — Aristotle, *Posterior Analytics*
+<p align="center">
+  <em>A cognitive coding agent that runs entirely on your machine.</em>
+</p>
 
-A cognitive architecture that thinks, plans, reflects, and acts — running entirely on your machine. No cloud. No GPU. No API keys. Just bare metal and a local language model.
-
-Nous is not a chatbot. It is a mind.
+<p align="center">
+  <img src="https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.22+">
+  <img src="https://img.shields.io/badge/binary-~8_MB-blue?style=flat-square" alt="~8 MB binary">
+  <img src="https://img.shields.io/badge/GPU-not_required-green?style=flat-square" alt="No GPU">
+  <img src="https://img.shields.io/badge/cloud-not_required-green?style=flat-square" alt="No Cloud">
+  <img src="https://img.shields.io/badge/license-MIT-brightgreen?style=flat-square" alt="MIT License">
+</p>
 
 ---
 
-## Philosophy
+> *"It is the active intellect that makes all things."*
+> — Aristotle, *De Anima*, on nous (vouc)
 
-Most AI tools are thin wrappers around API calls — prompt in, response out, nothing learned, nothing retained. They require cloud connectivity, GPU clusters, and monthly subscriptions to function.
+---
 
-Nous takes a different path. Inspired by cognitive science architectures (ACT-R, SOAR, Global Workspace Theory), it implements a **concurrent cognitive architecture** where independent mental processes — perception, reasoning, planning, execution, reflection, and learning — run as parallel streams, communicating through a shared blackboard.
+## What Is This
 
-The result: a system that doesn't just respond, but *thinks*. It decomposes goals, monitors its own reasoning, learns from experience, and adapts to the hardware it runs on.
+Nous is an autonomous AI coding agent — like Claude Code or Cursor — but it runs **entirely on your local hardware** via Ollama. No cloud. No API keys. No telemetry. No data leaving your machine. It is built as a concurrent cognitive architecture: six independent processing streams (perceive, reason, plan, execute, reflect, learn) communicate through a shared blackboard, producing emergent intelligent behavior from the interplay of simple, well-defined modules. The result is a self-contained ~8 MB Go binary that can read your codebase, reason about it, write files, execute commands, and learn from its own experience — all running on CPU with whatever model you point it at.
 
-Built in Go. Compiled to a single binary. Runs on anything with a CPU.
+---
+
+## Feature Highlights
+
+| Capability | Cloud AI Agents | Nous |
+|---|---|---|
+| **Data privacy** | Your code hits external servers | Everything stays on your machine |
+| **API keys / billing** | Required | None |
+| **Internet required** | Yes | No (after model download) |
+| **Binary size** | Electron app / cloud service | ~8 MB static binary |
+| **GPU required** | Typically yes | No (CPU inference via Ollama) |
+| **Model choice** | Vendor-locked | Any Ollama-compatible model |
+| **Session persistence** | Cloud-dependent | Local JSON, fully portable |
+| **Tool confirmation** | Varies | Explicit user approval for destructive actions |
+| **Self-improvement** | No | Learns patterns from successful interactions |
+| **Architecture** | Monolithic LLM call | 6 concurrent cognitive streams |
+| **Cost** | $20+/month | Free forever |
 
 ---
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                        BLACKBOARD                            │
-│               (Shared Cognitive Workspace)                   │
-│                                                              │
-│  ┌───────────┐  ┌────────────┐  ┌─────────────────────┐     │
-│  │  Percepts │  │  Working   │  │  Long-term Memory   │     │
-│  │  (Input)  │  │  Memory    │  │  (mmap'd KV store)  │     │
-│  └───────────┘  └────────────┘  └─────────────────────┘     │
-│  ┌───────────┐  ┌────────────┐  ┌─────────────────────┐     │
-│  │   Goals   │  │   Plans    │  │  Action History     │     │
-│  │   Stack   │  │   Queue    │  │  (Episodic Memory)  │     │
-│  └───────────┘  └────────────┘  └─────────────────────┘     │
-└──────────────────────────────────────────────────────────────┘
-          ↕              ↕               ↕
-   ┌────────────┐ ┌────────────┐ ┌────────────┐
-   │ Perceiver  │ │  Reasoner  │ │  Executor  │
-   │  Stream    │ │  Stream    │ │  Stream    │
-   └────────────┘ └────────────┘ └────────────┘
-   ┌────────────┐ ┌────────────┐ ┌────────────┐
-   │ Reflector  │ │  Planner   │ │  Learner   │
-   │  Stream    │ │  Stream    │ │  Stream    │
-   └────────────┘ └────────────┘ └────────────┘
-          ↕              ↕               ↕
-   ┌──────────────────────────────────────────┐
-   │            Ollama (Local LLM)            │
-   │         qwen2.5 · phi3 · gemma2         │
-   └──────────────────────────────────────────┘
+                        ┌─────────────────────────────────────────────┐
+                        │              B L A C K B O A R D            │
+                        │                                             │
+                        │  Percepts ─ Goals ─ Plans ─ Actions ─ Memory│
+                        │          (shared cognitive workspace)       │
+                        └──────┬──────┬──────┬──────┬──────┬──────┬───┘
+                               │      │      │      │      │      │
+                 ┌─────────────┘      │      │      │      │      └─────────────┐
+                 │        ┌───────────┘      │      │      └───────────┐        │
+                 │        │        ┌─────────┘      └─────────┐        │        │
+                 ▼        ▼        ▼                          ▼        ▼        ▼
+          ┌──────────┐┌──────────┐┌──────────┐        ┌──────────┐┌──────────┐┌──────────┐
+          │PERCEIVER ││ REASONER ││ PLANNER  │        │ EXECUTOR ││REFLECTOR ││ LEARNER  │
+          │          ││          ││          │        │          ││          ││          │
+          │ Parses   ││ Chain-of ││ Decom-   │        │ Runs     ││ Monitors ││ Extracts │
+          │ input,   ││ -thought ││ poses    │        │ tools,   ││ quality, ││ patterns │
+          │ extracts ││ with     ││ goals    │        │ records  ││ flags    ││ from     │
+          │ intent & ││ autonomo ││ into     │        │ results  ││ errors,  ││ success, │
+          │ entities ││ us tool  ││ ordered  │        │ on the   ││ triggers ││ persists │
+          │          ││ use      ││ steps    │        │ board    ││ replans  ││ to disk  │
+          └──────────┘└──────────┘└──────────┘        └──────────┘└──────────┘└──────────┘
+                 │         │          │                     │          │           │
+                 └─────────┴──────────┴─────────┬──────────┴──────────┴───────────┘
+                                                │
+                                         ┌──────┴──────┐
+                                         │   Ollama    │
+                                         │  (local)    │
+                                         └─────────────┘
 ```
 
-### The Six Cognitive Streams
-
-Each stream runs as a lightweight goroutine (~2KB), communicating through the blackboard via Go channels:
-
-| Stream | Role | Cognitive Analogy |
-|---|---|---|
-| **Perceiver** | Parses input, extracts intent and entities | Sensory cortex |
-| **Reasoner** | Chain-of-thought inference via local LLM | Prefrontal cortex |
-| **Planner** | Decomposes goals into executable sub-tasks | Dorsolateral prefrontal |
-| **Executor** | Runs tools and actions in the real world | Motor cortex |
-| **Reflector** | Monitors reasoning quality, detects errors | Anterior cingulate |
-| **Learner** | Extracts patterns, forms long-term memories | Hippocampus |
-
----
-
-## Key Innovations
-
-### Compressed Context Atoms
-
-Instead of feeding the entire conversation history to the LLM on every turn (expensive on CPU), Nous compresses past context into dense **context atoms** — `{trigger → compressed_knowledge}` pairs. Before each inference call, only the most relevant atoms are retrieved and injected. This keeps the context window minimal, making CPU inference fast.
-
-### Memory-Mapped Long-Term Knowledge
-
-Long-term memory uses `mmap` — memory-mapped files managed by the OS kernel. No database, no serialization overhead, no startup cost. Cold data stays on disk until accessed. Hot data stays in RAM automatically. The system remembers everything across restarts with zero overhead.
-
-### Adaptive Resource Budgeting
-
-On startup, Nous detects available CPU cores, RAM, and thermal state. It dynamically adjusts:
-
-- Fewer cores → fewer concurrent streams
-- Less RAM → smaller context windows, lighter model selection
-- Thermal throttling → reduced inference frequency
-
-The system adapts to whatever hardware it runs on — from a Raspberry Pi to a workstation.
-
-### Self-Reflective Reasoning
-
-The Reflector stream continuously monitors the Reasoner's output for logical inconsistencies, hallucinations, and confidence drops. When it detects degraded reasoning, it triggers re-evaluation with a different decomposition strategy. The system doesn't just think — it thinks about its thinking.
-
----
-
-## Recommended Models
-
-Nous works with any Ollama-compatible model. Recommended for CPU-only inference:
-
-| Model | Parameters | RAM Usage | Best For |
-|---|---|---|---|
-| `qwen2.5:1.5b` | 1.5B | ~1.5 GB | General reasoning, best quality/size ratio |
-| `deepseek-r1:1.5b` | 1.5B | ~1.5 GB | Chain-of-thought, native reasoning traces |
-| `phi3:mini` | 3.8B | ~3 GB | Complex tasks (requires 8GB+ RAM) |
-| `qwen2.5:0.5b` | 0.5B | ~500 MB | Ultra-minimal, embedded systems |
-| `smollm2:1.7b` | 1.7B | ~1.5 GB | Edge-optimized inference |
+All six streams run as independent goroutines. They do not call each other — they communicate exclusively through the blackboard. This means the system can perceive new input while simultaneously executing a plan step, reflecting on a previous result, and learning from a completed goal.
 
 ---
 
@@ -114,34 +90,147 @@ Nous works with any Ollama-compatible model. Recommended for CPU-only inference:
 
 ### Prerequisites
 
-- [Go 1.22+](https://go.dev/dl/)
-- [Ollama](https://ollama.ai/) with a pulled model
+- **Go 1.22+** — [golang.org/dl](https://golang.org/dl/)
+- **Ollama** — [ollama.com](https://ollama.com/)
+- A model pulled locally (see [Recommended Models](#recommended-models))
 
 ### Install
 
 ```bash
+# Clone
 git clone https://github.com/artaeon/nous.git
 cd nous
-go build -o nous ./cmd/nous
+
+# Build (~8 MB binary, zero runtime dependencies)
+make build
+
+# Or install directly
+go install github.com/artaeon/nous/cmd/nous@latest
 ```
 
 ### Run
 
 ```bash
-# Pull a model first
-ollama pull qwen2.5:1.5b
-
-# Start Nous
+# Basic — uses qwen2.5:1.5b by default
 ./nous
+
+# With a specific model
+./nous --model codellama:7b
+
+# Enable shell command execution
+./nous --allow-shell
+
+# Full autonomy (shell + skip confirmations)
+./nous --allow-shell --trust
+
+# Resume a previous session
+./nous --resume 1709834521000
 ```
 
-### Configuration
+### First Interaction
 
-Nous auto-detects your hardware and selects optimal defaults. Override with flags:
-
-```bash
-./nous --model qwen2.5:1.5b --streams 4 --memory-path ~/.nous/memory
 ```
+                ╔═══════════════════════════════════╗
+                ║             N O U S               ║
+                ║   Native Orchestration of         ║
+                ║       Unified Streams             ║
+                ╚═══════════════════════════════════╝
+
+  version 0.3.0 | amd64 | 8 cores | 16 GB RAM
+
+  connecting to ollama... OK (qwen2.5:1.5b)
+  scanning project... nous (Go, 24 files)
+  6 cognitive streams active
+  9 tools: read, write, edit, glob, grep, ls, shell, mkdir, tree
+  session: 1709834521000
+
+  I am Nous. I think, therefore I am — locally.
+  type /help for commands, /quit to exit
+
+  nous> What does this project do?
+```
+
+---
+
+## Configuration
+
+All configuration is via CLI flags. No config files, no environment variables, no hidden state.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--model` | `qwen2.5:1.5b` | Ollama model to use |
+| `--host` | `http://localhost:11434` | Ollama server address |
+| `--memory` | `~/.nous` | Path for persistent memory and session storage |
+| `--allow-shell` | `false` | Enable shell command execution |
+| `--trust` | `false` | Skip confirmation prompts for file and shell operations |
+| `--resume` | (none) | Resume a previous session by ID |
+| `--version` | — | Print version and exit |
+
+---
+
+## Tools
+
+Nous ships with 9 built-in tools that the reasoning engine can invoke autonomously. The model decides which tools to call and in what order — chaining multiple calls in a loop until it has enough information to answer.
+
+| Tool | Description | Requires `--allow-shell` |
+|---|---|---|
+| `read` | Read file contents with optional line offset and limit | No |
+| `write` | Create or overwrite a file | No (prompts for confirmation) |
+| `edit` | Replace a specific string in a file (exact match, must be unique) | No (prompts for confirmation) |
+| `glob` | Find files matching a glob pattern (e.g. `*.go`) | No |
+| `grep` | Search file contents for a regex pattern with optional file filter | No |
+| `ls` | List directory contents with file sizes | No |
+| `tree` | Show project directory structure with configurable depth | No |
+| `mkdir` | Create a directory and all parent directories | No (prompts for confirmation) |
+| `shell` | Execute an arbitrary shell command | **Yes** |
+
+Destructive tools (`write`, `edit`, `shell`, `mkdir`) require explicit user confirmation unless `--trust` is set.
+
+---
+
+## Slash Commands
+
+| Command | Description |
+|---|---|
+| `/help` | Show available commands |
+| `/status` | Show cognitive system status (percepts, goals, memory, conversation) |
+| `/memory` | Show working memory contents ranked by relevance |
+| `/longterm` | Show long-term memory entries with access counts |
+| `/goals` | Show active goals and their status |
+| `/model` | Show current model info and list all available Ollama models |
+| `/tools` | List all registered tools with descriptions |
+| `/project` | Show detected project info (language, file count, key files, tree) |
+| `/sessions` | List all saved sessions with message counts |
+| `/save [name]` | Save the current session with an optional name |
+| `/clear` | Clear conversation context |
+| `/quit` | Save session and exit |
+
+---
+
+## How the Cognitive Architecture Works
+
+Classical AI agents make a single LLM call per user message. Nous works differently.
+
+**Six concurrent streams** run as goroutines, communicating through a shared **blackboard** — a thread-safe cognitive workspace that holds percepts, goals, plans, action records, and working memory. No stream calls another directly. They react to events:
+
+1. **Perceiver** — Listens for raw user input. Extracts intent and entities via the LLM. Posts a structured `Percept` to the blackboard.
+
+2. **Reasoner** — Reacts to percepts. Runs autonomous chain-of-thought inference with tool use. Can chain up to 15 tool calls in a single loop — reading files, searching code, editing files — before producing a final answer. Streams tokens to the terminal in real time, suppressing tool-call JSON from the display.
+
+3. **Planner** — Reacts to new goals. Decomposes them into ordered, executable step sequences using hierarchical task decomposition via the LLM.
+
+4. **Executor** — Reacts to plans. Walks through each step, runs the specified tool, and records success or failure as an `ActionRecord` on the blackboard.
+
+5. **Reflector** — Reacts to action records. Evaluates output quality via the LLM. If an action failed or produced questionable results, flags it for re-planning.
+
+6. **Learner** — Reacts to completed goals. Extracts behavioral patterns from successful interactions and persists them to disk as JSON. Over time, the system builds a library of proven strategies.
+
+**Memory is dual-layered:**
+
+- **Working Memory** — Capacity-limited (64 slots), decay-based. Items lose relevance over time and are evicted when capacity is exceeded. Accessing an item boosts its relevance (recency effect).
+- **Long-Term Memory** — Persistent JSON-backed key-value store with access counting. Survives restarts. Categories enable structured retrieval.
+
+**Context Compression** — The `compress` module distills conversation fragments into dense "atoms" — reusable `{trigger, knowledge, weight}` tuples. Before inference, only the most relevant atoms are retrieved and injected, keeping the context window minimal for CPU inference.
 
 ---
 
@@ -149,63 +238,111 @@ Nous auto-detects your hardware and selects optimal defaults. Override with flag
 
 ```
 nous/
-├── cmd/nous/                  # Entry point
-│   └── main.go
+├── cmd/
+│   └── nous/
+│       └── main.go              # Entry point, REPL, CLI flags, signal handling
 ├── internal/
-│   ├── blackboard/            # Shared cognitive workspace
-│   ├── cognitive/             # The six cognitive streams
-│   │   ├── perceiver.go
-│   │   ├── reasoner.go
-│   │   ├── planner.go
-│   │   ├── executor.go
-│   │   ├── reflector.go
-│   │   └── learner.go
-│   ├── memory/                # Working, long-term, episodic memory
-│   ├── ollama/                # Ollama HTTP client (streaming)
-│   ├── tools/                 # Extensible tool registry
-│   └── compress/              # Context atom compression engine
-├── go.mod
-└── go.sum
+│   ├── blackboard/
+│   │   └── blackboard.go        # Shared cognitive workspace + event bus
+│   ├── cognitive/
+│   │   ├── stream.go            # Stream interface + Base struct
+│   │   ├── perceiver.go         # Input parsing + intent extraction
+│   │   ├── reasoner.go          # Autonomous chain-of-thought + tool loop
+│   │   ├── planner.go           # Goal decomposition into step plans
+│   │   ├── executor.go          # Tool execution + action recording
+│   │   ├── reflector.go         # Quality monitoring + error detection
+│   │   ├── learner.go           # Pattern extraction + persistence
+│   │   ├── conversation.go      # Multi-turn history with auto-truncation
+│   │   ├── persona.go           # System prompt + identity definition
+│   │   ├── session.go           # Session persistence (save / load / resume)
+│   │   ├── scanner.go           # Project auto-detection (language, structure)
+│   │   └── confirm.go           # User confirmation for dangerous actions
+│   ├── memory/
+│   │   ├── working.go           # Decay-based working memory (capacity-limited)
+│   │   └── longterm.go          # Persistent key-value long-term memory
+│   ├── ollama/
+│   │   └── client.go            # Ollama HTTP client (chat, stream, ping, list)
+│   ├── tools/
+│   │   ├── registry.go          # Tool registry (register, get, list, describe)
+│   │   └── builtin.go           # 9 built-in tools
+│   └── compress/
+│       └── atoms.go             # Context compression into reusable atoms
+├── Makefile                     # build, run, test, lint, release
+└── go.mod                       # Zero external dependencies
 ```
 
 ---
 
-## What Makes Nous Different
+## Recommended Models
 
-| | Cloud AI Tools | Nous |
-|---|---|---|
-| **Runtime** | Cloud API | Single local binary |
-| **GPU** | Required | Not needed |
-| **Architecture** | Prompt → Response | Concurrent cognitive streams |
-| **Memory** | Stateless | Persistent, self-organizing |
-| **Size** | N/A | ~10 MB binary |
-| **Privacy** | Data sent to cloud | Fully local, air-gapped capable |
-| **Adaptability** | Fixed | Adapts to hardware |
-| **Self-awareness** | None | Reflective monitoring |
+Nous works with any model available through Ollama. Smaller models are faster but less capable at complex reasoning and tool use. Larger models produce better results but need more RAM.
+
+| Model | Parameters | RAM | Speed | Tool Use | Best For |
+|---|---|---|---|---|---|
+| `qwen2.5:1.5b` | 1.5B | ~2 GB | Fast | Decent | Quick tasks, light hardware (default) |
+| `qwen2.5-coder:7b` | 7B | ~5 GB | Moderate | Good | Code generation and analysis |
+| `codellama:7b` | 7B | ~5 GB | Moderate | Good | Code-focused tasks |
+| `llama3.1:8b` | 8B | ~6 GB | Moderate | Good | General-purpose reasoning |
+| `deepseek-coder-v2:16b` | 16B | ~12 GB | Slower | Strong | Complex multi-step work |
+| `codestral:22b` | 22B | ~14 GB | Slower | Strong | Advanced code understanding |
+| `qwen2.5:32b` | 32B | ~20 GB | Slow | Strong | When quality matters most |
+
+Pull a model before first use:
+
+```bash
+ollama pull qwen2.5:1.5b
+```
 
 ---
 
 ## Roadmap
 
-- [x] Project scaffold and architecture design
-- [ ] Ollama streaming client
-- [ ] Blackboard shared state
-- [ ] Perceiver + Reasoner (minimal thinking loop)
-- [ ] Interactive CLI (REPL)
-- [ ] Planner with hierarchical task decomposition
-- [ ] Executor with tool system
-- [ ] Reflector self-monitoring
-- [ ] Learner pattern extraction
-- [ ] Compressed context atoms
-- [ ] Memory-mapped long-term storage
-- [ ] Adaptive resource budgeting
+- [x] Core cognitive architecture (6 concurrent streams as goroutines)
+- [x] Blackboard pattern with event-driven pub/sub communication
+- [x] Autonomous tool-use loop (up to 15 chained calls per turn)
+- [x] 9 built-in tools (read, write, edit, glob, grep, ls, tree, mkdir, shell)
+- [x] Streaming token output with tool-call JSON filtering
+- [x] Session persistence and resume across restarts
+- [x] Project auto-detection (language, file count, structure, key files)
+- [x] Working memory with relevance decay and capacity eviction
+- [x] Long-term memory with persistent JSON storage
+- [x] Context compression via knowledge atoms
+- [x] User confirmation for destructive actions (write, edit, shell, mkdir)
+- [x] Behavioral pattern learning from completed goals
+- [x] Multi-platform release builds (Linux, macOS, amd64, arm64)
+- [ ] Embedding-based atom retrieval (replace keyword overlap scoring)
+- [ ] Multi-file edit transactions with rollback
+- [ ] Git integration (diff awareness, commit, branch context)
+- [ ] Automatic test generation and execution
+- [ ] LSP integration for language-aware code navigation
+- [ ] Local web search tool (scraping, no API)
+- [ ] Voice input via local Whisper
+- [ ] Plugin system for community tools
+- [ ] TUI with split panes (conversation + file preview)
+
+---
+
+## Contributing
+
+Contributions are welcome. The architecture is designed for extension without touching the core:
+
+- **New tools** — Implement `func(args map[string]string) (string, error)` and register it in `internal/tools/builtin.go`. The reasoner discovers new tools automatically via the registry.
+- **New cognitive streams** — Implement the `Stream` interface (`Name() string`, `Run(ctx context.Context) error`), subscribe to blackboard events, and add it to the stream list in `main.go`.
+- **Bug fixes and improvements** — Standard PR workflow. Keep changes focused. Run `make test` and `make lint` before submitting.
+
+The codebase has zero external Go dependencies. Let's keep it that way.
 
 ---
 
 ## License
 
-MIT
+MIT License — See [LICENSE](LICENSE) for details.
 
 ---
 
-*Built by [Artaeon](mailto:raphael.lugmayr@stoicera.com)*
+<p align="center">
+  <strong>Nous</strong> — <em>I think, therefore I am — locally.</em>
+</p>
+<p align="center">
+  Built by <a href="mailto:raphael.lugmayr@stoicera.com">Artaeon</a>
+</p>
