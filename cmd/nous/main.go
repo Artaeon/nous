@@ -126,6 +126,8 @@ func main() {
 	// Create cognitive streams
 	perceiver := cognitive.NewPerceiver(board, llm)
 	reasoner := cognitive.NewReasoner(board, llm, toolReg)
+	reasoner.WorkingMem = wm
+	reasoner.LongTermMem = ltm
 	planner := cognitive.NewPlanner(board, llm)
 	executor := cognitive.NewExecutor(board, llm)
 	reflector := cognitive.NewReflector(board, llm)
