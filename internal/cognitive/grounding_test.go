@@ -177,40 +177,51 @@ func TestReflectionGateReset(t *testing.T) {
 
 func TestReflectionGateNormalUsage(t *testing.T) {
 	g := &ReflectionGate{}
-	hint := g.Check("read", "some file content", nil)
-	if hint != "" {
-		t.Errorf("normal tool result should produce no hint, got: %s", hint)
+	cr := g.Check("read", "some file content", nil)
+	if cr.Hint != "" {
+		t.Errorf("normal tool result should produce no hint, got: %s", cr.Hint)
+	}
+	if cr.ForceStop {
+		t.Error("normal result should not force stop")
 	}
 }
 
 func TestReflectionGateConsecutiveEmpty(t *testing.T) {
 	g := &ReflectionGate{}
 	g.Check("grep", "", nil)
-	hint := g.Check("grep", "", nil)
-	if !strings.Contains(hint, "empty results") {
-		t.Errorf("two empty results should trigger warning, got: %s", hint)
+	cr := g.Check("grep", "", nil)
+	if !strings.Contains(cr.Hint, "empty") {
+		t.Errorf("two empty results should trigger warning, got: %s", cr.Hint)
 	}
 }
 
 func TestReflectionGateRepetition(t *testing.T) {
 	g := &ReflectionGate{}
 	g.Check("read", "content A", nil)
-	g.Check("ls", "dir listing", nil)
-	hint := g.Check("read", "content A", nil) // same result as first
-	if !strings.Contains(hint, "repeating") {
-		t.Errorf("repeated tool call should be detected, got: %s", hint)
+	cr := g.Check("read", "content A", nil) // same result = repetition
+	if !strings.Contains(cr.Hint, "already have") {
+		t.Errorf("repeated tool call should be detected, got: %s", cr.Hint)
 	}
 }
 
-func TestReflectionGateTooManyIterations(t *testing.T) {
+func TestReflectionGateForceStopOnTripleRepeat(t *testing.T) {
 	g := &ReflectionGate{}
-	// Make 5 unique calls
-	for i := 0; i < 4; i++ {
-		g.Check("read", strings.Repeat("x", i+1), nil)
+	g.Check("ls", "dir listing", nil)
+	g.Check("ls", "dir listing", nil)
+	cr := g.Check("ls", "dir listing", nil) // 3rd repeat
+	if !cr.ForceStop {
+		t.Error("3 repeated calls should force stop")
 	}
-	hint := g.Check("grep", "unique result 5", nil)
-	if !strings.Contains(hint, "many tool calls") {
-		t.Errorf("5th tool call should trigger convergence hint, got: %s", hint)
+}
+
+func TestReflectionGateForceStopOnManyIterations(t *testing.T) {
+	g := &ReflectionGate{}
+	g.Check("read", "a", nil)
+	g.Check("ls", "b", nil)
+	g.Check("grep", "c", nil)
+	cr := g.Check("tree", "d", nil) // 4th unique call
+	if !cr.ForceStop {
+		t.Error("4th tool call should force stop")
 	}
 }
 
@@ -218,8 +229,8 @@ func TestReflectionGateEmptyResetOnContent(t *testing.T) {
 	g := &ReflectionGate{}
 	g.Check("grep", "", nil) // empty
 	g.Check("read", "found it!", nil) // non-empty resets counter
-	hint := g.Check("grep", "", nil) // empty again but counter was reset
-	if strings.Contains(hint, "empty results") {
+	cr := g.Check("grep", "", nil) // empty again but counter was reset
+	if strings.Contains(cr.Hint, "empty") {
 		t.Error("non-empty result should reset consecutive empty counter")
 	}
 }

@@ -168,7 +168,7 @@ func main() {
 	var streamBuf strings.Builder
 	inToolCall := false
 
-	toolMarkers := []string{`{"tool"`, "```tool", "```json\n{\"tool\"", "```\n{\"tool\""}
+	toolMarkers := []string{`{"tool"`, "```tool", "```json\n{\"tool\"", "```\n{\"tool\"", "ACT: {\"tool\"", "ACT:{\"tool\""}
 	isToolJSON := func(s string) bool {
 		t := strings.TrimSpace(s)
 		for _, m := range toolMarkers {

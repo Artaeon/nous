@@ -157,8 +157,14 @@ func (g *ReflectionGate) Reset() {
 	g.recentIdx = 0
 }
 
-// Check evaluates a tool result and returns a corrective hint (or "").
-func (g *ReflectionGate) Check(toolName, result string, err error) string {
+// CheckResult describes what the gate recommends.
+type CheckResult struct {
+	Hint       string // corrective hint to inject (empty = no hint)
+	ForceStop  bool   // true = stop tool loop and force a final answer
+}
+
+// Check evaluates a tool result and returns a corrective hint (or empty CheckResult).
+func (g *ReflectionGate) Check(toolName, result string, err error) CheckResult {
 	g.toolCallCount++
 
 	// Track this call for repetition detection
@@ -168,21 +174,24 @@ func (g *ReflectionGate) Check(toolName, result string, err error) string {
 
 	// Check for errors
 	if err != nil {
-		return "" // ValidateToolResult already provides error hints
+		return CheckResult{} // ValidateToolResult already provides error hints
 	}
 
 	// Track empty results
 	if strings.TrimSpace(result) == "" || strings.TrimSpace(result) == "No matches found." {
 		g.consecutiveEmpty++
+		if g.consecutiveEmpty >= 3 {
+			return CheckResult{Hint: "Multiple tools returned empty. Stopping.", ForceStop: true}
+		}
 		if g.consecutiveEmpty >= 2 {
-			return "Multiple tools returned empty results. Reconsider your approach — check paths and patterns."
+			return CheckResult{Hint: "Multiple tools returned empty results. Try a different approach."}
 		}
 	} else {
 		g.consecutiveEmpty = 0
 	}
 
 	// Detect repetition: same tool call signature appearing twice in last 4
-	if g.toolCallCount >= 3 {
+	if g.toolCallCount >= 2 {
 		seen := make(map[string]int)
 		for _, sig := range g.recentCalls {
 			if sig != "" {
@@ -190,18 +199,21 @@ func (g *ReflectionGate) Check(toolName, result string, err error) string {
 			}
 		}
 		for _, count := range seen {
+			if count >= 3 {
+				return CheckResult{Hint: "Repeating the same call. Forcing answer.", ForceStop: true}
+			}
 			if count >= 2 {
-				return "You're repeating the same tool call. Summarize what you know and give your answer, or try a different tool."
+				return CheckResult{Hint: "You already have this information. Answer now based on what you know. Do NOT call another tool."}
 			}
 		}
 	}
 
-	// Nudge if too many iterations without converging
-	if g.toolCallCount >= 5 {
-		return "You've made many tool calls. Focus on answering with what you have."
+	// Nudge if too many iterations
+	if g.toolCallCount >= 4 {
+		return CheckResult{Hint: "Answer now with what you have. Do NOT call another tool.", ForceStop: true}
 	}
 
-	return ""
+	return CheckResult{}
 }
 
 func shortHash(s string) string {

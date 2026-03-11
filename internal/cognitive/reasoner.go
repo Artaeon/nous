@@ -176,18 +176,30 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 				result, hint := ValidateToolResult(tc.Name, result, toolErr)
 
 				// 5. Synchronous reflection gate
-				gateHint := r.Gate.Check(tc.Name, result, toolErr)
+				gateCheck := r.Gate.Check(tc.Name, result, toolErr)
 
 				// Inject hints as system guidance
 				if hint != "" {
 					result = result + "\nHint: " + hint
 				}
-				if gateHint != "" {
-					r.emitStatus(fmt.Sprintf("  [reflect] %s", gateHint))
-					result = result + "\n[System: " + gateHint + "]"
+				if gateCheck.Hint != "" {
+					r.emitStatus(fmt.Sprintf("  [reflect] %s", gateCheck.Hint))
+					result = result + "\n[System: " + gateCheck.Hint + "]"
 				}
 
 				r.Conv.ToolResult(tc.Name, result)
+
+				// Force stop if gate says so
+				if gateCheck.ForceStop {
+					r.emitStatus("  [reflect] forcing final answer")
+					r.Conv.User("[System: You MUST give your final answer now. No more tool calls.]")
+					resp, err := r.callLLM()
+					if err == nil {
+						r.Board.Set("last_answer", resp)
+						r.storeToMemory(percept.Raw, resp)
+					}
+					return err
+				}
 			}
 			continue // Loop back for next LLM call with tool results
 		}
@@ -317,30 +329,15 @@ func (r *Reasoner) compactSystemPrompt() string {
 		toolList = ToolPromptForSubset(r.activeTools)
 	}
 
-	return fmt.Sprintf(`%s
+	return fmt.Sprintf(`You MUST call a tool before answering. NEVER guess. Output ONLY this JSON to call a tool:
+{"tool": "NAME", "args": {"key": "value"}}
 
-Working directory: %s
 %s
-NEVER guess file contents. Use tools to verify.
 
-RESPONSE FORMAT:
-THINK: [your reasoning about what to do]
-ACT: {"tool": "TOOL_NAME", "args": {"key": "value"}}
-
-You will then see: OBSERVE [tool_name]: [result]
-
-When ready to answer, respond normally (no THINK/ACT).
-
-Example:
-THINK: I need to see the project structure.
-ACT: {"tool": "ls", "args": {}}
-
-RULES:
-1. ALWAYS use a tool first. Never guess.
-2. Use relative paths.
-3. Be direct and concise.
-
-%s`, selfKnowledge, wd, projectCtx, toolList)
+After a tool runs, you see its output. Then call another tool or answer in plain text (no JSON).
+Use relative paths. Working directory: %s
+%s
+%s`, toolList, wd, projectCtx, selfKnowledge)
 }
 
 type toolCallRaw struct {
