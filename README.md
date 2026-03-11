@@ -37,6 +37,7 @@ The result is a **single ~10 MB Go binary** with zero external dependencies that
 
 - Remember personal preferences and tasks across restarts
 - Run background reminders and recurring daily check-ins
+- Generate recurring routines such as morning reviews and weekday inbox sweeps
 - Act as a local assistant for notes, files, shell commands, and web lookups
 - Still help with code, files, and terminal workflows when you need it
 - Chain up to 8 tool calls autonomously per turn
@@ -156,7 +157,9 @@ $ ./nous --allow-shell
 | `/help` | Show all commands |
 | `/today` | Show unread reminders and upcoming assistant tasks |
 | `/tasks` | List pending assistant tasks |
+| `/routines` | List recurring assistant routines |
 | `/remind <when> <task>` | Create a persistent reminder |
+| `/routine <daily\|weekdays> <HH:MM> <task>` | Create a recurring assistant routine |
 | `/done <task-id>` | Mark a task as completed |
 | `/pref <k> <v>` | Store a personal preference |
 | `/prefs` | List saved preferences |
@@ -178,6 +181,19 @@ $ ./nous --allow-shell
 | `/save [name]` | Save current session |
 | `/clear` | Clear conversation context |
 | `/quit` | Exit (auto-saves) |
+
+### Assistant HTTP API
+
+When running with `--serve`, Nous now exposes assistant-first endpoints in addition to `/api/chat` and `/api/jobs`:
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/assistant/today` | Return unread reminders, today items, and upcoming tasks |
+| `GET/POST /api/assistant/tasks` | List or create persistent tasks |
+| `POST /api/assistant/tasks/{id}/done` | Mark a task as complete |
+| `GET/POST /api/assistant/preferences` | List or update saved preferences |
+| `GET/POST /api/assistant/routines` | List or create recurring routines |
+| `POST /api/assistant/notifications/read` | Mark unread reminders as read |
 
 ---
 
