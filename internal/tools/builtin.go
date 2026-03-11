@@ -12,10 +12,18 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/artaeon/nous/internal/memory"
 )
 
 // RegisterBuiltins adds all standard tools to the registry.
-func RegisterBuiltins(r *Registry, workDir string, allowShell bool) {
+// If undo is non-nil, write/edit/mkdir operations push entries onto the undo stack.
+func RegisterBuiltins(r *Registry, workDir string, allowShell bool, undo ...*memory.UndoStack) {
+	var undoStack *memory.UndoStack
+	if len(undo) > 0 {
+		undoStack = undo[0]
+	}
+
 	r.Register(Tool{
 		Name:        "read",
 		Description: "Read a file's contents. Args: path (required), offset (optional line number to start from), limit (optional max lines).",
@@ -28,6 +36,10 @@ func RegisterBuiltins(r *Registry, workDir string, allowShell bool) {
 		Name:        "write",
 		Description: "Create or overwrite a file. Args: path (required), content (required).",
 		Execute: func(args map[string]string) (string, error) {
+			path := resolvePath(workDir, args["path"])
+			if undoStack != nil {
+				pushUndoForWrite(undoStack, path, args["content"])
+			}
 			return toolWrite(workDir, args)
 		},
 	})
@@ -36,6 +48,10 @@ func RegisterBuiltins(r *Registry, workDir string, allowShell bool) {
 		Name:        "edit",
 		Description: "Replace a specific string in a file. Args: path (required), old (the exact text to find), new (the replacement text).",
 		Execute: func(args map[string]string) (string, error) {
+			path := resolvePath(workDir, args["path"])
+			if undoStack != nil {
+				pushUndoForEdit(undoStack, path, args)
+			}
 			return toolEdit(workDir, args)
 		},
 	})
@@ -79,6 +95,15 @@ func RegisterBuiltins(r *Registry, workDir string, allowShell bool) {
 		Name:        "mkdir",
 		Description: "Create a directory (and parents). Args: path (required).",
 		Execute: func(args map[string]string) (string, error) {
+			path := resolvePath(workDir, args["path"])
+			if undoStack != nil {
+				undoStack.Push(memory.UndoEntry{
+					Path:      path,
+					Action:    "mkdir",
+					WasNew:    true,
+					Timestamp: time.Now(),
+				})
+			}
 			return toolMkdir(workDir, args)
 		},
 	})
@@ -104,6 +129,30 @@ func RegisterBuiltins(r *Registry, workDir string, allowShell bool) {
 		Description: "Run a git command. Args: command (required, e.g. 'status', 'diff', 'log --oneline -10', 'add .', 'commit -m message').",
 		Execute: func(args map[string]string) (string, error) {
 			return toolGit(workDir, args)
+		},
+	})
+
+	r.Register(Tool{
+		Name:        "patch",
+		Description: "Apply a multi-line edit to a file using a before/after patch. Args: path (required), before (the exact multi-line text to find), after (the replacement text).",
+		Execute: func(args map[string]string) (string, error) {
+			return toolPatch(workDir, args)
+		},
+	})
+
+	r.Register(Tool{
+		Name:        "replace_all",
+		Description: "Replace all occurrences of a string across files. Args: old (required), new (required), glob (optional file pattern like '*.go', defaults to all files).",
+		Execute: func(args map[string]string) (string, error) {
+			return toolReplaceAll(workDir, args)
+		},
+	})
+
+	r.Register(Tool{
+		Name:        "diff",
+		Description: "Show the diff between the current state and the last commit. Args: path (optional file path), staged (optional 'true' to show staged changes).",
+		Execute: func(args map[string]string) (string, error) {
+			return toolDiff(workDir, args)
 		},
 	})
 }
@@ -449,6 +498,46 @@ func buildTree(out *strings.Builder, path, prefix string, depth, maxDepth int) {
 	}
 }
 
+// --- undo helpers ---
+
+// pushUndoForWrite records the state before a write operation.
+func pushUndoForWrite(undo *memory.UndoStack, path, newContent string) {
+	before := ""
+	wasNew := true
+	if data, err := os.ReadFile(path); err == nil {
+		before = string(data)
+		wasNew = false
+	}
+	undo.Push(memory.UndoEntry{
+		Path:      path,
+		Action:    "write",
+		Before:    before,
+		After:     newContent,
+		Timestamp: time.Now(),
+		WasNew:    wasNew,
+	})
+}
+
+// pushUndoForEdit records the state before an edit operation.
+func pushUndoForEdit(undo *memory.UndoStack, path string, args map[string]string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return // file doesn't exist — edit will fail anyway
+	}
+	before := string(data)
+	oldStr := args["old"]
+	newStr := args["new"]
+	after := strings.Replace(before, oldStr, newStr, 1)
+	undo.Push(memory.UndoEntry{
+		Path:      path,
+		Action:    "edit",
+		Before:    before,
+		After:     after,
+		Timestamp: time.Now(),
+		WasNew:    false,
+	})
+}
+
 // --- fetch tool ---
 
 var htmlTagRegex = regexp.MustCompile(`<[^>]*>`)
@@ -495,4 +584,212 @@ func toolFetch(args map[string]string) (string, error) {
 	}
 
 	return text, nil
+}
+
+func toolGit(workDir string, args map[string]string) (string, error) {
+	command := args["command"]
+	if command == "" {
+		return "", fmt.Errorf("git requires 'command' argument")
+	}
+
+	// Split the command string into arguments for exec
+	gitArgs := strings.Fields(command)
+
+	cmd := exec.Command("git", gitArgs...)
+	cmd.Dir = workDir
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+
+	output := stdout.String()
+	if stderr.Len() > 0 {
+		if output != "" {
+			output += "\n"
+		}
+		output += stderr.String()
+	}
+
+	if err != nil {
+		if output == "" {
+			return "", fmt.Errorf("git %s: %v", command, err)
+		}
+		return output, fmt.Errorf("git %s: %v", command, err)
+	}
+
+	// Truncate to 8192 chars
+	if len(output) > 8192 {
+		output = output[:8192] + "\n... (truncated)"
+	}
+
+	return output, nil
+}
+
+func toolPatch(workDir string, args map[string]string) (string, error) {
+	path := resolvePath(workDir, args["path"])
+	before := args["before"]
+	after := args["after"]
+
+	if path == "" || before == "" {
+		return "", fmt.Errorf("patch requires 'path' and 'before' arguments")
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read for patch: %w", err)
+	}
+
+	// Preserve original file permissions
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("stat for patch: %w", err)
+	}
+	perm := info.Mode().Perm()
+
+	content := string(data)
+	count := strings.Count(content, before)
+
+	if count == 0 {
+		return "", fmt.Errorf("before text not found in %s", path)
+	}
+	if count > 1 {
+		return "", fmt.Errorf("before text found %d times in %s — must be unique", count, path)
+	}
+
+	newContent := strings.Replace(content, before, after, 1)
+	if err := os.WriteFile(path, []byte(newContent), perm); err != nil {
+		return "", fmt.Errorf("write patched file: %w", err)
+	}
+
+	return fmt.Sprintf("patched %s: replaced 1 occurrence (%d lines)", path, strings.Count(before, "\n")+1), nil
+}
+
+func toolReplaceAll(workDir string, args map[string]string) (string, error) {
+	oldStr := args["old"]
+	newStr := args["new"]
+	globPattern := args["glob"]
+
+	if oldStr == "" {
+		return "", fmt.Errorf("replace_all requires 'old' argument")
+	}
+	if oldStr == newStr {
+		return "", fmt.Errorf("old and new strings are identical")
+	}
+
+	totalOccurrences := 0
+	filesModified := 0
+
+	err := filepath.Walk(workDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // skip errors
+		}
+
+		// Skip hidden directories and common noise
+		if info.IsDir() {
+			name := info.Name()
+			if strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Apply glob filter if specified
+		if globPattern != "" {
+			matched, _ := filepath.Match(globPattern, info.Name())
+			if !matched {
+				return nil
+			}
+		}
+
+		// Read file
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil // skip unreadable files
+		}
+
+		// Skip binary files (check for null bytes in first 512 bytes)
+		checkLen := len(data)
+		if checkLen > 512 {
+			checkLen = 512
+		}
+		if bytes.ContainsRune(data[:checkLen], 0) {
+			return nil
+		}
+
+		content := string(data)
+		count := strings.Count(content, oldStr)
+		if count == 0 {
+			return nil
+		}
+
+		// Replace all occurrences
+		newContent := strings.ReplaceAll(content, oldStr, newStr)
+		if err := os.WriteFile(path, []byte(newContent), info.Mode().Perm()); err != nil {
+			return nil // skip write errors
+		}
+
+		totalOccurrences += count
+		filesModified++
+
+		return nil
+	})
+
+	if err != nil {
+		return "", fmt.Errorf("replace_all: %w", err)
+	}
+
+	if totalOccurrences == 0 {
+		return "no occurrences found", nil
+	}
+
+	return fmt.Sprintf("replaced %d occurrences across %d files", totalOccurrences, filesModified), nil
+}
+
+func toolDiff(workDir string, args map[string]string) (string, error) {
+	gitArgs := []string{"diff"}
+
+	if staged, ok := args["staged"]; ok && staged == "true" {
+		gitArgs = append(gitArgs, "--staged")
+	}
+
+	if path, ok := args["path"]; ok && path != "" {
+		gitArgs = append(gitArgs, "--", resolvePath(workDir, path))
+	}
+
+	cmd := exec.Command("git", gitArgs...)
+	cmd.Dir = workDir
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+
+	output := stdout.String()
+	if stderr.Len() > 0 {
+		if output != "" {
+			output += "\n"
+		}
+		output += stderr.String()
+	}
+
+	if err != nil {
+		if output == "" {
+			return "", fmt.Errorf("git diff: %v", err)
+		}
+		return output, fmt.Errorf("git diff: %v", err)
+	}
+
+	if output == "" {
+		return "no changes", nil
+	}
+
+	// Truncate to 8192 chars
+	if len(output) > 8192 {
+		output = output[:8192] + "\n... (truncated)"
+	}
+
+	return output, nil
 }

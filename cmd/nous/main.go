@@ -91,9 +91,10 @@ func main() {
 	cognitive.CurrentProject = projectInfo
 	fmt.Printf("%s (%s, %d files)\n", projectInfo.Name, projectInfo.Language, projectInfo.FileCount)
 
-	// Initialize tool registry
+	// Initialize undo stack and tool registry
+	undoStack := memory.NewUndoStack(100)
 	toolReg := tools.NewRegistry()
-	tools.RegisterBuiltins(toolReg, workDir, *allowShell)
+	tools.RegisterBuiltins(toolReg, workDir, *allowShell, undoStack)
 
 	// Initialize core systems
 	board := blackboard.New()
@@ -101,6 +102,10 @@ func main() {
 	// Memory systems
 	wm := memory.NewWorkingMemory(64)
 	ltm := memory.NewLongTermMemory(*memoryPath)
+
+	// Project-level memory (stored in the project's .nous/ directory)
+	projMem := memory.NewProjectMemory(workDir)
+	fmt.Printf("  project memory: %d facts\n", projMem.Size())
 
 	// Session management
 	sessionStore := cognitive.NewSessionStore(*memoryPath)
@@ -128,6 +133,7 @@ func main() {
 	reasoner := cognitive.NewReasoner(board, llm, toolReg)
 	reasoner.WorkingMem = wm
 	reasoner.LongTermMem = ltm
+	reasoner.ProjectMem = projMem
 	planner := cognitive.NewPlanner(board, llm)
 	executor := cognitive.NewExecutor(board, llm)
 	reflector := cognitive.NewReflector(board, llm)
@@ -252,7 +258,7 @@ func main() {
 
 		// Handle commands
 		if strings.HasPrefix(input, "/") {
-			if handleCommand(input, board, llm, toolReg, wm, ltm, sessionStore, currentSession, reasoner, projectInfo) {
+			if handleCommand(input, board, llm, toolReg, wm, ltm, projMem, undoStack, sessionStore, currentSession, reasoner, projectInfo) {
 				continue
 			}
 		}
@@ -271,7 +277,7 @@ func main() {
 	}
 }
 
-func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Client, toolReg *tools.Registry, wm *memory.WorkingMemory, ltm *memory.LongTermMemory, sessions *cognitive.SessionStore, current *cognitive.Session, reasoner *cognitive.Reasoner, project *cognitive.ProjectInfo) bool {
+func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Client, toolReg *tools.Registry, wm *memory.WorkingMemory, ltm *memory.LongTermMemory, projMem *memory.ProjectMemory, undoStack *memory.UndoStack, sessions *cognitive.SessionStore, current *cognitive.Session, reasoner *cognitive.Reasoner, project *cognitive.ProjectInfo) bool {
 	parts := strings.Fields(input)
 	cmd := strings.ToLower(parts[0])
 
@@ -280,6 +286,7 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 		fmt.Println("  saving session...")
 		current.Messages = reasoner.Conv.Messages()
 		sessions.Save(current)
+		projMem.Flush()
 		fmt.Println("  goodbye.")
 		os.Exit(0)
 
@@ -290,6 +297,11 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
     /status            Show cognitive system status
     /memory            Show working memory contents
     /longterm          Show long-term memory entries
+    /remember <k> <v>  Remember a project fact
+    /recall <query>    Search project memory
+    /forget <key>      Forget a project fact
+    /undo              Revert the last file change
+    /history           Show undo stack
     /goals             Show active goals
     /model             Show current model info
     /tools             List available tools
@@ -305,6 +317,8 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 		fmt.Printf("  Active goals: %d\n", len(board.ActiveGoals()))
 		fmt.Printf("  Working memory: %d items\n", wm.Size())
 		fmt.Printf("  Long-term memory: %d entries\n", ltm.Size())
+		fmt.Printf("  Project memory: %d facts\n", projMem.Size())
+		fmt.Printf("  Undo stack: %d entries\n", undoStack.Size())
 		fmt.Printf("  Recent actions: %d\n", len(board.RecentActions(100)))
 		fmt.Printf("  Conversation: %s\n", reasoner.Conv.Summary())
 		fmt.Printf("  Session: %s (%s)\n", current.Name, current.ID)
@@ -380,6 +394,85 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 			fmt.Printf("  error saving: %v\n", err)
 		} else {
 			fmt.Printf("  session saved: %s (%s)\n", current.Name, current.ID)
+		}
+
+	case "/remember":
+		if len(parts) < 3 {
+			fmt.Println("  usage: /remember <key> <value...>")
+			break
+		}
+		key := parts[1]
+		value := strings.Join(parts[2:], " ")
+		projMem.Remember(key, value, "user", 1.0)
+		if err := projMem.Flush(); err != nil {
+			fmt.Printf("  remembered but failed to persist: %v\n", err)
+		} else {
+			fmt.Printf("  remembered: %s = %s\n", key, value)
+		}
+
+	case "/recall":
+		if len(parts) < 2 {
+			fmt.Println("  usage: /recall <query>")
+			break
+		}
+		query := strings.Join(parts[1:], " ")
+		// Try exact match first
+		if fact, ok := projMem.Recall(query); ok {
+			fmt.Printf("  [%.0f%%] %s: %s (source: %s)\n",
+				fact.Confidence*100, fact.Key, fact.Value, fact.Source)
+		} else {
+			// Fall back to keyword search
+			results := projMem.Search(query)
+			if len(results) == 0 {
+				fmt.Println("  no matching facts found")
+			} else {
+				for _, f := range results {
+					fmt.Printf("  [%.0f%%] %s: %s (source: %s)\n",
+						f.Confidence*100, f.Key, f.Value, f.Source)
+				}
+			}
+		}
+
+	case "/forget":
+		if len(parts) < 2 {
+			fmt.Println("  usage: /forget <key>")
+			break
+		}
+		key := parts[1]
+		if _, ok := projMem.Recall(key); !ok {
+			fmt.Printf("  no fact with key %q\n", key)
+		} else {
+			projMem.Forget(key)
+			projMem.Flush()
+			fmt.Printf("  forgot: %s\n", key)
+		}
+
+	case "/undo":
+		if entry, ok := undoStack.Peek(); ok {
+			action := entry.Action
+			path := entry.Path
+			if _, undoErr := undoStack.Undo(); undoErr != nil {
+				fmt.Printf("  undo failed: %v\n", undoErr)
+			} else {
+				fmt.Printf("  undone: %s %s\n", action, path)
+			}
+		} else {
+			fmt.Println("  nothing to undo")
+		}
+
+	case "/history":
+		entries := undoStack.List()
+		if len(entries) == 0 {
+			fmt.Println("  undo stack is empty")
+		} else {
+			for i, e := range entries {
+				age := time.Since(e.Timestamp).Truncate(time.Second)
+				tag := ""
+				if e.WasNew {
+					tag = " (new file)"
+				}
+				fmt.Printf("  %d. [%s ago] %s %s%s\n", i+1, age, e.Action, e.Path, tag)
+			}
 		}
 
 	case "/clear":

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -605,7 +606,7 @@ func TestRegisterBuiltinsRegistersAllTools(t *testing.T) {
 	r := NewRegistry()
 	RegisterBuiltins(r, dir, false)
 
-	expectedTools := []string{"read", "write", "edit", "glob", "grep", "ls", "shell", "mkdir", "tree", "fetch"}
+	expectedTools := []string{"read", "write", "edit", "glob", "grep", "ls", "shell", "mkdir", "tree", "fetch", "git", "patch", "replace_all", "diff"}
 	tools := r.List()
 
 	registered := map[string]bool{}

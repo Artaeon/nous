@@ -19,13 +19,14 @@ const maxToolIterations = 15
 // multiple tool calls to accomplish complex tasks — like an autonomous agent.
 type Reasoner struct {
 	Base
-	Tools      *tools.Registry
-	Conv       *Conversation
-	WorkingMem *memory.WorkingMemory
+	Tools       *tools.Registry
+	Conv        *Conversation
+	WorkingMem  *memory.WorkingMemory
 	LongTermMem *memory.LongTermMemory
-	OnToken    func(token string, done bool)
-	OnStatus   func(status string)
-	Confirm    ConfirmFunc
+	ProjectMem  *memory.ProjectMemory
+	OnToken     func(token string, done bool)
+	OnStatus    func(status string)
+	Confirm     ConfirmFunc
 }
 
 // CurrentProject holds the scanned project info for the system prompt.
