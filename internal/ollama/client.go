@@ -221,3 +221,99 @@ func (c *Client) Model() string {
 func (c *Client) Host() string {
 	return c.host
 }
+
+// Clone creates a new client sharing the same host but targeting a different model.
+func (c *Client) Clone(model string) *Client {
+	return &Client{
+		host:       c.host,
+		model:      model,
+		httpClient: c.httpClient,
+	}
+}
+
+// --- Embeddings API ---
+
+// EmbedRequest is the request body for /api/embeddings.
+type EmbedRequest struct {
+	Model  string `json:"model"`
+	Prompt string `json:"prompt"`
+}
+
+// EmbedResponse holds the embedding vector from Ollama.
+type EmbedResponse struct {
+	Embedding []float64 `json:"embedding"`
+}
+
+// Embed generates an embedding vector for the given text.
+// Uses the configured model (most Ollama models support embeddings).
+func (c *Client) Embed(text string) ([]float64, error) {
+	req := EmbedRequest{
+		Model:  c.model,
+		Prompt: text,
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal embed request: %w", err)
+	}
+
+	resp, err := c.httpClient.Post(c.host+"/api/embeddings", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("embed request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("embed returned %d: %s", resp.StatusCode, string(b))
+	}
+
+	var result EmbedResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode embed response: %w", err)
+	}
+
+	return result.Embedding, nil
+}
+
+// --- Create Model API (for fine-tuning) ---
+
+// CreateModelRequest is the request body for /api/create.
+type CreateModelRequest struct {
+	Name      string `json:"name"`
+	Modelfile string `json:"modelfile"`
+	Stream    bool   `json:"stream"`
+}
+
+// CreateModelResponse holds the response from model creation.
+type CreateModelResponse struct {
+	Status string `json:"status"`
+}
+
+// CreateModel creates a new Ollama model from a Modelfile.
+// This is the key to baking Nous's personality into the model itself.
+func (c *Client) CreateModel(name, modelfile string) error {
+	req := CreateModelRequest{
+		Name:      name,
+		Modelfile: modelfile,
+		Stream:    false,
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshal create request: %w", err)
+	}
+
+	resp, err := c.httpClient.Post(c.host+"/api/create", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create model request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("create model returned %d: %s", resp.StatusCode, string(b))
+	}
+
+	return nil
+}
