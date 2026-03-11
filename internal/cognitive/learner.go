@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,9 +17,11 @@ import (
 // Pattern represents a learned behavioral pattern extracted from experience.
 type Pattern struct {
 	Trigger    string    `json:"trigger"`
+	ToolChain  []string  `json:"tool_chain"`
 	Response   string    `json:"response"`
 	Confidence float64   `json:"confidence"`
 	Uses       int       `json:"uses"`
+	Successes  int       `json:"successes"`
 	LastUsed   time.Time `json:"last_used"`
 }
 
@@ -67,51 +70,128 @@ func (l *Learner) learnFromGoal(goalID string) {
 		return
 	}
 
-	// Find the original percept that triggered this goal
-	percept, ok := l.Board.LatestPercept()
-	if !ok {
-		return
-	}
-
-	// Extract a pattern: what input led to what successful plan
-	var steps []string
+	// Extract the tool chain from completed steps
+	var toolChain []string
+	var stepDescriptions []string
 	for _, s := range plan.Steps {
-		if s.Status == "done" {
-			steps = append(steps, fmt.Sprintf("%s: %s", s.Tool, s.Description))
+		if s.Status == "done" && s.Tool != "" {
+			toolChain = append(toolChain, s.Tool)
+			stepDescriptions = append(stepDescriptions, fmt.Sprintf("%s: %s", s.Tool, s.Description))
 		}
 	}
 
-	if len(steps) == 0 {
+	if len(toolChain) == 0 {
 		return
 	}
 
-	pattern := Pattern{
-		Trigger:    percept.Intent,
-		Response:   fmt.Sprintf("Successful plan: %v", steps),
-		Confidence: 0.5,
-		Uses:       1,
-		LastUsed:   time.Now(),
+	// Find the original percept for context
+	trigger := ""
+	if percept, ok := l.Board.LatestPercept(); ok {
+		trigger = percept.Intent
+		if trigger == "" {
+			trigger = classifyTrigger(percept.Raw)
+		}
 	}
 
+	// Check if we already have a pattern for this tool chain
+	chainKey := strings.Join(toolChain, "→")
 	l.mu.Lock()
-	l.patterns = append(l.patterns, pattern)
+	for i := range l.patterns {
+		existing := strings.Join(l.patterns[i].ToolChain, "→")
+		if existing == chainKey {
+			// Reinforce existing pattern
+			l.patterns[i].Uses++
+			l.patterns[i].Successes++
+			l.patterns[i].LastUsed = time.Now()
+			l.patterns[i].Confidence = float64(l.patterns[i].Successes) / float64(l.patterns[i].Uses)
+			l.mu.Unlock()
+			_ = l.savePatterns()
+			return
+		}
+	}
+
+	// New pattern
+	l.patterns = append(l.patterns, Pattern{
+		Trigger:    trigger,
+		ToolChain:  toolChain,
+		Response:   fmt.Sprintf("Successful: %s", strings.Join(stepDescriptions, " → ")),
+		Confidence: 0.5,
+		Uses:       1,
+		Successes:  1,
+		LastUsed:   time.Now(),
+	})
+
+	// Prune to keep at most 100 patterns (remove lowest confidence)
+	if len(l.patterns) > 100 {
+		l.prunePatterns()
+	}
 	l.mu.Unlock()
 
 	_ = l.savePatterns()
 }
 
-// FindRelevantPatterns returns patterns matching the given intent.
+// classifyTrigger derives a simple trigger category from raw input.
+func classifyTrigger(input string) string {
+	lower := strings.ToLower(input)
+	switch {
+	case strings.Contains(lower, "read") || strings.Contains(lower, "show") || strings.Contains(lower, "what"):
+		return "explore"
+	case strings.Contains(lower, "fix") || strings.Contains(lower, "bug") || strings.Contains(lower, "error"):
+		return "fix"
+	case strings.Contains(lower, "write") || strings.Contains(lower, "create") || strings.Contains(lower, "add"):
+		return "create"
+	case strings.Contains(lower, "refactor") || strings.Contains(lower, "change") || strings.Contains(lower, "update"):
+		return "modify"
+	case strings.Contains(lower, "test") || strings.Contains(lower, "check") || strings.Contains(lower, "verify"):
+		return "verify"
+	default:
+		return "general"
+	}
+}
+
+// FindRelevantPatterns returns patterns matching the given intent, sorted by confidence.
 func (l *Learner) FindRelevantPatterns(intent string) []Pattern {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
 	var relevant []Pattern
 	for _, p := range l.patterns {
-		if p.Trigger == intent {
+		if p.Trigger == intent || p.Confidence >= 0.8 {
 			relevant = append(relevant, p)
 		}
 	}
 	return relevant
+}
+
+// PatternCount returns the number of stored patterns.
+func (l *Learner) PatternCount() int {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return len(l.patterns)
+}
+
+// Patterns returns a copy of all patterns.
+func (l *Learner) Patterns() []Pattern {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	out := make([]Pattern, len(l.patterns))
+	copy(out, l.patterns)
+	return out
+}
+
+func (l *Learner) prunePatterns() {
+	// Remove lowest confidence patterns until under 100
+	for len(l.patterns) > 100 {
+		minIdx := 0
+		minConf := l.patterns[0].Confidence
+		for i, p := range l.patterns {
+			if p.Confidence < minConf {
+				minConf = p.Confidence
+				minIdx = i
+			}
+		}
+		l.patterns = append(l.patterns[:minIdx], l.patterns[minIdx+1:]...)
+	}
 }
 
 func (l *Learner) loadPatterns() {
