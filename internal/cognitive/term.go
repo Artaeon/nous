@@ -13,6 +13,7 @@ const (
 	ColorReset   = "\033[0m"
 	ColorBold    = "\033[1m"
 	ColorDim     = "\033[2m"
+	ColorWhite   = "\033[97m"
 	ColorRed     = "\033[31m"
 	ColorGreen   = "\033[32m"
 	ColorYellow  = "\033[33m"
@@ -32,22 +33,57 @@ func Styled(color, text string) string {
 func Banner(version, model, host string, toolCount int, memSlots int) string {
 	var b strings.Builder
 	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("  %snous%s %sv%s%s\n", ColorBold, ColorReset, ColorDim, version, ColorReset))
-	b.WriteString(fmt.Sprintf("  %s%s%s\n", ColorDim, strings.Repeat("─", 36), ColorReset))
-	b.WriteString(fmt.Sprintf("  %s%s%s  %s·%s  %s%s%s\n", ColorCyan, model, ColorReset, ColorDim, ColorReset, ColorGray, host, ColorReset))
-	b.WriteString(fmt.Sprintf("  %s%d tools  ·  %d memory slots%s\n", ColorDim, toolCount, memSlots, ColorReset))
+	b.WriteString(fmt.Sprintf("  %s╭──────────────────────────────────────────────╮%s\n", ColorDim, ColorReset))
+	b.WriteString(fmt.Sprintf("  %s│%s %sNous%s %sv%s%-31s%s│%s\n", ColorDim, ColorReset, ColorBold, ColorReset, ColorDim, version, "", ColorDim, ColorReset))
+	b.WriteString(fmt.Sprintf("  %s│%s %smodel%s   %s%-35s%s│%s\n", ColorDim, ColorReset, ColorGray, ColorReset, ColorCyan, truncateDisplay(model, 35), ColorDim, ColorReset))
+	b.WriteString(fmt.Sprintf("  %s│%s %shost%s    %s%-35s%s│%s\n", ColorDim, ColorReset, ColorGray, ColorReset, ColorGray, truncateDisplay(host, 35), ColorDim, ColorReset))
+	b.WriteString(fmt.Sprintf("  %s│%s %stools%s   %s%-35s%s│%s\n", ColorDim, ColorReset, ColorGray, ColorReset, ColorWhite, fmt.Sprintf("%d built-ins", toolCount), ColorDim, ColorReset))
+	b.WriteString(fmt.Sprintf("  %s│%s %smemory%s  %s%-35s%s│%s\n", ColorDim, ColorReset, ColorGray, ColorReset, ColorWhite, fmt.Sprintf("%d working slots", memSlots), ColorDim, ColorReset))
+	b.WriteString(fmt.Sprintf("  %s╰──────────────────────────────────────────────╯%s\n", ColorDim, ColorReset))
 	b.WriteString("\n")
 	return b.String()
 }
 
 // Prompt returns the REPL prompt string.
 func Prompt() string {
-	return ColorCyan + "  › " + ColorReset
+	return ColorGray + "  nous" + ColorReset + ColorCyan + " › " + ColorReset
 }
 
 // Separator returns a thin horizontal line for visual breaks.
 func Separator() string {
 	return "  " + ColorDim + strings.Repeat("─", 36) + ColorReset + "\n"
+}
+
+// Section returns a titled section header for CLI screens.
+func Section(title string) string {
+	return fmt.Sprintf("  %s%s%s %s%s%s\n", ColorBold, title, ColorReset, ColorDim, strings.Repeat("─", max(1, 36-len(title))), ColorReset)
+}
+
+// KeyValue formats a labeled value row.
+func KeyValue(label, value string) string {
+	return fmt.Sprintf("  %s%-14s%s %s\n", ColorGray, label, ColorReset, value)
+}
+
+// Panel renders a lightweight box with a title and lines.
+func Panel(title string, lines []string) string {
+	width := 44
+	for _, line := range lines {
+		if l := visibleLen(line); l+2 > width {
+			width = l + 2
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("  %s╭─ %s%s%s %s╮%s\n", ColorDim, ColorBold, title, ColorReset, strings.Repeat("─", max(1, width-visibleLen(title)-2)), ColorReset))
+	for _, line := range lines {
+		padding := width - visibleLen(line)
+		if padding < 0 {
+			padding = 0
+		}
+		b.WriteString(fmt.Sprintf("  %s│%s %s%s %s│%s\n", ColorDim, ColorReset, line, strings.Repeat(" ", padding), ColorDim, ColorReset))
+	}
+	b.WriteString(fmt.Sprintf("  %s╰%s╯%s\n", ColorDim, strings.Repeat("─", width+2), ColorReset))
+	return b.String()
 }
 
 // ToolStatus formats a tool call status line.
@@ -74,6 +110,23 @@ func formatDurationShort(d time.Duration) string {
 		return fmt.Sprintf("%dms", d.Milliseconds())
 	}
 	return fmt.Sprintf("%.1fs", d.Seconds())
+}
+
+func truncateDisplay(s string, maxLen int) string {
+	if visibleLen(s) <= maxLen {
+		return s
+	}
+	if maxLen <= 1 {
+		return s[:maxLen]
+	}
+	return s[:maxLen-1] + "…"
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // visibleLen returns the display width of a string, stripping ANSI escapes.

@@ -60,7 +60,7 @@ func TestBannerContainsHost(t *testing.T) {
 func TestBannerContainsToolCount(t *testing.T) {
 	banner := Banner("0.3.0", "qwen2.5:1.5b", "localhost:11434", 9, 64)
 
-	if !strings.Contains(banner, "9 tools") {
+	if !strings.Contains(banner, "9 built-ins") {
 		t.Error("banner should contain tool count")
 	}
 }
@@ -76,7 +76,7 @@ func TestBannerContainsVersion(t *testing.T) {
 func TestBannerContainsMemorySlots(t *testing.T) {
 	banner := Banner("0.3.0", "qwen2.5:1.5b", "localhost:11434", 9, 64)
 
-	if !strings.Contains(banner, "64 memory slots") {
+	if !strings.Contains(banner, "64 working slots") {
 		t.Error("banner should contain memory slot count")
 	}
 }
@@ -92,8 +92,38 @@ func TestBannerContainsNousName(t *testing.T) {
 func TestBannerHasSeparator(t *testing.T) {
 	banner := Banner("0.3.0", "qwen2.5:1.5b", "localhost:11434", 9, 64)
 
-	if !strings.Contains(banner, "─") {
+	if !strings.Contains(banner, "╭") || !strings.Contains(banner, "╰") {
 		t.Error("banner should have separator line")
+	}
+}
+
+func TestPromptContainsNousName(t *testing.T) {
+	prompt := Prompt()
+	if !strings.Contains(prompt, "nous") {
+		t.Error("prompt should contain the product name")
+	}
+}
+
+func TestSectionIncludesTitle(t *testing.T) {
+	section := Section("Status")
+	if !strings.Contains(section, "Status") {
+		t.Error("section should contain title")
+	}
+	if !strings.Contains(section, "─") {
+		t.Error("section should include separator glyphs")
+	}
+}
+
+func TestPanelIncludesTitleAndLines(t *testing.T) {
+	panel := Panel("Quickstart", []string{"/help", "/dashboard"})
+	if !strings.Contains(panel, "Quickstart") {
+		t.Error("panel should contain title")
+	}
+	if !strings.Contains(panel, "/help") || !strings.Contains(panel, "/dashboard") {
+		t.Error("panel should contain provided lines")
+	}
+	if !strings.Contains(panel, "╭") || !strings.Contains(panel, "╰") {
+		t.Error("panel should render a box")
 	}
 }
 
