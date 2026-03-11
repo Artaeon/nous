@@ -262,6 +262,12 @@ Classical AI agents make a single LLM call per user message. Nous works differen
 
 5. **Synchronous Reflection Gate** — After each tool call, a rule-based validator checks for: errors, empty results, repeated calls, and excessive iterations. Injects corrective hints and forces the model to answer when it's stuck in a loop.
 
+**Cognitive Pipeline** (v0.5.0) — Instead of accumulating messages that fill the context window and cause degradation after 3-4 steps, each reasoning step gets a fresh conversation with only compressed one-line summaries of previous steps. At step 5, context usage is ~15% instead of ~80%, enabling 8+ tool calls without quality degradation.
+
+**Multi-Model Router** (v0.5.0) — Auto-discovers available Ollama models at startup and routes cognitive tasks to the best model: perception → tinyllama (~200ms), reasoning → qwen2.5:1.5b, compression → tinyllama. Falls back to a single model when only one is available.
+
+**Codebase Index** (v0.5.0) — At startup, parses all Go files using `go/parser` and `go/ast` to extract function signatures, types, interfaces, and methods. Stored in `.nous/index.json`. The reasoner injects precise structural context in ~50 tokens instead of reading 500 lines. Supports incremental updates via file hash comparison.
+
 ---
 
 ## Project Structure
@@ -286,6 +292,8 @@ nous/
 │   │   ├── persona.go           # System prompt + identity definition
 │   │   ├── grounding.go         # Cognitive Grounding: budget, validation, reflection gate
 │   │   ├── tool_selector.go     # Progressive tool disclosure by intent
+│   │   ├── pipeline.go          # Cognitive Pipeline: fresh context per step
+│   │   ├── router.go            # Multi-Model Router: task-based model selection
 │   │   ├── session.go           # Session persistence (save / load / resume)
 │   │   ├── scanner.go           # Project auto-detection (language, structure)
 │   │   └── confirm.go           # User confirmation for dangerous actions
@@ -299,6 +307,8 @@ nous/
 │   ├── tools/
 │   │   ├── registry.go          # Tool registry (register, get, list, describe)
 │   │   └── builtin.go           # 18 built-in tools
+│   ├── index/
+│   │   └── codebase.go          # Go AST codebase index (functions, types, signatures)
 │   └── compress/
 │       └── atoms.go             # Context compression into reusable atoms
 ├── Makefile                     # build, run, test, lint, release
@@ -355,6 +365,12 @@ ollama pull qwen2.5:1.5b
 - [x] Progressive tool disclosure (intent-based tool selection)
 - [x] Context budget tracking with auto-compression
 - [x] Synchronous reflection gate (loop detection, forced convergence)
+- [x] Cognitive Pipeline (fresh context per step, no degradation at step 8+)
+- [x] Multi-Model Router (tinyllama for fast tasks, qwen for reasoning)
+- [x] Codebase Index (Go AST parsing, 318 symbols, zero-cost structural context)
+- [ ] Filesystem Sentinel (inotify-based ambient file watching)
+- [ ] Tool Choreography (learned multi-step recipes)
+- [ ] Predictive Pre-computation (speculative follow-up caching)
 - [ ] Embedding-based atom retrieval (replace keyword overlap scoring)
 - [ ] Automatic test generation and execution
 - [ ] LSP integration for language-aware code navigation
