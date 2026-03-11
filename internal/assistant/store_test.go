@@ -114,6 +114,49 @@ func TestStoreMarkDone(t *testing.T) {
 	}
 }
 
+func TestStoreTriggerRoutinesGeneratesDailyAndWeekdayTasksOncePerDay(t *testing.T) {
+	store := NewStore(t.TempDir())
+	if _, err := store.AddRoutine("Morning review", "daily", "08:00"); err != nil {
+		t.Fatalf("AddRoutine daily error = %v", err)
+	}
+	if _, err := store.AddRoutine("Inbox zero", "weekdays", "09:00"); err != nil {
+		t.Fatalf("AddRoutine weekdays error = %v", err)
+	}
+
+	now := time.Date(2026, 3, 11, 9, 30, 0, 0, time.UTC)
+	generated, err := store.TriggerRoutines(now)
+	if err != nil {
+		t.Fatalf("TriggerRoutines() error = %v", err)
+	}
+	if len(generated) != 2 {
+		t.Fatalf("generated = %d, want 2", len(generated))
+	}
+
+	again, err := store.TriggerRoutines(now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("TriggerRoutines() second error = %v", err)
+	}
+	if len(again) != 0 {
+		t.Fatalf("expected routines to generate once per day, got %d", len(again))
+	}
+}
+
+func TestStoreTriggerRoutinesSkipsWeekdaysOnWeekend(t *testing.T) {
+	store := NewStore(t.TempDir())
+	if _, err := store.AddRoutine("Commute prep", "weekdays", "08:00"); err != nil {
+		t.Fatalf("AddRoutine() error = %v", err)
+	}
+
+	now := time.Date(2026, 3, 14, 9, 0, 0, 0, time.UTC)
+	generated, err := store.TriggerRoutines(now)
+	if err != nil {
+		t.Fatalf("TriggerRoutines() error = %v", err)
+	}
+	if len(generated) != 0 {
+		t.Fatalf("expected no weekend routine tasks, got %d", len(generated))
+	}
+}
+
 func TestSchedulerPublishesNotificationsToBlackboard(t *testing.T) {
 	store := NewStore(t.TempDir())
 	_, err := store.AddTask("Call family", time.Now().Add(-time.Second), "")

@@ -15,7 +15,7 @@ import (
 
 func TestRenderHelpIncludesKeyCommands(t *testing.T) {
 	help := renderHelp()
-	checks := []string{"/dashboard", "/today", "/remind", "/status", "/plan <goal>", "/tools", "/quit"}
+	checks := []string{"/dashboard", "/today", "/remind", "/routine", "/status", "/plan <goal>", "/tools", "/quit"}
 	for _, check := range checks {
 		if !strings.Contains(help, check) {
 			t.Fatalf("renderHelp() should contain %q", check)
@@ -110,6 +110,19 @@ func TestRenderTodayIncludesUnreadNotificationsAndUpcomingTasks(t *testing.T) {
 	}
 }
 
+func TestRenderRoutinesIncludesConfiguredRoutines(t *testing.T) {
+	store := assistant.NewStore(t.TempDir())
+	_, _ = store.AddRoutine("Morning review", "daily", "08:30")
+
+	out := renderRoutines(store)
+	checks := []string{"Routines", "Morning review", "daily", "08:30"}
+	for _, check := range checks {
+		if !strings.Contains(out, check) {
+			t.Fatalf("renderRoutines() should contain %q", check)
+		}
+	}
+}
+
 func TestParseReminderInputSupportsRelativeDailyAndCalendarFormats(t *testing.T) {
 	now := time.Date(2026, 3, 11, 8, 0, 0, 0, time.UTC)
 
@@ -131,6 +144,28 @@ func TestParseReminderInputSupportsRelativeDailyAndCalendarFormats(t *testing.T)
 		}
 		if title != tt.wantTitle || recurrence != tt.wantRecurs || !due.Equal(tt.wantDue) {
 			t.Fatalf("parseReminderInput(%q) = (%v, %q, %q)", tt.input, due, recurrence, title)
+		}
+	}
+}
+
+func TestParseRoutineInputSupportsDailyAndWeekdays(t *testing.T) {
+	tests := []struct {
+		input        string
+		wantSchedule string
+		wantTime     string
+		wantTitle    string
+	}{
+		{"daily 08:30 Morning review", "daily", "08:30", "Morning review"},
+		{"weekdays 09:15 Inbox zero", "weekdays", "09:15", "Inbox zero"},
+	}
+
+	for _, tt := range tests {
+		schedule, clock, title, err := parseRoutineInput(tt.input)
+		if err != nil {
+			t.Fatalf("parseRoutineInput(%q) error = %v", tt.input, err)
+		}
+		if schedule != tt.wantSchedule || clock != tt.wantTime || title != tt.wantTitle {
+			t.Fatalf("parseRoutineInput(%q) = (%q, %q, %q)", tt.input, schedule, clock, title)
 		}
 	}
 }

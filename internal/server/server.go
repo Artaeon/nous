@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/artaeon/nous/internal/assistant"
 	"github.com/artaeon/nous/internal/blackboard"
 	"github.com/artaeon/nous/internal/cognitive"
 )
@@ -18,6 +19,7 @@ import (
 type Server struct {
 	board     *blackboard.Blackboard
 	perceiver *cognitive.Perceiver
+	assistant *assistant.Store
 	jobs      *JobManager
 	addr      string
 	server    *http.Server
@@ -36,14 +38,14 @@ type ChatResponse struct {
 
 // StatusResponse is the JSON response from GET /api/status.
 type StatusResponse struct {
-	Version    string `json:"version"`
-	Model      string `json:"model"`
-	Uptime     string `json:"uptime"`
-	Percepts   int    `json:"percepts"`
-	Goals      int    `json:"goals"`
-	ToolCount  int    `json:"tool_count"`
-	QueuedJobs int    `json:"queued_jobs"`
-	RunningJobs int   `json:"running_jobs"`
+	Version     string `json:"version"`
+	Model       string `json:"model"`
+	Uptime      string `json:"uptime"`
+	Percepts    int    `json:"percepts"`
+	Goals       int    `json:"goals"`
+	ToolCount   int    `json:"tool_count"`
+	QueuedJobs  int    `json:"queued_jobs"`
+	RunningJobs int    `json:"running_jobs"`
 }
 
 // JobsResponse is the JSON response for listing background jobs.
@@ -51,11 +53,54 @@ type JobsResponse struct {
 	Jobs []Job `json:"jobs"`
 }
 
+// TodayResponse is the JSON response for assistant inbox and schedule state.
+type TodayResponse struct {
+	Notifications []assistant.Notification `json:"notifications"`
+	Today         []assistant.Task         `json:"today"`
+	Upcoming      []assistant.Task         `json:"upcoming"`
+}
+
+// TasksResponse is the JSON response for assistant tasks.
+type TasksResponse struct {
+	Tasks []assistant.Task `json:"tasks"`
+}
+
+// PreferencesResponse is the JSON response for assistant preferences.
+type PreferencesResponse struct {
+	Preferences []assistant.Preference `json:"preferences"`
+}
+
+// RoutinesResponse is the JSON response for assistant routines.
+type RoutinesResponse struct {
+	Routines []assistant.Routine `json:"routines"`
+}
+
+// CreateTaskRequest is the JSON body for POST /api/assistant/tasks.
+type CreateTaskRequest struct {
+	Title      string    `json:"title"`
+	DueAt      time.Time `json:"due_at"`
+	Recurrence string    `json:"recurrence"`
+}
+
+// PreferenceRequest is the JSON body for POST /api/assistant/preferences.
+type PreferenceRequest struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// CreateRoutineRequest is the JSON body for POST /api/assistant/routines.
+type CreateRoutineRequest struct {
+	Title     string `json:"title"`
+	Schedule  string `json:"schedule"`
+	TimeOfDay string `json:"time_of_day"`
+}
+
 // New creates a Nous HTTP server.
-func New(addr string, board *blackboard.Blackboard, perceiver *cognitive.Perceiver) *Server {
+func New(addr string, board *blackboard.Blackboard, perceiver *cognitive.Perceiver, assistantStore *assistant.Store) *Server {
 	return &Server{
 		board:     board,
 		perceiver: perceiver,
+		assistant: assistantStore,
 		jobs:      NewJobManager(),
 		addr:      addr,
 	}
@@ -64,7 +109,18 @@ func New(addr string, board *blackboard.Blackboard, perceiver *cognitive.Perceiv
 // Start begins listening for HTTP requests.
 func (s *Server) Start(version, model string, toolCount int) error {
 	startTime := time.Now()
+	s.server = &http.Server{
+		Addr:         s.addr,
+		Handler:      s.newMux(version, model, toolCount, startTime),
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 300 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
 
+	return s.server.ListenAndServe()
+}
+
+func (s *Server) newMux(version, model string, toolCount int, startTime time.Time) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// CORS middleware
@@ -184,13 +240,13 @@ func (s *Server) Start(version, model string, toolCount int) error {
 		queuedJobs, runningJobs, _, _ := s.jobs.Stats()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(StatusResponse{
-			Version:   version,
-			Model:     model,
-			Uptime:    time.Since(startTime).Truncate(time.Second).String(),
-			Percepts:  len(s.board.Percepts()),
-			Goals:     len(s.board.ActiveGoals()),
-			ToolCount: toolCount,
-			QueuedJobs: queuedJobs,
+			Version:     version,
+			Model:       model,
+			Uptime:      time.Since(startTime).Truncate(time.Second).String(),
+			Percepts:    len(s.board.Percepts()),
+			Goals:       len(s.board.ActiveGoals()),
+			ToolCount:   toolCount,
+			QueuedJobs:  queuedJobs,
 			RunningJobs: runningJobs,
 		})
 	}))
@@ -199,6 +255,162 @@ func (s *Server) Start(version, model string, toolCount int) error {
 	mux.HandleFunc("/api/health", cors(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}))
+
+	// GET /api/assistant/today — unread reminders and upcoming tasks.
+	mux.HandleFunc("/api/assistant/today", cors(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if s.assistant == nil {
+			http.Error(w, "assistant store unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		now := time.Now()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(TodayResponse{
+			Notifications: s.assistant.UnreadNotifications(),
+			Today:         s.assistant.Today(now),
+			Upcoming:      s.assistant.Upcoming(10, now),
+		})
+	}))
+
+	// GET/POST /api/assistant/tasks — list and create persistent assistant tasks.
+	mux.HandleFunc("/api/assistant/tasks", cors(func(w http.ResponseWriter, r *http.Request) {
+		if s.assistant == nil {
+			http.Error(w, "assistant store unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		switch r.Method {
+		case "GET":
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(TasksResponse{Tasks: s.assistant.PendingTasks()})
+		case "POST":
+			var req CreateTaskRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid JSON", http.StatusBadRequest)
+				return
+			}
+			task, err := s.assistant.AddTask(strings.TrimSpace(req.Title), req.DueAt, strings.TrimSpace(req.Recurrence))
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(task)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+
+	// POST /api/assistant/tasks/{id}/done — mark a task completed.
+	mux.HandleFunc("/api/assistant/tasks/", cors(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if s.assistant == nil {
+			http.Error(w, "assistant store unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		path := strings.TrimPrefix(r.URL.Path, "/api/assistant/tasks/")
+		if !strings.HasSuffix(path, "/done") {
+			http.NotFound(w, r)
+			return
+		}
+		id := strings.TrimSuffix(path, "/done")
+		id = strings.TrimSuffix(id, "/")
+		if strings.TrimSpace(id) == "" {
+			http.NotFound(w, r)
+			return
+		}
+
+		task, err := s.assistant.MarkDone(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(task)
+	}))
+
+	// GET/POST /api/assistant/preferences — inspect and update saved preferences.
+	mux.HandleFunc("/api/assistant/preferences", cors(func(w http.ResponseWriter, r *http.Request) {
+		if s.assistant == nil {
+			http.Error(w, "assistant store unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		switch r.Method {
+		case "GET":
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(PreferencesResponse{Preferences: s.assistant.Preferences()})
+		case "POST":
+			var req PreferenceRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid JSON", http.StatusBadRequest)
+				return
+			}
+			if err := s.assistant.SetPreference(strings.TrimSpace(req.Key), strings.TrimSpace(req.Value)); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+
+	// GET/POST /api/assistant/routines — list and create recurring assistant routines.
+	mux.HandleFunc("/api/assistant/routines", cors(func(w http.ResponseWriter, r *http.Request) {
+		if s.assistant == nil {
+			http.Error(w, "assistant store unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		switch r.Method {
+		case "GET":
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(RoutinesResponse{Routines: s.assistant.Routines()})
+		case "POST":
+			var req CreateRoutineRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid JSON", http.StatusBadRequest)
+				return
+			}
+			routine, err := s.assistant.AddRoutine(strings.TrimSpace(req.Title), strings.TrimSpace(req.Schedule), strings.TrimSpace(req.TimeOfDay))
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(routine)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+
+	// POST /api/assistant/notifications/read — acknowledge unread assistant reminders.
+	mux.HandleFunc("/api/assistant/notifications/read", cors(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if s.assistant == nil {
+			http.Error(w, "assistant store unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if err := s.assistant.MarkNotificationsRead(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}))
 
 	// GET / — simple web UI placeholder
@@ -211,15 +423,7 @@ func (s *Server) Start(version, model string, toolCount int) error {
 		fmt.Fprint(w, webUI)
 	}))
 
-	s.server = &http.Server{
-		Addr:         s.addr,
-		Handler:      mux,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 300 * time.Second,
-		IdleTimeout:  60 * time.Second,
-	}
-
-	return s.server.ListenAndServe()
+	return mux
 }
 
 // Stop gracefully shuts down the server.

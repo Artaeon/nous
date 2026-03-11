@@ -343,7 +343,7 @@ func main() {
 	if *serveMode {
 		addr := ":" + *servePort
 		fmt.Printf("  serving on http://0.0.0.0%s\n\n", addr)
-		srv := server.New(addr, board, perceiver)
+		srv := server.New(addr, board, perceiver, assistantStore)
 		if err := srv.Start(version, *model, len(toolList)); err != nil {
 			fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 			os.Exit(1)
@@ -355,6 +355,7 @@ func main() {
 	fmt.Print(cognitive.Panel("Quick start", []string{
 		cognitive.Styled(cognitive.ColorCyan, "/dashboard") + " overview of the local agent",
 		cognitive.Styled(cognitive.ColorCyan, "/today") + " review reminders, tasks, and upcoming actions",
+		cognitive.Styled(cognitive.ColorCyan, "/routines") + " inspect recurring assistant routines",
 		cognitive.Styled(cognitive.ColorCyan, "/help") + " browse commands and workflows",
 		cognitive.Styled(cognitive.ColorCyan, "/plan <goal>") + " delegate a longer task",
 		cognitive.Styled(cognitive.ColorCyan, "/quit") + " save and exit",
@@ -447,6 +448,9 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 	case "/tasks":
 		fmt.Print(renderTasks(assistantStore, time.Now()))
 
+	case "/routines":
+		fmt.Print(renderRoutines(assistantStore))
+
 	case "/remind":
 		dueAt, recurrence, title, err := parseReminderInput(strings.TrimSpace(strings.TrimPrefix(input, parts[0])), time.Now())
 		if err != nil {
@@ -459,6 +463,19 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 			break
 		}
 		fmt.Printf("  reminder saved: %s (%s) due %s\n", task.ID, task.Title, task.DueAt.Format("2006-01-02 15:04"))
+
+	case "/routine":
+		schedule, clock, title, err := parseRoutineInput(strings.TrimSpace(strings.TrimPrefix(input, parts[0])))
+		if err != nil {
+			fmt.Printf("  routine error: %v\n", err)
+			break
+		}
+		routine, err := assistantStore.AddRoutine(title, schedule, clock)
+		if err != nil {
+			fmt.Printf("  could not create routine: %v\n", err)
+			break
+		}
+		fmt.Printf("  routine saved: %s (%s %s)\n", routine.Title, routine.Schedule, routine.TimeOfDay)
 
 	case "/done":
 		if len(parts) < 2 {
@@ -889,6 +906,7 @@ func renderHelp() string {
 	}))
 	b.WriteString(cognitive.Panel("Assistant operations", []string{
 		"/remind <when> <task>, /tasks, /done <task-id>",
+		"/routine <daily|weekdays> <HH:MM> <task>, /routines",
 		"/pref <key> <value>, /prefs",
 		"Examples: /remind in 2h stretch · /remind tomorrow 09:00 dentist",
 	}))
@@ -935,6 +953,7 @@ func renderDashboard(board *blackboard.Blackboard, wm *memory.WorkingMemory, ltm
 	assistantPanel := cognitive.Panel("Assistant", []string{
 		fmt.Sprintf("Pending tasks  %d", len(assistantStore.PendingTasks())),
 		fmt.Sprintf("Unread inbox   %d", len(assistantStore.UnreadNotifications())),
+		fmt.Sprintf("Routines       %d", len(assistantStore.Routines())),
 		fmt.Sprintf("Preferences    %d", len(assistantStore.Preferences())),
 	})
 
@@ -993,6 +1012,22 @@ func renderTasks(store *assistant.Store, now time.Time) string {
 		}
 	}
 	return cognitive.Panel("Tasks", lines)
+}
+
+func renderRoutines(store *assistant.Store) string {
+	routines := store.Routines()
+	lines := []string{"No routines configured."}
+	if len(routines) > 0 {
+		lines = lines[:0]
+		for _, routine := range routines {
+			state := "enabled"
+			if !routine.Enabled {
+				state = "disabled"
+			}
+			lines = append(lines, fmt.Sprintf("%s  %s (%s, %s)", routine.TimeOfDay, routine.Title, routine.Schedule, state))
+		}
+	}
+	return cognitive.Panel("Routines", lines)
 }
 
 func parseReminderInput(input string, now time.Time) (time.Time, string, string, error) {
@@ -1059,6 +1094,21 @@ func parseReminderInput(input string, now time.Time) (time.Time, string, string,
 	}
 
 	return time.Time{}, "", "", fmt.Errorf("unsupported reminder format")
+}
+
+func parseRoutineInput(input string) (string, string, string, error) {
+	parts := strings.Fields(strings.TrimSpace(input))
+	if len(parts) < 3 {
+		return "", "", "", fmt.Errorf("usage: /routine <daily|weekdays> <HH:MM> <task>")
+	}
+	schedule := strings.ToLower(parts[0])
+	if schedule != "daily" && schedule != "weekdays" {
+		return "", "", "", fmt.Errorf("routine schedule must be daily or weekdays")
+	}
+	if _, err := time.Parse("15:04", parts[1]); err != nil {
+		return "", "", "", fmt.Errorf("invalid routine time: %w", err)
+	}
+	return schedule, parts[1], strings.Join(parts[2:], " "), nil
 }
 
 func renderToolCatalog(toolReg *tools.Registry) string {
@@ -1196,4 +1246,3 @@ func defaultMemoryPath() string {
 	}
 	return filepath.Join(home, ".nous")
 }
-

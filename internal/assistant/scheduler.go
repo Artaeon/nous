@@ -8,10 +8,10 @@ import (
 )
 
 type Scheduler struct {
-	Store        *Store
-	Board        *blackboard.Blackboard
-	Interval     time.Duration
-	OnNotify     func(Notification)
+	Store    *Store
+	Board    *blackboard.Blackboard
+	Interval time.Duration
+	OnNotify func(Notification)
 }
 
 func NewScheduler(store *Store, board *blackboard.Blackboard) *Scheduler {
@@ -41,7 +41,14 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			notifications, err := s.Store.TriggerDue(time.Now())
+			now := time.Now()
+			if _, err := s.Store.TriggerRoutines(now); err != nil {
+				if s.Board != nil {
+					s.Board.Set("assistant_error", err.Error())
+				}
+				continue
+			}
+			notifications, err := s.Store.TriggerDue(now)
 			if err != nil {
 				if s.Board != nil {
 					s.Board.Set("assistant_error", err.Error())
