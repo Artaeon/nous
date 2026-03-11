@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -698,6 +700,10 @@ func (r *Reasoner) executeTool(tc toolCall) (string, error) {
 	if r.Confirm != nil {
 		if reason, dangerous := IsDangerous(tc.Name); dangerous {
 			detail := fmt.Sprintf("%s: %s %v", reason, tc.Name, tc.Args)
+			// Generate diff preview for file-modifying tools
+			if diffStr := r.buildDiffPreview(tc); diffStr != "" {
+				detail = diffStr + "\n" + detail
+			}
 			if !r.Confirm(tc.Name+" "+formatArgs(tc.Args), detail) {
 				return "Action denied by user.", nil
 			}
@@ -712,6 +718,83 @@ func (r *Reasoner) executeTool(tc toolCall) (string, error) {
 	}
 
 	return result, execErr
+}
+
+// buildDiffPreview generates a colored diff preview for file-modifying tools.
+// Returns an empty string if a preview cannot be generated.
+func (r *Reasoner) buildDiffPreview(tc toolCall) string {
+	wd := WorkDir
+	if wd == "" {
+		wd = "."
+	}
+
+	resolvePath := func(path string) string {
+		if filepath.IsAbs(path) {
+			return path
+		}
+		return filepath.Join(wd, path)
+	}
+
+	switch tc.Name {
+	case "write":
+		path := tc.Args["path"]
+		content := tc.Args["content"]
+		if path == "" || content == "" {
+			return ""
+		}
+		resolved := resolvePath(path)
+		oldData, err := os.ReadFile(resolved)
+		if err != nil {
+			// New file — show write preview
+			return FormatWritePreview(path, content)
+		}
+		return FormatEditPreview(path, string(oldData), content)
+
+	case "edit":
+		path := tc.Args["path"]
+		oldText := tc.Args["old"]
+		newText := tc.Args["new"]
+		if path == "" || oldText == "" {
+			return ""
+		}
+		resolved := resolvePath(path)
+		data, err := os.ReadFile(resolved)
+		if err != nil {
+			return ""
+		}
+		oldContent := string(data)
+		if !strings.Contains(oldContent, oldText) {
+			return ""
+		}
+		newContent := strings.Replace(oldContent, oldText, newText, 1)
+		return FormatEditPreview(path, oldContent, newContent)
+
+	case "patch":
+		path := tc.Args["path"]
+		before := tc.Args["before"]
+		after := tc.Args["after"]
+		if path == "" || before == "" {
+			return ""
+		}
+		resolved := resolvePath(path)
+		data, err := os.ReadFile(resolved)
+		if err != nil {
+			return ""
+		}
+		oldContent := string(data)
+		if !strings.Contains(oldContent, before) {
+			return ""
+		}
+		newContent := strings.Replace(oldContent, before, after, 1)
+		return FormatEditPreview(path, oldContent, newContent)
+
+	case "find_replace":
+		// find_replace uses regex, so we can't easily preview without importing regexp.
+		// Return empty — the confirmation still shows the action detail.
+		return ""
+	}
+
+	return ""
 }
 
 func formatArgs(args map[string]string) string {

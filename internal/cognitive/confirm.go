@@ -33,10 +33,12 @@ func AutoApprove(action, detail string) bool {
 
 // DangerousTools lists tools that require user confirmation.
 var DangerousTools = map[string]string{
-	"write": "Will create or overwrite a file",
-	"edit":  "Will modify a file",
-	"shell": "Will execute a shell command",
-	"mkdir": "Will create a directory",
+	"write":        "Will create or overwrite a file",
+	"edit":         "Will modify a file",
+	"patch":        "Will apply a multi-line edit to a file",
+	"find_replace": "Will regex find and replace in a file",
+	"shell":        "Will execute a shell command",
+	"mkdir":        "Will create a directory",
 }
 
 // IsDangerous checks if a tool call requires confirmation.
