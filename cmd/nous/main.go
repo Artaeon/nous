@@ -197,6 +197,7 @@ func main() {
 	// Create cognitive streams
 	perceiver := cognitive.NewPerceiver(board, llm)
 	perceiver.Router = router
+	learner := cognitive.NewLearner(board, llm, *memoryPath)
 	reasoner := cognitive.NewReasoner(board, llm, toolReg)
 	reasoner.WorkingMem = wm
 	reasoner.LongTermMem = ltm
@@ -205,10 +206,10 @@ func main() {
 	reasoner.CodeIndex = codeIndex
 	reasoner.Recipes = recipeBook
 	reasoner.Predictor = predictor
+	reasoner.Learner = learner
 	planner := cognitive.NewPlanner(board, llm)
 	executor := cognitive.NewExecutor(board, llm, toolReg)
 	reflector := cognitive.NewReflector(board, llm)
-	learner := cognitive.NewLearner(board, llm, *memoryPath)
 
 	// Set up confirmation for dangerous actions
 	if *trustMode {

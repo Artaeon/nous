@@ -40,6 +40,7 @@ type Reasoner struct {
 	Gate        *ReflectionGate
 	Recipes     *RecipeBook
 	Predictor   *Predictor
+	Learner     *Learner
 	OnToken     func(token string, done bool)
 	OnStatus    func(status string)
 	Confirm     ConfirmFunc
@@ -97,17 +98,20 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 		}
 	}
 
+	// Consult learned patterns and recipes before reasoning
+	priorKnowledge := r.consultPriorKnowledge(percept.Intent, percept.Raw)
+
 	// Create pipeline for this reasoning cycle.
-	// Instead of accumulating messages that fill the context window,
-	// each iteration gets a fresh conversation with only:
-	//   - compact system prompt
-	//   - original query + memory context
-	//   - compressed one-line summaries of all previous steps
-	//   - the latest tool result (if any)
 	pipe := NewPipeline(percept.Raw)
 
 	// Pre-compute memory context once (doesn't change between iterations)
 	memoryCtx := r.recallMemories(percept.Raw)
+	if priorKnowledge != "" {
+		if memoryCtx != "" {
+			memoryCtx += "\n\n"
+		}
+		memoryCtx += priorKnowledge
+	}
 
 	// 2. Autonomous tool loop with fresh-context pipeline
 	for i := 0; i < maxToolIterations; i++ {
@@ -675,6 +679,55 @@ func (r *Reasoner) recallMemories(input string) string {
 		indexCtx := r.CodeIndex.RelevantContext(input, 5)
 		if indexCtx != "" {
 			parts = append(parts, indexCtx)
+		}
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// consultPriorKnowledge checks learned patterns and recipes for relevant prior experience.
+// This is the key feedback loop: what the Learner extracted gets injected back into reasoning.
+func (r *Reasoner) consultPriorKnowledge(intent, rawInput string) string {
+	var parts []string
+
+	// Check learned behavioral patterns from the Learner
+	if r.Learner != nil {
+		patterns := r.Learner.FindRelevantPatterns(intent)
+		if len(patterns) > 0 {
+			var patternLines []string
+			for _, p := range patterns {
+				if len(patternLines) >= 3 {
+					break
+				}
+				chain := ""
+				for i, tool := range p.ToolChain {
+					if i > 0 {
+						chain += " → "
+					}
+					chain += tool
+				}
+				patternLines = append(patternLines, fmt.Sprintf("- %s (confidence: %.0f%%, used %d times)", chain, p.Confidence*100, p.Uses))
+			}
+			if len(patternLines) > 0 {
+				parts = append(parts, "[Learned Patterns]\nFor similar tasks, these tool sequences worked before:\n"+strings.Join(patternLines, "\n"))
+			}
+		}
+	}
+
+	// Check recipe book for matching multi-step sequences
+	if r.Recipes != nil {
+		recipes := r.Recipes.Match(intent, rawInput)
+		if len(recipes) > 0 {
+			best := recipes[0]
+			var stepNames []string
+			for _, s := range best.Steps {
+				stepNames = append(stepNames, s.Tool)
+			}
+			chain := strings.Join(stepNames, " → ")
+			parts = append(parts, fmt.Sprintf("[Recipe: %s]\nTried approach: %s (used %d times, %.0f%% success)", best.Name, chain, best.Uses, best.Confidence()*100))
 		}
 	}
 
