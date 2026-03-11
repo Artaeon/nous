@@ -136,7 +136,7 @@ go install github.com/artaeon/nous/cmd/nous@latest
                 ║       Unified Streams             ║
                 ╚═══════════════════════════════════╝
 
-  version 0.4.0 | amd64 | 8 cores | 16 GB RAM
+  version 0.5.0 | amd64 | 8 cores | 16 GB RAM
 
   connecting to ollama... OK (qwen2.5:1.5b)
   scanning project... nous (Go, 28 files)
@@ -230,7 +230,7 @@ Classical AI agents make a single LLM call per user message. Nous works differen
 
 1. **Perceiver** — Listens for raw user input. Extracts intent and entities via the LLM. Posts a structured `Percept` to the blackboard.
 
-2. **Reasoner** — Reacts to percepts. Runs autonomous chain-of-thought inference with tool use. Can chain up to 15 tool calls in a single loop — reading files, searching code, editing files — before producing a final answer. Streams tokens to the terminal in real time, suppressing tool-call JSON from the display.
+2. **Reasoner** — Reacts to percepts. Runs autonomous chain-of-thought inference with tool use. Chains up to 8 tool calls in a single loop — reading files, searching code, editing files — before producing a final answer. Streams tokens to the terminal in real time, suppressing tool-call JSON from the display. Protected by the **Cognitive Grounding** system (see below).
 
 3. **Planner** — Reacts to new goals. Decomposes them into ordered, executable step sequences using hierarchical task decomposition via the LLM.
 
@@ -248,7 +248,19 @@ Classical AI agents make a single LLM call per user message. Nous works differen
 
 **Undo Stack** — All file-modifying tools (write, edit, find_replace, mkdir) push entries onto an undo stack. Use `/undo` to revert the most recent change, `/history` to view the stack.
 
-**Context Compression** — The `compress` module distills conversation fragments into dense "atoms" — reusable `{trigger, knowledge, weight}` tuples. Before inference, only the most relevant atoms are retrieved and injected, keeping the context window minimal for CPU inference.
+**Context Compression** — The `compress` module distills conversation fragments into dense "atoms" — reusable `{trigger, knowledge, weight}` tuples. Automatically triggered when context budget exceeds 75%.
+
+**Cognitive Grounding** (v0.5.0) — A five-layer system that prevents hallucinations in small models:
+
+1. **Progressive Tool Disclosure** — Instead of injecting all 18 tools into the system prompt (~1000 tokens), only the 5-8 tools relevant to the detected intent are shown. The model can request additional tool categories via a `request_tools` meta-tool. Saves ~500 tokens of context.
+
+2. **Smart Result Truncation** — Tool-specific truncation keeps results compact: file reads show first/last 20 lines, grep/glob cap at 15 matches, directory listings cap at 30 entries. Universal 2048-char hard limit.
+
+3. **Result Validation** — Every tool result is checked for common issues (empty reads, missing files, permission errors) and annotated with corrective hints for the model.
+
+4. **Context Budget Tracking** — Estimates token consumption across all messages. Auto-compresses old conversation turns at 75% usage (via atoms or rule-based fallback). Forces a final answer at 85% to prevent context overflow.
+
+5. **Synchronous Reflection Gate** — After each tool call, a rule-based validator checks for: errors, empty results, repeated calls, and excessive iterations. Injects corrective hints and forces the model to answer when it's stuck in a loop.
 
 ---
 
@@ -272,6 +284,8 @@ nous/
 │   │   ├── learner.go           # Pattern extraction + persistence
 │   │   ├── conversation.go      # Multi-turn history with auto-truncation
 │   │   ├── persona.go           # System prompt + identity definition
+│   │   ├── grounding.go         # Cognitive Grounding: budget, validation, reflection gate
+│   │   ├── tool_selector.go     # Progressive tool disclosure by intent
 │   │   ├── session.go           # Session persistence (save / load / resume)
 │   │   ├── scanner.go           # Project auto-detection (language, structure)
 │   │   └── confirm.go           # User confirmation for dangerous actions
@@ -319,7 +333,7 @@ ollama pull qwen2.5:1.5b
 
 - [x] Core cognitive architecture (6 concurrent streams as goroutines)
 - [x] Blackboard pattern with event-driven pub/sub communication
-- [x] Autonomous tool-use loop (up to 15 chained calls per turn)
+- [x] Autonomous tool-use loop (up to 8 grounded calls per turn)
 - [x] 18 built-in tools (read, write, edit, glob, grep, ls, tree, mkdir, shell, fetch, run, sysinfo, clipboard, find_replace, git, patch, replace_all, diff)
 - [x] Streaming token output with tool-call JSON filtering
 - [x] Session persistence and resume across restarts
@@ -337,6 +351,10 @@ ollama pull qwen2.5:1.5b
 - [x] System clipboard integration (read/write via xclip/xsel)
 - [x] Regex find-and-replace with undo support
 - [x] Multi-file string replacement across the codebase
+- [x] Cognitive Grounding system (anti-hallucination for small models)
+- [x] Progressive tool disclosure (intent-based tool selection)
+- [x] Context budget tracking with auto-compression
+- [x] Synchronous reflection gate (loop detection, forced convergence)
 - [ ] Embedding-based atom retrieval (replace keyword overlap scoring)
 - [ ] Automatic test generation and execution
 - [ ] LSP integration for language-aware code navigation
