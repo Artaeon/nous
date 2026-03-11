@@ -119,11 +119,13 @@ type GenerateRequest struct {
 }
 
 type ModelOptions struct {
-	Temperature float64  `json:"temperature,omitempty"`
-	TopP        float64  `json:"top_p,omitempty"`
-	NumCtx      int      `json:"num_ctx,omitempty"`
-	NumPredict  int      `json:"num_predict,omitempty"`
-	Stop        []string `json:"stop,omitempty"`
+	Temperature   float64  `json:"temperature,omitempty"`
+	TopP          float64  `json:"top_p,omitempty"`
+	NumCtx        int      `json:"num_ctx,omitempty"`
+	NumPredict    int      `json:"num_predict,omitempty"`
+	Stop          []string `json:"stop,omitempty"`
+	RepeatPenalty float64  `json:"repeat_penalty,omitempty"`
+	RepeatLastN   int      `json:"repeat_last_n,omitempty"`
 }
 
 type GenerateResponse struct {
