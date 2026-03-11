@@ -149,6 +149,46 @@ func classifyTrigger(input string) string {
 	}
 }
 
+// LearnFromTools records a successful tool sequence from direct reasoner interaction.
+// This is the primary learning path — called after every successful multi-tool query.
+func (l *Learner) LearnFromTools(trigger string, toolNames []string) {
+	if len(toolNames) == 0 {
+		return
+	}
+
+	intent := classifyTrigger(trigger)
+	chainKey := strings.Join(toolNames, "→")
+
+	l.mu.Lock()
+	for i := range l.patterns {
+		existing := strings.Join(l.patterns[i].ToolChain, "→")
+		if existing == chainKey && l.patterns[i].Trigger == intent {
+			l.patterns[i].Uses++
+			l.patterns[i].Successes++
+			l.patterns[i].LastUsed = time.Now()
+			l.patterns[i].Confidence = float64(l.patterns[i].Successes) / float64(l.patterns[i].Uses)
+			l.mu.Unlock()
+			_ = l.savePatterns()
+			return
+		}
+	}
+
+	l.patterns = append(l.patterns, Pattern{
+		Trigger:    intent,
+		ToolChain:  toolNames,
+		Response:   fmt.Sprintf("tools: %s", chainKey),
+		Confidence: 0.5,
+		Uses:       1,
+		Successes:  1,
+		LastUsed:   time.Now(),
+	})
+	if len(l.patterns) > 100 {
+		l.prunePatterns()
+	}
+	l.mu.Unlock()
+	_ = l.savePatterns()
+}
+
 // FindRelevantPatterns returns patterns matching the given intent, sorted by confidence.
 func (l *Learner) FindRelevantPatterns(intent string) []Pattern {
 	l.mu.RLock()

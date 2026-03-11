@@ -1062,31 +1062,17 @@ func (r *Reasoner) finishReasoning(percept blackboard.Percept, pipe *Pipeline, f
 		r.Recipes.Record(pipe, percept.Intent, percept.Raw)
 	}
 
-	// Emit goal completion so Learner can extract patterns
-	if pipe.StepCount() >= 1 {
-		goalID := fmt.Sprintf("reason-%d", time.Now().UnixMilli())
-		r.Board.PushGoal(blackboard.Goal{
-			ID:          goalID,
-			Description: percept.Raw,
-			Status:      "pending",
-			CreatedAt:   time.Now(),
-		})
-		var steps []blackboard.Step
-		for j, s := range pipe.steps {
-			steps = append(steps, blackboard.Step{
-				ID:          fmt.Sprintf("%s-step-%d", goalID, j),
-				Description: s.Summary,
-				Tool:        s.ToolName,
-				Status:      "done",
-				Result:      s.Summary,
-			})
+	// Teach the learner from successful tool sequences (direct, no goal overhead)
+	if r.Learner != nil && pipe.StepCount() >= 1 {
+		var toolNames []string
+		for _, s := range pipe.steps {
+			if s.ToolName != "" {
+				toolNames = append(toolNames, s.ToolName)
+			}
 		}
-		r.Board.SetPlan(blackboard.Plan{
-			GoalID: goalID,
-			Steps:  steps,
-			Status: "completed",
-		})
-		r.Board.UpdateGoalStatus(goalID, "completed")
+		if len(toolNames) > 0 {
+			go r.Learner.LearnFromTools(percept.Raw, toolNames)
+		}
 	}
 
 	r.storeToMemory(percept.Raw, finalAnswer)
