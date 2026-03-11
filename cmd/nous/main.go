@@ -19,7 +19,10 @@ import (
 	"github.com/artaeon/nous/internal/index"
 	"github.com/artaeon/nous/internal/memory"
 	"github.com/artaeon/nous/internal/ollama"
+	"github.com/artaeon/nous/internal/sentinel"
+	"github.com/artaeon/nous/internal/server"
 	"github.com/artaeon/nous/internal/tools"
+	"github.com/artaeon/nous/internal/training"
 )
 
 const banner = `
@@ -30,7 +33,7 @@ const banner = `
                 ╚═══════════════════════════════════╝
 `
 
-const version = "0.5.0"
+const version = "0.6.0"
 
 func main() {
 	// Flags
@@ -40,6 +43,8 @@ func main() {
 	allowShell := flag.Bool("allow-shell", false, "Enable shell command execution")
 	trustMode := flag.Bool("trust", false, "Skip confirmation prompts for file operations")
 	sessionID := flag.String("resume", "", "Resume a previous session by ID")
+	serveMode := flag.Bool("serve", false, "Run as HTTP server instead of REPL")
+	servePort := flag.String("port", "3333", "HTTP server port (with --serve)")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 	flag.Parse()
 
@@ -112,10 +117,37 @@ func main() {
 		}
 	}
 
+	// Filesystem Sentinel — ambient file watching with inotify
+	var fileWatcher *sentinel.Watcher
+	fileWatcher, err = sentinel.NewWatcher(workDir, 500*time.Millisecond, func(events []sentinel.FileEvent) {
+		// Auto-update codebase index on Go file changes
+		if projectInfo.Language == "Go" {
+			changed := sentinel.ChangedGoFiles(events)
+			if len(changed) > 0 {
+				codeIndex.IncrementalUpdate(workDir, changed)
+			}
+		}
+	})
+	if err != nil {
+		fmt.Printf("  sentinel: %v (disabled)\n", err)
+	} else {
+		go fileWatcher.Run()
+		fmt.Printf("  sentinel: watching %d dirs\n", fileWatcher.WatchCount())
+	}
+
+	// Tool Choreography — learned multi-step recipes
+	recipeBook := cognitive.NewRecipeBook(nousDir)
+	if recipeBook.Size() > 0 {
+		fmt.Printf("  recipes: %d learned\n", recipeBook.Size())
+	}
+
 	// Initialize undo stack and tool registry
 	undoStack := memory.NewUndoStack(100)
 	toolReg := tools.NewRegistry()
 	tools.RegisterBuiltins(toolReg, workDir, *allowShell, undoStack)
+
+	// Predictive Pre-computation
+	predictor := cognitive.NewPredictor(toolReg)
 
 	// Initialize core systems
 	board := blackboard.New()
@@ -127,6 +159,19 @@ func main() {
 	// Project-level memory (stored in the project's .nous/ directory)
 	projMem := memory.NewProjectMemory(workDir)
 	fmt.Printf("  project memory: %d facts\n", projMem.Size())
+
+	// Episodic memory — remembers every interaction forever (semantic search via embeddings)
+	episodic := memory.NewEpisodicMemory(nousDir, llm.Embed)
+	if episodic.Size() > 0 {
+		fmt.Printf("  episodic memory: %d episodes (%.0f%% success rate)\n",
+			episodic.Size(), episodic.SuccessRate()*100)
+	}
+
+	// Training data collector — gathers successful interactions for fine-tuning
+	collector := training.NewCollector(nousDir)
+	if collector.Size() > 0 {
+		fmt.Printf("  training data: %d pairs\n", collector.Size())
+	}
 
 	// Session management
 	sessionStore := cognitive.NewSessionStore(*memoryPath)
@@ -158,6 +203,8 @@ func main() {
 	reasoner.ProjectMem = projMem
 	reasoner.Compressor = compress.NewCompressor(llm)
 	reasoner.CodeIndex = codeIndex
+	reasoner.Recipes = recipeBook
+	reasoner.Predictor = predictor
 	planner := cognitive.NewPlanner(board, llm)
 	executor := cognitive.NewExecutor(board, llm)
 	reflector := cognitive.NewReflector(board, llm)
@@ -284,10 +331,8 @@ func main() {
 	fmt.Printf("  session: %s\n", currentSession.ID)
 	fmt.Println()
 	fmt.Println("  I am Nous. I think, therefore I am — locally.")
-	fmt.Println("  type /help for commands, /quit to exit")
-	fmt.Println()
 
-	// Handle graceful shutdown — save session
+	// Handle graceful shutdown — save session + episodic memory
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -295,12 +340,32 @@ func main() {
 		fmt.Println("\n\n  saving session...")
 		currentSession.Messages = reasoner.Conv.Messages()
 		sessionStore.Save(currentSession)
+		episodic.Save()
+		collector.Save()
+		if fileWatcher != nil {
+			fileWatcher.Stop()
+		}
 		fmt.Println("  goodbye.")
 		cancel()
 		os.Exit(0)
 	}()
 
-	// REPL
+	// --- Server Mode ---
+	if *serveMode {
+		addr := ":" + *servePort
+		fmt.Printf("  serving on http://0.0.0.0%s\n\n", addr)
+		srv := server.New(addr, board, perceiver)
+		if err := srv.Start(version, *model, len(toolList)); err != nil {
+			fmt.Fprintf(os.Stderr, "server error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// --- REPL Mode ---
+	fmt.Println("  type /help for commands, /quit to exit")
+	fmt.Println()
+
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
 		fmt.Print("  nous> ")
@@ -315,18 +380,37 @@ func main() {
 
 		// Handle commands
 		if strings.HasPrefix(input, "/") {
-			if handleCommand(input, board, llm, toolReg, wm, ltm, projMem, undoStack, sessionStore, currentSession, reasoner, projectInfo) {
+			if handleCommand(input, board, llm, toolReg, wm, ltm, projMem, undoStack, sessionStore, currentSession, reasoner, projectInfo, episodic, collector) {
 				continue
 			}
 		}
 
 		// Submit to the perceiver and wait for reasoning to complete
 		fmt.Println()
+		start := time.Now()
 		perceiver.Submit(input)
 
 		// Wait for the answer to appear on the blackboard
-		waitForAnswer(board)
+		answer := waitForAnswerStr(board)
+		duration := time.Since(start)
 		fmt.Println()
+
+		// Record in episodic memory (remembers everything forever)
+		go episodic.Record(memory.Episode{
+			Timestamp: time.Now(),
+			Input:     input,
+			Output:    answer,
+			Success:   true,
+			Duration:  duration.Milliseconds(),
+		})
+
+		// Collect training data from successful interactions
+		msgs := reasoner.Conv.Messages()
+		sysPrompt := ""
+		if len(msgs) > 0 {
+			sysPrompt = msgs[0].Content
+		}
+		go collector.Collect(sysPrompt, input, answer, nil, 0.7)
 
 		// Auto-save session after each exchange
 		currentSession.Messages = reasoner.Conv.Messages()
@@ -334,7 +418,7 @@ func main() {
 	}
 }
 
-func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Client, toolReg *tools.Registry, wm *memory.WorkingMemory, ltm *memory.LongTermMemory, projMem *memory.ProjectMemory, undoStack *memory.UndoStack, sessions *cognitive.SessionStore, current *cognitive.Session, reasoner *cognitive.Reasoner, project *cognitive.ProjectInfo) bool {
+func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Client, toolReg *tools.Registry, wm *memory.WorkingMemory, ltm *memory.LongTermMemory, projMem *memory.ProjectMemory, undoStack *memory.UndoStack, sessions *cognitive.SessionStore, current *cognitive.Session, reasoner *cognitive.Reasoner, project *cognitive.ProjectInfo, episodic *memory.EpisodicMemory, collector *training.Collector) bool {
 	parts := strings.Fields(input)
 	cmd := strings.ToLower(parts[0])
 
@@ -354,9 +438,14 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
     /status            Show cognitive system status
     /memory            Show working memory contents
     /longterm          Show long-term memory entries
+    /episodes          Show recent episodic memories
+    /search <query>    Semantic search through all memories
     /remember <k> <v>  Remember a project fact
     /recall <query>    Search project memory
     /forget <key>      Forget a project fact
+    /training          Show training data stats
+    /export <fmt>      Export training data (jsonl/alpaca/chatml)
+    /finetune          Generate Modelfile + fine-tuning guide
     /undo              Revert the last file change
     /history           Show undo stack
     /goals             Show active goals
@@ -532,6 +621,112 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 			}
 		}
 
+	case "/episodes":
+		recent := episodic.Recent(10)
+		if len(recent) == 0 {
+			fmt.Println("  no episodes recorded")
+		} else {
+			fmt.Printf("  %d total episodes (showing last %d):\n", episodic.Size(), len(recent))
+			for _, ep := range recent {
+				age := time.Since(ep.Timestamp).Truncate(time.Second)
+				status := "OK"
+				if !ep.Success {
+					status = "FAIL"
+				}
+				q := ep.Input
+				if len(q) > 60 {
+					q = q[:60] + "..."
+				}
+				fmt.Printf("  [%s ago] [%s] %s\n", age, status, q)
+			}
+			fmt.Printf("  success rate: %.0f%%\n", episodic.SuccessRate()*100)
+		}
+
+	case "/search":
+		if len(parts) < 2 {
+			fmt.Println("  usage: /search <query>")
+			break
+		}
+		query := strings.Join(parts[1:], " ")
+		results := episodic.Search(query, 5)
+		if len(results) == 0 {
+			fmt.Println("  no matching episodes")
+		} else {
+			for _, ep := range results {
+				age := time.Since(ep.Timestamp).Truncate(time.Second)
+				q := ep.Input
+				if len(q) > 50 {
+					q = q[:50] + "..."
+				}
+				a := ep.Output
+				if len(a) > 50 {
+					a = a[:50] + "..."
+				}
+				fmt.Printf("  [%s ago] Q: %s\n", age, q)
+				if a != "" {
+					fmt.Printf("           A: %s\n", a)
+				}
+			}
+		}
+
+	case "/training":
+		fmt.Printf("  training pairs: %d\n", collector.Size())
+		dist := collector.QualityDistribution()
+		if len(dist) > 0 {
+			fmt.Println("  quality distribution:")
+			for bucket, count := range dist {
+				fmt.Printf("    %s: %d pairs\n", bucket, count)
+			}
+		}
+
+	case "/export":
+		if len(parts) < 2 {
+			fmt.Println("  usage: /export <format>  (jsonl, alpaca, chatml)")
+			break
+		}
+		format := strings.ToLower(parts[1])
+		path := filepath.Join(cognitive.WorkDir, ".nous", "export_"+format)
+		var exportErr error
+		switch format {
+		case "jsonl":
+			path += ".jsonl"
+			exportErr = collector.ExportJSONL(path)
+		case "alpaca":
+			path += ".json"
+			exportErr = collector.ExportAlpaca(path)
+		case "chatml":
+			path += ".jsonl"
+			exportErr = collector.ExportChatML(path)
+		default:
+			fmt.Printf("  unknown format: %s (try jsonl, alpaca, chatml)\n", format)
+			break
+		}
+		if exportErr != nil {
+			fmt.Printf("  export error: %v\n", exportErr)
+		} else {
+			fmt.Printf("  exported %d pairs to %s\n", collector.Size(), path)
+		}
+
+	case "/finetune":
+		cfg := training.DefaultModelfileConfig(llm.Model())
+		cfg.System = training.NousSystemPrompt()
+		mfPath := filepath.Join(cognitive.WorkDir, ".nous", "Modelfile")
+		if err := training.WriteModelfile(mfPath, cfg); err != nil {
+			fmt.Printf("  error writing Modelfile: %v\n", err)
+			break
+		}
+		fmt.Printf("  Modelfile written to %s\n", mfPath)
+		fmt.Println()
+		fmt.Println("  To create your custom model:")
+		fmt.Printf("    ollama create %s -f %s\n", cfg.Name, mfPath)
+		fmt.Println()
+		fmt.Println("  To fine-tune with LoRA (requires Python + unsloth):")
+		fmt.Println("    1. /export chatml")
+		fmt.Printf("    2. python finetune.py  (generates LoRA adapter)\n")
+		fmt.Println("    3. Update Modelfile with ADAPTER path")
+		fmt.Printf("    4. ollama create %s -f %s\n", cfg.Name, mfPath)
+		fmt.Printf("    5. nous --model %s\n", cfg.Name)
+
 	case "/clear":
 		reasoner.Conv = cognitive.NewConversation(20)
 		fmt.Println("  conversation cleared")
@@ -544,6 +739,10 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 }
 
 func waitForAnswer(board *blackboard.Blackboard) {
+	_ = waitForAnswerStr(board)
+}
+
+func waitForAnswerStr(board *blackboard.Blackboard) string {
 	deadline := time.After(300 * time.Second)
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
@@ -552,12 +751,14 @@ func waitForAnswer(board *blackboard.Blackboard) {
 		select {
 		case <-deadline:
 			fmt.Println("  (timeout waiting for response)")
-			return
+			return ""
 		case <-ticker.C:
 			if answer, ok := board.Get("last_answer"); ok {
 				board.Delete("last_answer")
-				_ = answer
-				return
+				if s, ok := answer.(string); ok {
+					return s
+				}
+				return fmt.Sprintf("%v", answer)
 			}
 		}
 	}
