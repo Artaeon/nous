@@ -1,9 +1,11 @@
 package cognitive
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/artaeon/nous/internal/blackboard"
+	"github.com/artaeon/nous/internal/tools"
 )
 
 func TestPublishAnswerSetsDefaultAndRequestSpecificKeys(t *testing.T) {
@@ -29,5 +31,16 @@ func TestPublishAnswerWithoutRequestSpecificKey(t *testing.T) {
 
 	if got, ok := board.Get("last_answer"); !ok || got.(string) != "fallback only" {
 		t.Fatalf("expected default answer key, got %v %t", got, ok)
+	}
+}
+
+func TestCompactSystemPromptIsAssistantFirst(t *testing.T) {
+	r := &Reasoner{Tools: tools.NewRegistry()}
+	prompt := r.compactSystemPrompt()
+	checks := []string{"local personal assistant", "personal questions", "assistant memory"}
+	for _, check := range checks {
+		if !strings.Contains(prompt, check) {
+			t.Fatalf("compactSystemPrompt() should contain %q", check)
+		}
 	}
 }

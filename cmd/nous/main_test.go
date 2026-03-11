@@ -170,6 +170,54 @@ func TestParseRoutineInputSupportsDailyAndWeekdays(t *testing.T) {
 	}
 }
 
+func TestBuildAssistantContextIncludesPreferencesTasksAndRoutines(t *testing.T) {
+	store := assistant.NewStore(t.TempDir())
+	now := time.Date(2026, 3, 11, 10, 0, 0, 0, time.UTC)
+	_ = store.SetPreference("language", "de")
+	_, _ = store.AddTask("Call dentist", now.Add(2*time.Hour), "")
+	_, _ = store.AddRoutine("Morning review", "daily", "08:30")
+
+	out := buildAssistantContext(store, "What matters today?", now)
+	checks := []string{"[Assistant Memory]", "language=de", "Active reminders/tasks:", "Call dentist", "Morning review"}
+	for _, check := range checks {
+		if !strings.Contains(out, check) {
+			t.Fatalf("buildAssistantContext() should contain %q", check)
+		}
+	}
+}
+
+func TestBuildAssistantContextSkipsCodeQueries(t *testing.T) {
+	store := assistant.NewStore(t.TempDir())
+	_ = store.SetPreference("language", "de")
+	out := buildAssistantContext(store, "show me the main.go file", time.Now())
+	if out != "" {
+		t.Fatalf("expected no assistant context for code query, got %q", out)
+	}
+}
+
+func TestAnswerAssistantQueryUsesPreferencesAndReminders(t *testing.T) {
+	store := assistant.NewStore(t.TempDir())
+	now := time.Date(2026, 3, 11, 10, 0, 0, 0, time.UTC)
+	_ = store.SetPreference("language", "de")
+	_, _ = store.AddTask("Call dentist", now.Add(2*time.Hour), "")
+
+	answer, ok := answerAssistantQuery(store, "What reminder do I currently have?", now)
+	if !ok {
+		t.Fatal("expected deterministic assistant answer")
+	}
+	checks := []string{"Call dentist", "12:00"}
+	for _, check := range checks {
+		if !strings.Contains(answer, check) {
+			t.Fatalf("answerAssistantQuery() should contain %q, got %q", check, answer)
+		}
+	}
+
+	langAnswer, ok := answerAssistantQuery(store, "What language do I prefer?", now)
+	if !ok || (!strings.Contains(langAnswer, "de") && !strings.Contains(strings.ToLower(langAnswer), "deutsch")) {
+		t.Fatalf("expected language answer to mention de/Deutsch, got %q", langAnswer)
+	}
+}
+
 func TestScoreInteractionQualityRewardsFastSuccessfulAnswers(t *testing.T) {
 	board := blackboard.New()
 	board.RecordAction(blackboard.ActionRecord{StepID: "1", Tool: "read", Success: true, Timestamp: time.Now()})

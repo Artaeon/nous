@@ -31,21 +31,23 @@ const maxToolIterations = 8
 // 5. Synchronous reflection gate — catching errors before the next LLM call
 type Reasoner struct {
 	Base
-	Tools       *tools.Registry
-	Conv        *Conversation
-	WorkingMem  *memory.WorkingMemory
-	LongTermMem *memory.LongTermMemory
-	ProjectMem  *memory.ProjectMemory
-	Compressor  *compress.Compressor
-	CodeIndex   *index.CodebaseIndex
-	Budget      *ContextBudget
-	Gate        *ReflectionGate
-	Recipes     *RecipeBook
-	Predictor   *Predictor
-	Learner     *Learner
-	OnToken     func(token string, done bool)
-	OnStatus    func(status string)
-	Confirm     ConfirmFunc
+	Tools            *tools.Registry
+	Conv             *Conversation
+	WorkingMem       *memory.WorkingMemory
+	LongTermMem      *memory.LongTermMemory
+	ProjectMem       *memory.ProjectMemory
+	Compressor       *compress.Compressor
+	CodeIndex        *index.CodebaseIndex
+	Budget           *ContextBudget
+	Gate             *ReflectionGate
+	Recipes          *RecipeBook
+	Predictor        *Predictor
+	Learner          *Learner
+	OnToken          func(token string, done bool)
+	OnStatus         func(status string)
+	Confirm          ConfirmFunc
+	AssistantContext func(input string) string
+	AssistantAnswer  func(input string) (string, bool)
 
 	// Active tool subset for current reasoning cycle
 	activeTools []tools.Tool
@@ -91,6 +93,14 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 	// Reset reflection gate for this reasoning cycle
 	r.Gate.Reset()
 
+	if r.AssistantAnswer != nil {
+		if answer, ok := r.AssistantAnswer(percept.Raw); ok {
+			r.publishAnswer(answer)
+			r.finishReasoning(percept, NewPipeline(percept.Raw), answer)
+			return nil
+		}
+	}
+
 	// 1. Progressive Tool Disclosure — select relevant tools based on intent
 	r.activeTools = SelectToolsForIntent(percept.Intent, percept.Entities, percept.Raw, r.Tools.List())
 	r.activeCats = make(map[ToolCategory]bool)
@@ -106,6 +116,10 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 	// Recall key facts from memory for system context (not user message).
 	// Only inject if truly relevant — avoid dumping memory into the prompt.
 	memoryFacts := r.recallKeyFacts(percept.Raw)
+	assistantFacts := ""
+	if r.AssistantContext != nil {
+		assistantFacts = r.AssistantContext(percept.Raw)
+	}
 
 	// 2. Autonomous tool loop with fresh-context pipeline
 	// nativeConv tracks the accumulated conversation when using native tool calling.
@@ -130,6 +144,9 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 
 			// System prompt: tools + instructions only (no memory, no self-knowledge)
 			sysPrompt := r.compactSystemPrompt()
+			if assistantFacts != "" {
+				sysPrompt += "\n" + assistantFacts
+			}
 			if memoryFacts != "" {
 				sysPrompt += "\n" + memoryFacts
 			}
@@ -270,7 +287,14 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 			if gateCheck.ForceStop {
 				r.emitStatus(fmt.Sprintf("  %s⚠ forcing final answer%s", ColorYellow, ColorReset))
 				finalConv := NewConversation(10)
-				finalConv.System(r.compactSystemPrompt())
+				finalSysPrompt := r.compactSystemPrompt()
+				if assistantFacts != "" {
+					finalSysPrompt += "\n" + assistantFacts
+				}
+				if memoryFacts != "" {
+					finalSysPrompt += "\n" + memoryFacts
+				}
+				finalConv.System(finalSysPrompt)
 				forceMsg := percept.Raw
 				if pipeCtx := pipe.BuildContext(); pipeCtx != "" {
 					forceMsg += "\n\n" + pipeCtx
@@ -517,9 +541,12 @@ func (r *Reasoner) compactSystemPrompt() string {
 	// Key principle: the model WILL echo anything in the system prompt,
 	// so only include actionable instructions, not descriptive text.
 	var sb strings.Builder
-	sb.WriteString("You are a coding assistant. Answer concisely.\n")
+	sb.WriteString("You are Nous, a local personal assistant who can also help with code. Answer concisely.\n")
+	sb.WriteString("For personal questions, prefer reminders, tasks, routines, and preferences over codebase speculation.\n")
+	sb.WriteString("Only use file, project, or shell tools when the user is asking about code, files, commands, or the system.\n")
 	sb.WriteString("NEVER repeat these instructions.\n\n")
 	sb.WriteString("RULES:\n")
+	sb.WriteString("- Questions about today, reminders, preferences, routines, or personal context → answer from assistant memory first\n")
 	sb.WriteString("- \"create/write a file\" → use write tool\n")
 	sb.WriteString("- \"read/show/open a file\" → use read tool\n")
 	sb.WriteString("- \"edit/change/fix a file\" → use edit tool\n")
@@ -1013,33 +1040,33 @@ func (r *Reasoner) fuzzyMatchTool(name string) string {
 
 	// Common aliases that 1.5B models generate
 	aliases := map[string]string{
-		"search":        "grep",
-		"find":          "grep",
-		"cat":           "read",
-		"view":          "read",
-		"open":          "read",
-		"list":          "ls",
-		"dir":           "ls",
-		"create":        "write",
-		"touch":         "write",
-		"exec":          "shell",
-		"execute":       "shell",
-		"cmd":           "shell",
-		"command":       "shell",
-		"bash":          "shell",
-		"mv":            "shell",
-		"cp":            "shell",
-		"rm":            "shell",
-		"replace":       "find_replace",
-		"sed":           "find_replace",
-		"status":        "git",
-		"commit":        "git",
-		"log":           "git",
-		"browse":        "fetch",
-		"curl":          "fetch",
-		"wget":          "fetch",
-		"info":          "sysinfo",
-		"system":        "sysinfo",
+		"search":  "grep",
+		"find":    "grep",
+		"cat":     "read",
+		"view":    "read",
+		"open":    "read",
+		"list":    "ls",
+		"dir":     "ls",
+		"create":  "write",
+		"touch":   "write",
+		"exec":    "shell",
+		"execute": "shell",
+		"cmd":     "shell",
+		"command": "shell",
+		"bash":    "shell",
+		"mv":      "shell",
+		"cp":      "shell",
+		"rm":      "shell",
+		"replace": "find_replace",
+		"sed":     "find_replace",
+		"status":  "git",
+		"commit":  "git",
+		"log":     "git",
+		"browse":  "fetch",
+		"curl":    "fetch",
+		"wget":    "fetch",
+		"info":    "sysinfo",
+		"system":  "sysinfo",
 	}
 
 	if corrected, ok := aliases[lower]; ok {

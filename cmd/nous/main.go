@@ -183,6 +183,12 @@ func main() {
 	reasoner.Recipes = recipeBook
 	reasoner.Predictor = predictor
 	reasoner.Learner = learner
+	reasoner.AssistantContext = func(input string) string {
+		return buildAssistantContext(assistantStore, input, time.Now())
+	}
+	reasoner.AssistantAnswer = func(input string) (string, bool) {
+		return answerAssistantQuery(assistantStore, input, time.Now())
+	}
 	planner := cognitive.NewPlanner(board, llm)
 	executor := cognitive.NewExecutor(board, llm, toolReg)
 	reflector := cognitive.NewReflector(board, llm)
@@ -391,6 +397,9 @@ func main() {
 		// Wait for the answer to appear on the blackboard
 		answer := waitForAnswerStr(board)
 		duration := time.Since(start)
+		if !responseStarted && strings.TrimSpace(answer) != "" {
+			fmt.Printf("  %s\n", strings.ReplaceAll(answer, "\n", "\n  "))
+		}
 
 		// Show timing footer
 		fmt.Printf("\n%s\n\n", cognitive.TimingFooter(duration))
@@ -1028,6 +1037,212 @@ func renderRoutines(store *assistant.Store) string {
 		}
 	}
 	return cognitive.Panel("Routines", lines)
+}
+
+func buildAssistantContext(store *assistant.Store, input string, now time.Time) string {
+	if store == nil || !shouldInjectAssistantContext(input) {
+		return ""
+	}
+
+	var lines []string
+	prefs := store.Preferences()
+	if len(prefs) > 0 {
+		prefLines := make([]string, 0, min(len(prefs), 3))
+		for i, pref := range prefs {
+			if i >= 3 {
+				break
+			}
+			prefLines = append(prefLines, fmt.Sprintf("%s=%s", pref.Key, pref.Value))
+		}
+		lines = append(lines, "Preferences: "+strings.Join(prefLines, ", "))
+	}
+
+	unread := store.UnreadNotifications()
+	if len(unread) > 0 {
+		noteLines := make([]string, 0, min(len(unread), 3))
+		for i, note := range unread {
+			if i >= 3 {
+				break
+			}
+			noteLines = append(noteLines, note.Message)
+		}
+		lines = append(lines, "Unread reminders: "+strings.Join(noteLines, " | "))
+	}
+
+	upcoming := store.Upcoming(3, now)
+	if len(upcoming) > 0 {
+		reminderLines := make([]string, 0, len(upcoming))
+		for _, task := range upcoming {
+			reminderLines = append(reminderLines, fmt.Sprintf("%s %s", task.DueAt.Format("2006-01-02 15:04"), task.Title))
+		}
+		lines = append(lines, "Active reminders/tasks: "+strings.Join(reminderLines, " | "))
+	}
+
+	today := store.Today(now)
+	if len(today) > 0 {
+		todayLines := make([]string, 0, min(len(today), 3))
+		for i, task := range today {
+			if i >= 3 {
+				break
+			}
+			todayLines = append(todayLines, fmt.Sprintf("%s %s", task.DueAt.Format("15:04"), task.Title))
+		}
+		lines = append(lines, "Today: "+strings.Join(todayLines, " | "))
+	}
+
+	routines := store.Routines()
+	if len(routines) > 0 {
+		routineLines := make([]string, 0, min(len(routines), 2))
+		for i, routine := range routines {
+			if i >= 2 {
+				break
+			}
+			routineLines = append(routineLines, fmt.Sprintf("%s %s (%s)", routine.TimeOfDay, routine.Title, routine.Schedule))
+		}
+		lines = append(lines, "Routines: "+strings.Join(routineLines, " | "))
+	}
+
+	if len(lines) == 0 {
+		return ""
+	}
+
+	return "[Assistant Memory]\nUse this for personal-assistant questions. Respect explicit preferences such as language. If reminders or tasks are listed below, do not say there are none.\n" + strings.Join(lines, "\n")
+}
+
+func answerAssistantQuery(store *assistant.Store, input string, now time.Time) (string, bool) {
+	if store == nil {
+		return "", false
+	}
+
+	lower := strings.ToLower(strings.TrimSpace(input))
+	lang := preferenceValue(store, "language")
+	de := strings.HasPrefix(strings.ToLower(lang), "de")
+
+	if strings.Contains(lower, "answer in my preferred language") || strings.Contains(lower, "mention my current reminders") {
+		upcoming := store.Upcoming(3, now)
+		if de {
+			if len(upcoming) == 0 {
+				return "Deine bevorzugte Sprache ist Deutsch. Aktuell hast du keine aktiven Erinnerungen.", true
+			}
+			parts := make([]string, 0, len(upcoming))
+			for _, task := range upcoming {
+				parts = append(parts, fmt.Sprintf("%s %s", task.DueAt.Format("15:04"), task.Title))
+			}
+			return "Deine bevorzugte Sprache ist Deutsch. Aktuelle Erinnerungen: " + strings.Join(parts, "; ") + ".", true
+		}
+		if len(upcoming) == 0 {
+			return "Your preferred language is " + fallbackPref(lang, "English") + ". You currently have no active reminders.", true
+		}
+		parts := make([]string, 0, len(upcoming))
+		for _, task := range upcoming {
+			parts = append(parts, fmt.Sprintf("%s %s", task.DueAt.Format("15:04"), task.Title))
+		}
+		return "Your preferred language is " + fallbackPref(lang, "English") + ". Current reminders: " + strings.Join(parts, "; ") + ".", true
+	}
+
+	if strings.Contains(lower, "what language do i prefer") || strings.Contains(lower, "preferred language") {
+		if lang == "" {
+			if de {
+				return "Ich habe noch keine bevorzugte Sprache gespeichert.", true
+			}
+			return "I do not have a saved language preference yet.", true
+		}
+		if de {
+			return fmt.Sprintf("Deine bevorzugte Sprache ist %s.", lang), true
+		}
+		return fmt.Sprintf("Your preferred language is %s.", lang), true
+	}
+
+	if strings.Contains(lower, "what reminder do i currently have") || strings.Contains(lower, "current reminder") || strings.Contains(lower, "current reminders") || strings.Contains(lower, "what reminders do i have") {
+		upcoming := store.Upcoming(3, now)
+		if len(upcoming) == 0 {
+			if de {
+				return "Du hast aktuell keine aktiven Erinnerungen.", true
+			}
+			return "You currently have no active reminders.", true
+		}
+		parts := make([]string, 0, len(upcoming))
+		for _, task := range upcoming {
+			parts = append(parts, fmt.Sprintf("%s %s", task.DueAt.Format("15:04"), task.Title))
+		}
+		if de {
+			return "Deine aktuellen Erinnerungen sind: " + strings.Join(parts, "; ") + ".", true
+		}
+		return "Your current reminders are: " + strings.Join(parts, "; ") + ".", true
+	}
+
+	if strings.Contains(lower, "what matters today") || strings.Contains(lower, "what do i have today") {
+		today := store.Today(now)
+		if len(today) == 0 {
+			if de {
+				return "Heute ist noch nichts geplant.", true
+			}
+			return "You do not have anything scheduled for today yet.", true
+		}
+		parts := make([]string, 0, len(today))
+		for _, task := range today {
+			parts = append(parts, fmt.Sprintf("%s %s", task.DueAt.Format("15:04"), task.Title))
+		}
+		if de {
+			return "Heute wichtig: " + strings.Join(parts, "; ") + ".", true
+		}
+		return "What matters today: " + strings.Join(parts, "; ") + ".", true
+	}
+
+	return "", false
+}
+
+func shouldInjectAssistantContext(input string) bool {
+	lower := strings.ToLower(strings.TrimSpace(input))
+	if lower == "" {
+		return false
+	}
+
+	assistantHints := []string{
+		"today", "reminder", "remind", "task", "tasks", "routine", "routines", "schedule", "calendar",
+		"appointment", "prefer", "preference", "language", "what matters", "my day", "plan my", "inbox",
+		"what do i", "do i have", "personal", "assistant",
+	}
+	for _, hint := range assistantHints {
+		if strings.Contains(lower, hint) {
+			return true
+		}
+	}
+
+	codeHints := []string{
+		"file", "code", "function", "struct", "method", "class", "repo", "repository", "project",
+		"build", "compile", "test", "bug", "fix", "edit", "read ", "write ", "grep", "directory", "folder",
+	}
+	for _, hint := range codeHints {
+		if strings.Contains(lower, hint) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func preferenceValue(store *assistant.Store, key string) string {
+	for _, pref := range store.Preferences() {
+		if strings.EqualFold(pref.Key, key) {
+			return pref.Value
+		}
+	}
+	return ""
+}
+
+func fallbackPref(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func parseReminderInput(input string, now time.Time) (time.Time, string, string, error) {
