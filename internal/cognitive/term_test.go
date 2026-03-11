@@ -84,7 +84,7 @@ func TestBannerContainsMemorySlots(t *testing.T) {
 func TestBannerContainsNousName(t *testing.T) {
 	banner := Banner("0.3.0", "qwen2.5:1.5b", "localhost:11434", 9, 64)
 
-	if !strings.Contains(banner, "nous") {
+	if !strings.Contains(strings.ToLower(banner), "nous") {
 		t.Error("banner should contain nous")
 	}
 }

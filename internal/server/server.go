@@ -403,14 +403,13 @@ const webUI = `<!DOCTYPE html>
 					const card = document.createElement('div');
 					card.className = 'job';
 					const preview = (job.result || job.error || '').slice(0, 180);
-					card.innerHTML = `
-						<div class="meta">
-							<span>${job.id}</span>
-							<span class="status ${job.status}">${job.status}</span>
-						</div>
-						<div class="message">${escapeHtml(job.message)}</div>
-						<div class="result">${escapeHtml(preview || 'Waiting for output...')}</div>
-					`;
+					card.innerHTML =
+						'<div class="meta">' +
+							'<span>' + escapeHtml(job.id) + '</span>' +
+							'<span class="status ' + escapeHtml(job.status) + '">' + escapeHtml(job.status) + '</span>' +
+						'</div>' +
+						'<div class="message">' + escapeHtml(job.message) + '</div>' +
+						'<div class="result">' + escapeHtml(preview || 'Waiting for output...') + '</div>';
 					jobs.appendChild(card);
 				}
 			} catch (e) {
