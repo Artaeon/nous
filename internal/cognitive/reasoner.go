@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/artaeon/nous/internal/blackboard"
+	"github.com/artaeon/nous/internal/memory"
 	"github.com/artaeon/nous/internal/ollama"
 	"github.com/artaeon/nous/internal/tools"
 )
@@ -18,11 +19,13 @@ const maxToolIterations = 15
 // multiple tool calls to accomplish complex tasks — like an autonomous agent.
 type Reasoner struct {
 	Base
-	Tools    *tools.Registry
-	Conv     *Conversation
-	OnToken  func(token string, done bool)
-	OnStatus func(status string)
-	Confirm  ConfirmFunc
+	Tools      *tools.Registry
+	Conv       *Conversation
+	WorkingMem *memory.WorkingMemory
+	LongTermMem *memory.LongTermMemory
+	OnToken    func(token string, done bool)
+	OnStatus   func(status string)
+	Confirm    ConfirmFunc
 }
 
 // CurrentProject holds the scanned project info for the system prompt.
@@ -62,7 +65,15 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 	systemPrompt := r.compactSystemPrompt()
 
 	r.Conv.System(systemPrompt)
-	r.Conv.User(percept.Raw)
+
+	// Inject relevant memories into the user message
+	userMsg := percept.Raw
+	memoryCtx := r.recallMemories(percept.Raw)
+	if memoryCtx != "" {
+		userMsg = percept.Raw + "\n\n" + memoryCtx
+	}
+
+	r.Conv.User(userMsg)
 
 	// Autonomous tool loop — keep going until the LLM gives a final answer
 	for i := 0; i < maxToolIterations; i++ {
@@ -112,15 +123,19 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 		}
 
 		// No tool calls — this is the final answer
+		finalAnswer := fullResponse
 		if parsed.Answer != "" {
-			r.Board.Set("last_answer", parsed.Answer)
-		} else {
-			r.Board.Set("last_answer", fullResponse)
+			finalAnswer = parsed.Answer
 		}
+
+		r.Board.Set("last_answer", finalAnswer)
 
 		if parsed.Think != "" {
 			r.Board.Set("last_thought", parsed.Think)
 		}
+
+		// Store to memory for future recall
+		r.storeToMemory(percept.Raw, finalAnswer)
 
 		return nil
 	}
@@ -147,12 +162,30 @@ func (r *Reasoner) compactSystemPrompt() string {
 	if wd == "" {
 		wd = "."
 	}
+
+	// Self-knowledge: Nous knows what it is
+	modelName := "unknown"
+	if r.LLM != nil {
+		modelName = r.LLM.Model()
+	}
+	toolCount := len(r.Tools.List())
+	wmSize := 0
+	if r.WorkingMem != nil {
+		wmSize = r.WorkingMem.Size()
+	}
+	ltmSize := 0
+	if r.LongTermMem != nil {
+		ltmSize = r.LongTermMem.Size()
+	}
+	selfKnowledge := SelfKnowledge(modelName, 6, toolCount, wmSize, ltmSize)
+
 	projectCtx := ""
 	if CurrentProject != nil {
 		projectCtx = "\n" + CurrentProject.ContextString() + "\n"
 	}
 
-	return fmt.Sprintf(`You are Nous, an autonomous AI agent running locally.
+	return fmt.Sprintf(`%s
+
 Working directory: %s
 %s
 You MUST use tools to interact with the filesystem. NEVER guess file contents.
@@ -180,7 +213,7 @@ RULES:
 4. Final answer: respond normally WITHOUT any JSON tool call.
 5. Be direct and concise.
 
-%s`, wd, projectCtx, r.toolPrompt())
+%s`, selfKnowledge, wd, projectCtx, r.toolPrompt())
 }
 
 type toolCallRaw struct {
@@ -373,4 +406,73 @@ func (r *Reasoner) emitStatus(msg string) {
 	if r.OnStatus != nil {
 		r.OnStatus(msg)
 	}
+}
+
+// recallMemories retrieves relevant context from working and long-term memory.
+func (r *Reasoner) recallMemories(input string) string {
+	var parts []string
+
+	// Recall from working memory (most relevant items)
+	if r.WorkingMem != nil {
+		items := r.WorkingMem.MostRelevant(3)
+		if len(items) > 0 {
+			var memLines []string
+			for _, item := range items {
+				memLines = append(memLines, fmt.Sprintf("- %s: %v", item.Key, item.Value))
+			}
+			parts = append(parts, "[Working Memory]\n"+strings.Join(memLines, "\n"))
+		}
+	}
+
+	// Recall from long-term memory (keyword match)
+	if r.LongTermMem != nil {
+		words := strings.Fields(strings.ToLower(input))
+		seen := make(map[string]bool)
+		var ltmLines []string
+		for _, word := range words {
+			if len(word) < 3 {
+				continue
+			}
+			entries := r.LongTermMem.Search(word)
+			for _, e := range entries {
+				if !seen[e.Key] {
+					seen[e.Key] = true
+					ltmLines = append(ltmLines, fmt.Sprintf("- %s: %s", e.Key, e.Value))
+				}
+			}
+			if len(ltmLines) >= 5 {
+				break
+			}
+		}
+		if len(ltmLines) > 0 {
+			parts = append(parts, "[Long-term Memory]\n"+strings.Join(ltmLines, "\n"))
+		}
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// storeToMemory saves the current interaction context to working memory.
+func (r *Reasoner) storeToMemory(input, answer string) {
+	if r.WorkingMem == nil {
+		return
+	}
+
+	// Store the latest interaction in working memory
+	// Use the first 100 chars of input as key, full answer as value
+	key := input
+	if len(key) > 80 {
+		key = key[:80] + "..."
+	}
+
+	// Truncate answer for working memory storage
+	value := answer
+	if len(value) > 200 {
+		value = value[:200] + "..."
+	}
+
+	r.WorkingMem.Store("last:"+key, value, 0.8)
 }
