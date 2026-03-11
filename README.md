@@ -136,12 +136,13 @@ go install github.com/artaeon/nous/cmd/nous@latest
                 ║       Unified Streams             ║
                 ╚═══════════════════════════════════╝
 
-  version 0.3.0 | amd64 | 8 cores | 16 GB RAM
+  version 0.4.0 | amd64 | 8 cores | 16 GB RAM
 
   connecting to ollama... OK (qwen2.5:1.5b)
-  scanning project... nous (Go, 24 files)
+  scanning project... nous (Go, 28 files)
+  project memory: 0 facts
   6 cognitive streams active
-  9 tools: read, write, edit, glob, grep, ls, shell, mkdir, tree
+  18 tools: read, write, edit, glob, grep, ls, shell, mkdir, tree, ...
   session: 1709834521000
 
   I am Nous. I think, therefore I am — locally.
@@ -170,21 +171,30 @@ All configuration is via CLI flags. No config files, no environment variables, n
 
 ## Tools
 
-Nous ships with 9 built-in tools that the reasoning engine can invoke autonomously. The model decides which tools to call and in what order — chaining multiple calls in a loop until it has enough information to answer.
+Nous ships with 18 built-in tools that the reasoning engine can invoke autonomously. The model decides which tools to call and in what order — chaining multiple calls in a loop until it has enough information to answer.
 
 | Tool | Description | Requires `--allow-shell` |
 |---|---|---|
 | `read` | Read file contents with optional line offset and limit | No |
-| `write` | Create or overwrite a file | No (prompts for confirmation) |
-| `edit` | Replace a specific string in a file (exact match, must be unique) | No (prompts for confirmation) |
+| `write` | Create or overwrite a file (supports undo) | No (prompts for confirmation) |
+| `edit` | Replace a specific string in a file (exact match, must be unique, supports undo) | No (prompts for confirmation) |
 | `glob` | Find files matching a glob pattern (e.g. `*.go`) | No |
 | `grep` | Search file contents for a regex pattern with optional file filter | No |
 | `ls` | List directory contents with file sizes | No |
 | `tree` | Show project directory structure with configurable depth | No |
-| `mkdir` | Create a directory and all parent directories | No (prompts for confirmation) |
+| `mkdir` | Create a directory and all parent directories (supports undo) | No (prompts for confirmation) |
 | `shell` | Execute an arbitrary shell command | **Yes** |
+| `fetch` | HTTP GET with HTML tag stripping (1MB limit) | No |
+| `run` | Execute a command with stdin support and 60s timeout | **Yes** |
+| `sysinfo` | Show OS, architecture, CPU, disk space | No |
+| `clipboard` | Read from or write to the system clipboard (via xclip/xsel) | No |
+| `find_replace` | Regex find-and-replace in a file (supports undo) | No (prompts for confirmation) |
+| `git` | Run git commands (status, diff, log, add, commit, etc.) | No |
+| `patch` | Multi-line before/after text replacement | No (prompts for confirmation) |
+| `replace_all` | Replace all occurrences of a string across multiple files | No (prompts for confirmation) |
+| `diff` | Show git diff (working directory or staged) | No |
 
-Destructive tools (`write`, `edit`, `shell`, `mkdir`) require explicit user confirmation unless `--trust` is set.
+Destructive tools (`write`, `edit`, `shell`, `mkdir`, `patch`, `replace_all`, `find_replace`) require explicit user confirmation unless `--trust` is set. File modifications are tracked on an undo stack — use `/undo` to revert.
 
 ---
 
@@ -196,6 +206,11 @@ Destructive tools (`write`, `edit`, `shell`, `mkdir`) require explicit user conf
 | `/status` | Show cognitive system status (percepts, goals, memory, conversation) |
 | `/memory` | Show working memory contents ranked by relevance |
 | `/longterm` | Show long-term memory entries with access counts |
+| `/remember <key> <value>` | Store a project fact (persists across sessions) |
+| `/recall <query>` | Search project memory by keyword |
+| `/forget <key>` | Remove a project fact |
+| `/undo` | Revert the last file change |
+| `/history` | Show the undo stack |
 | `/goals` | Show active goals and their status |
 | `/model` | Show current model info and list all available Ollama models |
 | `/tools` | List all registered tools with descriptions |
@@ -225,10 +240,13 @@ Classical AI agents make a single LLM call per user message. Nous works differen
 
 6. **Learner** — Reacts to completed goals. Extracts behavioral patterns from successful interactions and persists them to disk as JSON. Over time, the system builds a library of proven strategies.
 
-**Memory is dual-layered:**
+**Memory is triple-layered:**
 
 - **Working Memory** — Capacity-limited (64 slots), decay-based. Items lose relevance over time and are evicted when capacity is exceeded. Accessing an item boosts its relevance (recency effect).
 - **Long-Term Memory** — Persistent JSON-backed key-value store with access counting. Survives restarts. Categories enable structured retrieval.
+- **Project Memory** — Per-project fact store (`.nous/project_memory.json`). Stores conventions, architecture decisions, and key patterns. Accessible via `/remember`, `/recall`, `/forget`.
+
+**Undo Stack** — All file-modifying tools (write, edit, find_replace, mkdir) push entries onto an undo stack. Use `/undo` to revert the most recent change, `/history` to view the stack.
 
 **Context Compression** — The `compress` module distills conversation fragments into dense "atoms" — reusable `{trigger, knowledge, weight}` tuples. Before inference, only the most relevant atoms are retrieved and injected, keeping the context window minimal for CPU inference.
 
@@ -259,12 +277,14 @@ nous/
 │   │   └── confirm.go           # User confirmation for dangerous actions
 │   ├── memory/
 │   │   ├── working.go           # Decay-based working memory (capacity-limited)
-│   │   └── longterm.go          # Persistent key-value long-term memory
+│   │   ├── longterm.go          # Persistent key-value long-term memory
+│   │   ├── project.go           # Per-project fact store (conventions, decisions)
+│   │   └── undo.go              # File modification undo stack
 │   ├── ollama/
 │   │   └── client.go            # Ollama HTTP client (chat, stream, ping, list)
 │   ├── tools/
 │   │   ├── registry.go          # Tool registry (register, get, list, describe)
-│   │   └── builtin.go           # 9 built-in tools
+│   │   └── builtin.go           # 18 built-in tools
 │   └── compress/
 │       └── atoms.go             # Context compression into reusable atoms
 ├── Makefile                     # build, run, test, lint, release
@@ -300,22 +320,26 @@ ollama pull qwen2.5:1.5b
 - [x] Core cognitive architecture (6 concurrent streams as goroutines)
 - [x] Blackboard pattern with event-driven pub/sub communication
 - [x] Autonomous tool-use loop (up to 15 chained calls per turn)
-- [x] 9 built-in tools (read, write, edit, glob, grep, ls, tree, mkdir, shell)
+- [x] 18 built-in tools (read, write, edit, glob, grep, ls, tree, mkdir, shell, fetch, run, sysinfo, clipboard, find_replace, git, patch, replace_all, diff)
 - [x] Streaming token output with tool-call JSON filtering
 - [x] Session persistence and resume across restarts
 - [x] Project auto-detection (language, file count, structure, key files)
 - [x] Working memory with relevance decay and capacity eviction
 - [x] Long-term memory with persistent JSON storage
+- [x] Project memory — per-project persistent fact store
+- [x] Undo stack — revert file modifications with `/undo`
 - [x] Context compression via knowledge atoms
-- [x] User confirmation for destructive actions (write, edit, shell, mkdir)
+- [x] User confirmation for destructive actions (write, edit, shell, mkdir, patch, replace_all, find_replace)
 - [x] Behavioral pattern learning from completed goals
 - [x] Multi-platform release builds (Linux, macOS, amd64, arm64)
+- [x] Git integration (status, diff, log, add, commit, branch)
+- [x] HTTP fetch tool (local web scraping, no API)
+- [x] System clipboard integration (read/write via xclip/xsel)
+- [x] Regex find-and-replace with undo support
+- [x] Multi-file string replacement across the codebase
 - [ ] Embedding-based atom retrieval (replace keyword overlap scoring)
-- [ ] Multi-file edit transactions with rollback
-- [ ] Git integration (diff awareness, commit, branch context)
 - [ ] Automatic test generation and execution
 - [ ] LSP integration for language-aware code navigation
-- [ ] Local web search tool (scraping, no API)
 - [ ] Voice input via local Whisper
 - [ ] Plugin system for community tools
 - [ ] TUI with split panes (conversation + file preview)
