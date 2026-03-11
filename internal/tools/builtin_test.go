@@ -605,7 +605,7 @@ func TestRegisterBuiltinsRegistersAllTools(t *testing.T) {
 	r := NewRegistry()
 	RegisterBuiltins(r, dir, false)
 
-	expectedTools := []string{"read", "write", "edit", "glob", "grep", "ls", "shell", "mkdir", "tree"}
+	expectedTools := []string{"read", "write", "edit", "glob", "grep", "ls", "shell", "mkdir", "tree", "fetch"}
 	tools := r.List()
 
 	registered := map[string]bool{}
@@ -641,6 +641,40 @@ func TestResolvePath(t *testing.T) {
 		got := resolvePath(tt.workDir, tt.path)
 		if got != tt.expected {
 			t.Errorf("resolvePath(%q, %q) = %q, want %q", tt.workDir, tt.path, got, tt.expected)
+		}
+	}
+}
+
+// --- fetch tool ---
+
+func TestToolFetch(t *testing.T) {
+	dir := setupTempDir(t)
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false)
+
+	tool, _ := r.Get("fetch")
+
+	// Test missing URL argument
+	_, err := tool.Execute(map[string]string{})
+	if err == nil {
+		t.Fatal("expected error for missing url argument")
+	}
+	if !strings.Contains(err.Error(), "url") {
+		t.Errorf("expected error about 'url', got %q", err.Error())
+	}
+
+	// Test with an invalid URL (connection refused on localhost)
+	_, err = tool.Execute(map[string]string{"url": "http://127.0.0.1:1"})
+	if err == nil {
+		t.Fatal("expected error fetching from invalid URL")
+	}
+
+	// Test with a completely malformed URL
+	_, err = tool.Execute(map[string]string{"url": "not-a-url"})
+	if err != nil {
+		// Good -- invalid URL should fail at request creation or connection
+		if !strings.Contains(err.Error(), "fetch") {
+			t.Errorf("expected 'fetch' in error, got %q", err.Error())
 		}
 	}
 }

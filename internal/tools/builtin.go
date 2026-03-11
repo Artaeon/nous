@@ -3,11 +3,15 @@ package tools
 import (
 	"bytes"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // RegisterBuiltins adds all standard tools to the registry.
@@ -84,6 +88,22 @@ func RegisterBuiltins(r *Registry, workDir string, allowShell bool) {
 		Description: "Show project directory structure. Args: path (optional), depth (optional, default 3).",
 		Execute: func(args map[string]string) (string, error) {
 			return toolTree(workDir, args)
+		},
+	})
+
+	r.Register(Tool{
+		Name:        "fetch",
+		Description: "Fetch content from a URL. Args: url (required). Returns the text content (HTML tags stripped for readability).",
+		Execute: func(args map[string]string) (string, error) {
+			return toolFetch(args)
+		},
+	})
+
+	r.Register(Tool{
+		Name:        "git",
+		Description: "Run a git command. Args: command (required, e.g. 'status', 'diff', 'log --oneline -10', 'add .', 'commit -m message').",
+		Execute: func(args map[string]string) (string, error) {
+			return toolGit(workDir, args)
 		},
 	})
 }
@@ -427,4 +447,52 @@ func buildTree(out *strings.Builder, path, prefix string, depth, maxDepth int) {
 			buildTree(out, filepath.Join(path, e.Name()), prefix+childPrefix, depth+1, maxDepth)
 		}
 	}
+}
+
+// --- fetch tool ---
+
+var htmlTagRegex = regexp.MustCompile(`<[^>]*>`)
+var whitespaceRegex = regexp.MustCompile(`\s+`)
+
+func toolFetch(args map[string]string) (string, error) {
+	url := args["url"]
+	if url == "" {
+		return "", fmt.Errorf("fetch requires 'url' argument")
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", fmt.Errorf("fetch: invalid URL: %w", err)
+	}
+	req.Header.Set("User-Agent", "Nous/0.3.0")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetch %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("fetch %s: HTTP %d %s", url, resp.StatusCode, resp.Status)
+	}
+
+	// Read body with a limit to avoid huge downloads
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB max read
+	if err != nil {
+		return "", fmt.Errorf("fetch: reading body: %w", err)
+	}
+
+	// Strip HTML tags
+	text := htmlTagRegex.ReplaceAllString(string(body), " ")
+	// Collapse whitespace
+	text = whitespaceRegex.ReplaceAllString(text, " ")
+	text = strings.TrimSpace(text)
+
+	// Truncate to 8192 chars
+	if len(text) > 8192 {
+		text = text[:8192] + "\n... (truncated)"
+	}
+
+	return text, nil
 }
