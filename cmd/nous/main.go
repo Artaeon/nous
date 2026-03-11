@@ -403,13 +403,14 @@ func main() {
 			Duration:  duration.Milliseconds(),
 		})
 
-		// Collect training data from successful interactions
+		// Collect training data with auto quality scoring
 		msgs := reasoner.Conv.Messages()
 		sysPrompt := ""
 		if len(msgs) > 0 {
 			sysPrompt = msgs[0].Content
 		}
-		go collector.Collect(sysPrompt, input, answer, nil, 0.7)
+		quality := scoreInteractionQuality(answer, duration, board)
+		go collector.Collect(sysPrompt, input, answer, nil, quality)
 
 		// Auto-save session after each exchange
 		currentSession.Messages = reasoner.Conv.Messages()
@@ -810,6 +811,61 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 	}
 
 	return true
+}
+
+// scoreInteractionQuality rates an interaction for training data collection.
+// Higher quality = more useful for fine-tuning.
+func scoreInteractionQuality(answer string, duration time.Duration, board *blackboard.Blackboard) float64 {
+	quality := 0.5 // base score
+
+	// Bonus: fast response (under 10 seconds) = likely straightforward success
+	if duration < 10*time.Second {
+		quality += 0.15
+	}
+
+	// Bonus: substantive answer (not empty, not an error)
+	if len(answer) > 50 {
+		quality += 0.1
+	}
+
+	// Penalty: answer looks like an error or failure
+	lower := strings.ToLower(answer)
+	if strings.Contains(lower, "error") || strings.Contains(lower, "failed") ||
+		strings.Contains(lower, "i can't") || strings.Contains(lower, "unable to") {
+		quality -= 0.2
+	}
+
+	// Penalty: reached max iterations
+	if strings.Contains(lower, "maximum tool iterations") {
+		quality -= 0.3
+	}
+
+	// Bonus: no reflector warnings during this interaction
+	if _, hasReflection := board.Get("reflection"); !hasReflection {
+		quality += 0.1
+	}
+
+	// Bonus: used tools successfully (actions recorded)
+	actions := board.RecentActions(10)
+	successCount := 0
+	for _, a := range actions {
+		if a.Success {
+			successCount++
+		}
+	}
+	if successCount > 0 && successCount <= 4 {
+		quality += 0.15 // efficient multi-step
+	}
+
+	// Clamp to 0.0 - 1.0
+	if quality < 0.0 {
+		quality = 0.0
+	}
+	if quality > 1.0 {
+		quality = 1.0
+	}
+
+	return quality
 }
 
 func waitForAnswer(board *blackboard.Blackboard) {
