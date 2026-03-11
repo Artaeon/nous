@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/artaeon/nous/internal/assistant"
 	"github.com/artaeon/nous/internal/blackboard"
 	"github.com/artaeon/nous/internal/cognitive"
 	"github.com/artaeon/nous/internal/memory"
@@ -14,7 +15,7 @@ import (
 
 func TestRenderHelpIncludesKeyCommands(t *testing.T) {
 	help := renderHelp()
-	checks := []string{"/dashboard", "/status", "/plan <goal>", "/tools", "/quit"}
+	checks := []string{"/dashboard", "/today", "/remind", "/status", "/plan <goal>", "/tools", "/quit"}
 	for _, check := range checks {
 		if !strings.Contains(help, check) {
 			t.Fatalf("renderHelp() should contain %q", check)
@@ -47,11 +48,14 @@ func TestRenderDashboardIncludesRuntimeMemoryAndTraining(t *testing.T) {
 	collector := training.NewCollector(baseDir)
 	collector.Collect("sys", "input", "output", []string{"read"}, 0.9)
 	autoTuner := training.NewAutoTuner(collector, "qwen2.5:1.5b")
+	assistantStore := assistant.NewStore(baseDir)
+	_, _ = assistantStore.AddTask("Call mom", time.Now().Add(time.Hour), "")
+	_ = assistantStore.SetPreference("language", "de")
 
 	session := &cognitive.Session{ID: "sess-1", Name: "Session One"}
-	dashboard := renderDashboard(board, wm, ltm, projMem, undo, session, episodic, collector, autoTuner)
+	dashboard := renderDashboard(board, wm, ltm, projMem, undo, session, episodic, collector, autoTuner, assistantStore)
 
-	checks := []string{"Runtime", "Memory", "Learning loop", "Session", "Training pairs", "Episodes", "sess-1"}
+	checks := []string{"Runtime", "Memory", "Learning loop", "Assistant", "Session", "Training pairs", "Episodes", "sess-1"}
 	for _, check := range checks {
 		if !strings.Contains(dashboard, check) {
 			t.Fatalf("renderDashboard() should contain %q", check)
@@ -86,6 +90,47 @@ func TestRenderProjectViewIncludesStructureAndKeyFiles(t *testing.T) {
 	for _, check := range checks {
 		if !strings.Contains(view, check) {
 			t.Fatalf("renderProjectView() should contain %q", check)
+		}
+	}
+}
+
+func TestRenderTodayIncludesUnreadNotificationsAndUpcomingTasks(t *testing.T) {
+	store := assistant.NewStore(t.TempDir())
+	now := time.Date(2026, 3, 11, 8, 30, 0, 0, time.UTC)
+	_, _ = store.AddTask("Dentist", now.Add(-time.Minute), "")
+	_, _ = store.AddTask("Pay rent", now.Add(3*time.Hour), "")
+	_, _ = store.TriggerDue(now)
+
+	out := renderToday(store, now)
+	checks := []string{"Inbox", "Today", "Upcoming", "Reminder: Dentist", "Pay rent"}
+	for _, check := range checks {
+		if !strings.Contains(out, check) {
+			t.Fatalf("renderToday() should contain %q", check)
+		}
+	}
+}
+
+func TestParseReminderInputSupportsRelativeDailyAndCalendarFormats(t *testing.T) {
+	now := time.Date(2026, 3, 11, 8, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		input      string
+		wantTitle  string
+		wantRecurs string
+		wantDue    time.Time
+	}{
+		{"in 2h call mom", "call mom", "", now.Add(2 * time.Hour)},
+		{"daily 09:30 standup", "standup", "daily", time.Date(2026, 3, 11, 9, 30, 0, 0, time.UTC)},
+		{"2026-03-12 18:00 dentist", "dentist", "", time.Date(2026, 3, 12, 18, 0, 0, 0, time.UTC)},
+	}
+
+	for _, tt := range tests {
+		due, recurrence, title, err := parseReminderInput(tt.input, now)
+		if err != nil {
+			t.Fatalf("parseReminderInput(%q) error = %v", tt.input, err)
+		}
+		if title != tt.wantTitle || recurrence != tt.wantRecurs || !due.Equal(tt.wantDue) {
+			t.Fatalf("parseReminderInput(%q) = (%v, %q, %q)", tt.input, due, recurrence, title)
 		}
 	}
 }

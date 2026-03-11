@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/artaeon/nous/internal/assistant"
 	"github.com/artaeon/nous/internal/blackboard"
 	"github.com/artaeon/nous/internal/cognitive"
 	"github.com/artaeon/nous/internal/compress"
@@ -137,6 +138,7 @@ func main() {
 
 	// Episodic memory — remembers every interaction forever (semantic search via embeddings)
 	episodic := memory.NewEpisodicMemory(nousDir, llm.Embed)
+	assistantStore := assistant.NewStore(*memoryPath)
 
 	// Training data collector — gathers successful interactions for fine-tuning
 	collector := training.NewCollector(nousDir)
@@ -299,6 +301,12 @@ func main() {
 	defer cancel()
 
 	streams := []cognitive.Stream{perceiver, reasoner, planner, executor, reflector, learner}
+	assistantScheduler := assistant.NewScheduler(assistantStore, board)
+	go func() {
+		if err := assistantScheduler.Run(ctx); err != nil && err != context.Canceled {
+			fmt.Fprintf(os.Stderr, "  %sassistant-scheduler: %v%s\n", cognitive.ColorRed, err, cognitive.ColorReset)
+		}
+	}()
 
 	for _, s := range streams {
 		s := s
@@ -321,6 +329,7 @@ func main() {
 		fmt.Printf("\n\n  %ssaving...%s\n", cognitive.ColorDim, cognitive.ColorReset)
 		currentSession.Messages = reasoner.Conv.Messages()
 		sessionStore.Save(currentSession)
+		assistantStore.Save()
 		episodic.Save()
 		collector.Save()
 		if fileWatcher != nil {
@@ -345,6 +354,7 @@ func main() {
 	// --- REPL Mode ---
 	fmt.Print(cognitive.Panel("Quick start", []string{
 		cognitive.Styled(cognitive.ColorCyan, "/dashboard") + " overview of the local agent",
+		cognitive.Styled(cognitive.ColorCyan, "/today") + " review reminders, tasks, and upcoming actions",
 		cognitive.Styled(cognitive.ColorCyan, "/help") + " browse commands and workflows",
 		cognitive.Styled(cognitive.ColorCyan, "/plan <goal>") + " delegate a longer task",
 		cognitive.Styled(cognitive.ColorCyan, "/quit") + " save and exit",
@@ -364,7 +374,7 @@ func main() {
 
 		// Handle commands
 		if strings.HasPrefix(input, "/") {
-			if handleCommand(input, board, llm, toolReg, wm, ltm, projMem, undoStack, sessionStore, currentSession, reasoner, learner, projectInfo, episodic, collector, autoTuner) {
+			if handleCommand(input, board, llm, toolReg, wm, ltm, projMem, undoStack, sessionStore, currentSession, reasoner, learner, projectInfo, episodic, collector, autoTuner, assistantStore) {
 				continue
 			}
 		}
@@ -411,7 +421,7 @@ func main() {
 	}
 }
 
-func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Client, toolReg *tools.Registry, wm *memory.WorkingMemory, ltm *memory.LongTermMemory, projMem *memory.ProjectMemory, undoStack *memory.UndoStack, sessions *cognitive.SessionStore, current *cognitive.Session, reasoner *cognitive.Reasoner, learner *cognitive.Learner, project *cognitive.ProjectInfo, episodic *memory.EpisodicMemory, collector *training.Collector, autoTuner *training.AutoTuner) bool {
+func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Client, toolReg *tools.Registry, wm *memory.WorkingMemory, ltm *memory.LongTermMemory, projMem *memory.ProjectMemory, undoStack *memory.UndoStack, sessions *cognitive.SessionStore, current *cognitive.Session, reasoner *cognitive.Reasoner, learner *cognitive.Learner, project *cognitive.ProjectInfo, episodic *memory.EpisodicMemory, collector *training.Collector, autoTuner *training.AutoTuner, assistantStore *assistant.Store) bool {
 	parts := strings.Fields(input)
 	cmd := strings.ToLower(parts[0])
 
@@ -420,6 +430,7 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 		fmt.Printf("  %ssaving...%s\n", cognitive.ColorDim, cognitive.ColorReset)
 		current.Messages = reasoner.Conv.Messages()
 		sessions.Save(current)
+		assistantStore.Save()
 		projMem.Flush()
 		os.Exit(0)
 
@@ -427,7 +438,63 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 		fmt.Print(renderHelp())
 
 	case "/dashboard":
-		fmt.Print(renderDashboard(board, wm, ltm, projMem, undoStack, current, episodic, collector, autoTuner))
+		fmt.Print(renderDashboard(board, wm, ltm, projMem, undoStack, current, episodic, collector, autoTuner, assistantStore))
+
+	case "/today":
+		fmt.Print(renderToday(assistantStore, time.Now()))
+		_ = assistantStore.MarkNotificationsRead()
+
+	case "/tasks":
+		fmt.Print(renderTasks(assistantStore, time.Now()))
+
+	case "/remind":
+		dueAt, recurrence, title, err := parseReminderInput(strings.TrimSpace(strings.TrimPrefix(input, parts[0])), time.Now())
+		if err != nil {
+			fmt.Printf("  reminder error: %v\n", err)
+			break
+		}
+		task, err := assistantStore.AddTask(title, dueAt, recurrence)
+		if err != nil {
+			fmt.Printf("  could not create reminder: %v\n", err)
+			break
+		}
+		fmt.Printf("  reminder saved: %s (%s) due %s\n", task.ID, task.Title, task.DueAt.Format("2006-01-02 15:04"))
+
+	case "/done":
+		if len(parts) < 2 {
+			fmt.Println("  usage: /done <task-id>")
+			break
+		}
+		task, err := assistantStore.MarkDone(parts[1])
+		if err != nil {
+			fmt.Printf("  %v\n", err)
+			break
+		}
+		fmt.Printf("  completed: %s (%s)\n", task.Title, task.ID)
+
+	case "/prefs":
+		prefs := assistantStore.Preferences()
+		if len(prefs) == 0 {
+			fmt.Println("  no preferences stored yet")
+			break
+		}
+		fmt.Print(cognitive.Section("Preferences"))
+		for _, pref := range prefs {
+			fmt.Print(cognitive.KeyValue(pref.Key, pref.Value))
+		}
+
+	case "/pref":
+		if len(parts) < 3 {
+			fmt.Println("  usage: /pref <key> <value...>")
+			break
+		}
+		key := parts[1]
+		value := strings.Join(parts[2:], " ")
+		if err := assistantStore.SetPreference(key, value); err != nil {
+			fmt.Printf("  could not store preference: %v\n", err)
+			break
+		}
+		fmt.Printf("  preference saved: %s = %s\n", key, value)
 
 	case "/status":
 		fmt.Print(cognitive.Section("System status"))
@@ -815,9 +882,15 @@ func renderHelp() string {
 	var b strings.Builder
 	b.WriteString(cognitive.Panel("Core workflows", []string{
 		cognitive.Styled(cognitive.ColorCyan, "/dashboard") + " snapshot of memory, sessions, training, and uptime signals",
+		cognitive.Styled(cognitive.ColorCyan, "/today") + " open your assistant inbox with due reminders and upcoming tasks",
 		cognitive.Styled(cognitive.ColorCyan, "/status") + " low-level runtime counters and current session state",
 		cognitive.Styled(cognitive.ColorCyan, "/plan <goal>") + " hand a longer task to the planner/executor pipeline",
 		cognitive.Styled(cognitive.ColorCyan, "/tools") + " browse built-in tools by category",
+	}))
+	b.WriteString(cognitive.Panel("Assistant operations", []string{
+		"/remind <when> <task>, /tasks, /done <task-id>",
+		"/pref <key> <value>, /prefs",
+		"Examples: /remind in 2h stretch · /remind tomorrow 09:00 dentist",
 	}))
 	b.WriteString(cognitive.Panel("Memory and recall", []string{
 		"/memory, /longterm, /episodes, /search <query>",
@@ -834,7 +907,7 @@ func renderHelp() string {
 	return b.String()
 }
 
-func renderDashboard(board *blackboard.Blackboard, wm *memory.WorkingMemory, ltm *memory.LongTermMemory, projMem *memory.ProjectMemory, undoStack *memory.UndoStack, current *cognitive.Session, episodic *memory.EpisodicMemory, collector *training.Collector, autoTuner *training.AutoTuner) string {
+func renderDashboard(board *blackboard.Blackboard, wm *memory.WorkingMemory, ltm *memory.LongTermMemory, projMem *memory.ProjectMemory, undoStack *memory.UndoStack, current *cognitive.Session, episodic *memory.EpisodicMemory, collector *training.Collector, autoTuner *training.AutoTuner, assistantStore *assistant.Store) string {
 	stats := autoTuner.Stats()
 	left := cognitive.Panel("Runtime", []string{
 		fmt.Sprintf("Percepts       %d", len(board.Percepts())),
@@ -859,8 +932,133 @@ func renderDashboard(board *blackboard.Blackboard, wm *memory.WorkingMemory, ltm
 		fmt.Sprintf("ID        %s", current.ID),
 		fmt.Sprintf("Messages  %d", len(current.Messages)),
 	})
+	assistantPanel := cognitive.Panel("Assistant", []string{
+		fmt.Sprintf("Pending tasks  %d", len(assistantStore.PendingTasks())),
+		fmt.Sprintf("Unread inbox   %d", len(assistantStore.UnreadNotifications())),
+		fmt.Sprintf("Preferences    %d", len(assistantStore.Preferences())),
+	})
 
-	return left + right + train + session
+	return left + right + assistantPanel + train + session
+}
+
+func renderToday(store *assistant.Store, now time.Time) string {
+	unread := store.UnreadNotifications()
+	today := store.Today(now)
+	upcoming := store.Upcoming(5, now)
+
+	noteLines := []string{"No unread reminders."}
+	if len(unread) > 0 {
+		noteLines = noteLines[:0]
+		for _, note := range unread {
+			noteLines = append(noteLines, fmt.Sprintf("%s  %s", note.CreatedAt.Format("15:04"), note.Message))
+		}
+	}
+
+	todayLines := []string{"Nothing scheduled for today."}
+	if len(today) > 0 {
+		todayLines = todayLines[:0]
+		for _, task := range today {
+			todayLines = append(todayLines, fmt.Sprintf("%s  %s (%s)", task.DueAt.Format("15:04"), task.Title, task.ID))
+		}
+	}
+
+	upcomingLines := []string{"No upcoming tasks."}
+	if len(upcoming) > 0 {
+		upcomingLines = upcomingLines[:0]
+		for _, task := range upcoming {
+			upcomingLines = append(upcomingLines, fmt.Sprintf("%s  %s (%s)", task.DueAt.Format("2006-01-02 15:04"), task.Title, task.ID))
+		}
+	}
+
+	return cognitive.Panel("Inbox", noteLines) +
+		cognitive.Panel("Today", todayLines) +
+		cognitive.Panel("Upcoming", upcomingLines)
+}
+
+func renderTasks(store *assistant.Store, now time.Time) string {
+	tasks := store.PendingTasks()
+	lines := []string{"No pending tasks."}
+	if len(tasks) > 0 {
+		lines = lines[:0]
+		for _, task := range tasks {
+			status := "upcoming"
+			if !task.DueAt.After(now) {
+				status = "due"
+			}
+			recur := ""
+			if task.Recurrence != "" {
+				recur = " · " + task.Recurrence
+			}
+			lines = append(lines, fmt.Sprintf("%s  %s (%s%s)", task.DueAt.Format("2006-01-02 15:04"), task.Title, status, recur))
+		}
+	}
+	return cognitive.Panel("Tasks", lines)
+}
+
+func parseReminderInput(input string, now time.Time) (time.Time, string, string, error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return time.Time{}, "", "", fmt.Errorf("usage: /remind <when> <task>")
+	}
+
+	parts := strings.Fields(input)
+	if len(parts) < 2 {
+		return time.Time{}, "", "", fmt.Errorf("reminder needs a time and task description")
+	}
+
+	recurrence := ""
+	if parts[0] == "daily" {
+		if len(parts) < 3 {
+			return time.Time{}, "", "", fmt.Errorf("daily reminders use: /remind daily HH:MM <task>")
+		}
+		tm, err := time.Parse("15:04", parts[1])
+		if err != nil {
+			return time.Time{}, "", "", fmt.Errorf("invalid daily time: %w", err)
+		}
+		due := time.Date(now.Year(), now.Month(), now.Day(), tm.Hour(), tm.Minute(), 0, 0, now.Location())
+		if !due.After(now) {
+			due = due.Add(24 * time.Hour)
+		}
+		return due, "daily", strings.Join(parts[2:], " "), nil
+	}
+
+	if parts[0] == "in" {
+		if len(parts) < 3 {
+			return time.Time{}, "", "", fmt.Errorf("relative reminders use: /remind in 2h <task>")
+		}
+		dur, err := time.ParseDuration(parts[1])
+		if err != nil {
+			return time.Time{}, "", "", fmt.Errorf("invalid duration: %w", err)
+		}
+		return now.Add(dur), recurrence, strings.Join(parts[2:], " "), nil
+	}
+
+	if parts[0] == "today" || parts[0] == "tomorrow" {
+		if len(parts) < 3 {
+			return time.Time{}, "", "", fmt.Errorf("use: /remind %s HH:MM <task>", parts[0])
+		}
+		tm, err := time.Parse("15:04", parts[1])
+		if err != nil {
+			return time.Time{}, "", "", fmt.Errorf("invalid time: %w", err)
+		}
+		due := time.Date(now.Year(), now.Month(), now.Day(), tm.Hour(), tm.Minute(), 0, 0, now.Location())
+		if parts[0] == "tomorrow" {
+			due = due.Add(24 * time.Hour)
+		}
+		if parts[0] == "today" && !due.After(now) {
+			return time.Time{}, "", "", fmt.Errorf("today reminder time is already in the past")
+		}
+		return due, recurrence, strings.Join(parts[2:], " "), nil
+	}
+
+	if len(parts) >= 3 {
+		due, err := time.ParseInLocation("2006-01-02 15:04", parts[0]+" "+parts[1], now.Location())
+		if err == nil {
+			return due, recurrence, strings.Join(parts[2:], " "), nil
+		}
+	}
+
+	return time.Time{}, "", "", fmt.Errorf("unsupported reminder format")
 }
 
 func renderToolCatalog(toolReg *tools.Registry) string {
