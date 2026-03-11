@@ -377,7 +377,9 @@ func main() {
 		// Wait for the answer to appear on the blackboard
 		answer := waitForAnswerStr(board)
 		duration := time.Since(start)
-		fmt.Println()
+
+		// Show timing footer
+		fmt.Printf("\n  %s%s%s\n\n", cognitive.ColorDim, formatDuration(duration), cognitive.ColorReset)
 
 		// Record in episodic memory (remembers everything forever)
 		go episodic.Record(memory.Episode{
@@ -904,6 +906,13 @@ func waitForAnswerStr(board *blackboard.Blackboard) string {
 			}
 		}
 	}
+}
+
+func formatDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	return fmt.Sprintf("%.1fs", d.Seconds())
 }
 
 func defaultMemoryPath() string {
