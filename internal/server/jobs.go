@@ -160,14 +160,29 @@ func (m *JobManager) pruneLocked() {
 		return
 	}
 
-	trimmed := m.order[:0]
-	for _, id := range m.order {
+	keep := make(map[string]bool)
+	trimmed := make([]string, 0, m.maxJobs)
+
+	for i := len(m.order) - 1; i >= 0; i-- {
+		id := m.order[i]
 		job := m.jobs[id]
-		if len(trimmed) < m.maxJobs || (job != nil && job.Status == JobRunning) {
-			trimmed = append(trimmed, id)
+		if job != nil && job.Status == JobRunning {
+			keep[id] = true
 			continue
 		}
-		delete(m.jobs, id)
+		if len(trimmed) < m.maxJobs {
+			keep[id] = true
+			trimmed = append(trimmed, id)
+		}
 	}
-	m.order = trimmed
+
+	newOrder := make([]string, 0, len(keep))
+	for _, id := range m.order {
+		if keep[id] {
+			newOrder = append(newOrder, id)
+		} else {
+			delete(m.jobs, id)
+		}
+	}
+	m.order = newOrder
 }
