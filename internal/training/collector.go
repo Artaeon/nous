@@ -156,6 +156,46 @@ func (c *Collector) ExportChatML(outputPath string) error {
 	return nil
 }
 
+// AverageQuality returns the mean quality score of all collected pairs.
+func (c *Collector) AverageQuality() float64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if len(c.pairs) == 0 {
+		return 0
+	}
+
+	var sum float64
+	for _, p := range c.pairs {
+		sum += p.Quality
+	}
+	return sum / float64(len(c.pairs))
+}
+
+// HighQualityPairs returns pairs with quality >= threshold.
+func (c *Collector) HighQualityPairs(threshold float64) []TrainingPair {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	var result []TrainingPair
+	for _, p := range c.pairs {
+		if p.Quality >= threshold {
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
+// Pairs returns all collected training pairs.
+func (c *Collector) Pairs() []TrainingPair {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	result := make([]TrainingPair, len(c.pairs))
+	copy(result, c.pairs)
+	return result
+}
+
 // QualityDistribution returns the count of pairs at each quality level (bucketed by 0.1).
 func (c *Collector) QualityDistribution() map[string]int {
 	c.mu.RLock()
