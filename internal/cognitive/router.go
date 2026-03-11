@@ -227,13 +227,20 @@ func (r *ModelRouter) ClientFor(task TaskType) *ollama.Client {
 		return client
 	}
 
-	// Shouldn't happen, but create on demand
+	// Shouldn't happen, but create on demand.
+	// Release read lock, take write lock, create client, return.
 	r.mu.RUnlock()
 	r.mu.Lock()
+	// Double-check after acquiring write lock
+	if client, ok := r.clients[model]; ok {
+		r.mu.Unlock()
+		r.mu.RLock() // re-acquire for deferred RUnlock
+		return client
+	}
 	r.ensureClient(model)
 	client := r.clients[model]
 	r.mu.Unlock()
-	r.mu.RLock()
+	r.mu.RLock() // re-acquire for deferred RUnlock
 	return client
 }
 
