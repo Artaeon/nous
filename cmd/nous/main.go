@@ -160,27 +160,60 @@ func main() {
 		}
 	}
 
-	// Enable streaming output — filter tool JSON from display
+	// Enable streaming output — filter tool JSON from display.
+	// The model may emit tool-call JSON as text (e.g. {"tool": "read", ...}).
+	// We buffer each response chunk and suppress lines matching tool patterns.
 	var streamBuf strings.Builder
 	inToolCall := false
+
+	toolMarkers := []string{`{"tool"`, "```tool", "```json\n{\"tool\"", "```\n{\"tool\""}
+	isToolJSON := func(s string) bool {
+		t := strings.TrimSpace(s)
+		for _, m := range toolMarkers {
+			if strings.HasPrefix(t, m) {
+				return true
+			}
+		}
+		return false
+	}
+	couldBeToolJSON := func(s string) bool {
+		t := strings.TrimSpace(s)
+		if len(t) == 0 {
+			return true
+		}
+		for _, m := range toolMarkers {
+			if strings.HasPrefix(m, t) {
+				return true
+			}
+		}
+		return false
+	}
 
 	reasoner.OnToken = func(token string, done bool) {
 		streamBuf.WriteString(token)
 
 		if !done {
-			// Detect tool call JSON — suppress from display
-			current := streamBuf.String()
-			if !inToolCall {
-				// Check if we're starting a tool call
-				trimmed := strings.TrimSpace(current)
-				if strings.HasPrefix(trimmed, "{\"tool\"") || strings.HasPrefix(trimmed, "```tool") {
-					inToolCall = true
-					return
-				}
-				fmt.Print(token)
+			if inToolCall {
+				return
 			}
+			current := streamBuf.String()
+			if isToolJSON(current) {
+				inToolCall = true
+				return
+			}
+			if couldBeToolJSON(current) {
+				// Still ambiguous — keep buffering
+				return
+			}
+			// Definitely not a tool call — flush everything buffered
+			fmt.Print(current)
+			streamBuf.Reset()
 		} else {
 			if !inToolCall {
+				remaining := streamBuf.String()
+				if !isToolJSON(remaining) && strings.TrimSpace(remaining) != "" {
+					fmt.Print(remaining)
+				}
 				fmt.Println()
 			}
 			inToolCall = false
