@@ -15,7 +15,8 @@ import (
 // natural language into actionable cognitive representations.
 type Perceiver struct {
 	Base
-	input chan string
+	Router *ModelRouter
+	input  chan string
 }
 
 func NewPerceiver(board *blackboard.Blackboard, llm *ollama.Client) *Perceiver {
@@ -62,7 +63,13 @@ ENTITIES: <key1=value1, key2=value2>
 
 User input: %s`, raw)
 
-	resp, err := p.LLM.Chat([]ollama.Message{
+	// Use the router's perception-optimized client if available
+	client := p.LLM
+	if p.Router != nil {
+		client = p.Router.ClientFor(TaskPerception)
+	}
+
+	resp, err := client.Chat([]ollama.Message{
 		{Role: "system", Content: PerceivePrompt},
 		{Role: "user", Content: prompt},
 	}, &ollama.ModelOptions{

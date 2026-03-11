@@ -216,3 +216,8 @@ func (c *Client) ListModels() ([]ModelInfo, error) {
 func (c *Client) Model() string {
 	return c.model
 }
+
+// Host returns the Ollama server address.
+func (c *Client) Host() string {
+	return c.host
+}

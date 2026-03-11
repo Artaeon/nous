@@ -82,6 +82,14 @@ func main() {
 		}
 	}
 
+	// Multi-model routing
+	router := cognitive.NewModelRouter(*host, *model)
+	if err := router.Discover(context.Background()); err != nil {
+		fmt.Printf("  model router: %v (using default)\n", err)
+	} else {
+		fmt.Printf("  %s\n", router.Status())
+	}
+
 	// Get working directory
 	workDir, _ := os.Getwd()
 	cognitive.WorkDir = workDir
@@ -131,6 +139,7 @@ func main() {
 
 	// Create cognitive streams
 	perceiver := cognitive.NewPerceiver(board, llm)
+	perceiver.Router = router
 	reasoner := cognitive.NewReasoner(board, llm, toolReg)
 	reasoner.WorkingMem = wm
 	reasoner.LongTermMem = ltm
