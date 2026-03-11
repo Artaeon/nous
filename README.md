@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <em>An autonomous cognitive coding agent that runs entirely on your machine. No cloud. No API keys. No telemetry.</em>
+  <em>An always-on local cognitive assistant with persistent memory, background reminders, and zero cloud dependencies.</em>
 </p>
 
 <p align="center">
@@ -29,13 +29,16 @@
 
 ## What Is Nous
 
-Nous is an open-source AI coding agent &mdash; like Claude Code or Cursor &mdash; but it runs **entirely on your local hardware** via [Ollama](https://ollama.ai). No cloud. No API keys. No data leaves your machine.
+Nous is an open-source **personal AI assistant** that runs **entirely on your local hardware** via [Ollama](https://ollama.ai). No cloud. No API keys. No data leaves your machine.
 
 It's built as a **concurrent cognitive architecture**: six independent processing streams (perceive, reason, plan, execute, reflect, learn) communicate through a shared blackboard, producing intelligent behavior from the interplay of simple, well-defined modules.
 
 The result is a **single ~10 MB Go binary** with zero external dependencies that can:
 
-- Read, write, and refactor your codebase
+- Remember personal preferences and tasks across restarts
+- Run background reminders and recurring daily check-ins
+- Act as a local assistant for notes, files, shell commands, and web lookups
+- Still help with code, files, and terminal workflows when you need it
 - Chain up to 8 tool calls autonomously per turn
 - Remember every interaction forever (episodic memory with semantic search)
 - Learn successful tool sequences and replay them (tool choreography)
@@ -128,7 +131,9 @@ $ ./nous --allow-shell
 
   I am Nous. I think, therefore I am - locally.
 
-  nous> find the bug in the authentication handler
+  nous> /today
+  nous> /remind tomorrow 09:00 call dentist
+  nous> summarize what matters today
 ```
 
 ### CLI Flags
@@ -149,6 +154,12 @@ $ ./nous --allow-shell
 | Command | Description |
 |---------|-------------|
 | `/help` | Show all commands |
+| `/today` | Show unread reminders and upcoming assistant tasks |
+| `/tasks` | List pending assistant tasks |
+| `/remind <when> <task>` | Create a persistent reminder |
+| `/done <task-id>` | Mark a task as completed |
+| `/pref <k> <v>` | Store a personal preference |
+| `/prefs` | List saved preferences |
 | `/status` | Cognitive system status |
 | `/memory` | Working memory contents |
 | `/longterm` | Long-term memory entries |
