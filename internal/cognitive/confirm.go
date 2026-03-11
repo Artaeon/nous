@@ -13,11 +13,15 @@ type ConfirmFunc func(action, detail string) bool
 
 // TerminalConfirm prompts the user in the terminal for confirmation.
 func TerminalConfirm(action, detail string) bool {
-	fmt.Printf("\033[33m  [confirm] %s\033[0m\n", action)
+	fmt.Println()
 	if detail != "" {
-		fmt.Printf("\033[90m  %s\033[0m\n", detail)
+		// Detail may contain ANSI-colored diff preview
+		for _, line := range strings.Split(detail, "\n") {
+			fmt.Printf("  %s\n", line)
+		}
 	}
-	fmt.Print("  allow? [y/N] ")
+	fmt.Printf("\n  \033[33m⚡ %s\033[0m\n", action)
+	fmt.Print("  \033[90mallow? [y/N]\033[0m ")
 
 	reader := bufio.NewReader(os.Stdin)
 	input, _ := reader.ReadString('\n')

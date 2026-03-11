@@ -217,7 +217,7 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 				continue
 			}
 
-			r.emitStatus(fmt.Sprintf("  [tool] %s", tc.Name))
+			r.emitStatus(fmt.Sprintf("→ %s %s", tc.Name, formatArgs(tc.Args)))
 
 			start := time.Now()
 			result, toolErr := r.executeTool(tc)
@@ -250,14 +250,14 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 				result = result + "\nHint: " + hint
 			}
 			if gateCheck.Hint != "" {
-				r.emitStatus(fmt.Sprintf("  [reflect] %s", gateCheck.Hint))
+				r.emitStatus(fmt.Sprintf("⚠ %s", gateCheck.Hint))
 				result = result + "\n[System: " + gateCheck.Hint + "]"
 			}
 
 			// Check if Reflector posted feedback about this action
 			if reflection, ok := r.Board.Get("reflection"); ok {
 				if msg, isStr := reflection.(string); isStr && msg != "" {
-					r.emitStatus(fmt.Sprintf("  [reflector] %s", msg))
+					r.emitStatus(fmt.Sprintf("⚠ %s", msg))
 					result = result + "\n[Reflection: " + msg + "]"
 					r.Board.Delete("reflection")
 				}
@@ -273,7 +273,7 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 
 			// Force stop if gate says so
 			if gateCheck.ForceStop {
-				r.emitStatus("  [reflect] forcing final answer")
+				r.emitStatus("⚠ forcing final answer")
 				finalConv := NewConversation(10)
 				finalConv.System(r.compactSystemPrompt())
 				forceMsg := percept.Raw
@@ -680,7 +680,7 @@ func (r *Reasoner) executeTool(tc toolCall) (string, error) {
 	if err != nil {
 		// Fuzzy match: try to find the closest tool name
 		if corrected := r.fuzzyMatchTool(tc.Name); corrected != "" {
-			r.emitStatus(fmt.Sprintf("  [correct] %s → %s", tc.Name, corrected))
+			r.emitStatus(fmt.Sprintf("↳ corrected %s → %s", tc.Name, corrected))
 			tc.Name = corrected
 			tool, err = r.Tools.Get(corrected)
 		}
@@ -696,7 +696,7 @@ func (r *Reasoner) executeTool(tc toolCall) (string, error) {
 	// Check predictive cache first (read-only tools only)
 	if r.Predictor != nil {
 		if cached, ok := r.Predictor.Lookup(tc.Name, tc.Args); ok {
-			r.emitStatus("  [predict] cache hit")
+			r.emitStatus("↳ cached")
 			return cached, nil
 		}
 	}
@@ -704,12 +704,10 @@ func (r *Reasoner) executeTool(tc toolCall) (string, error) {
 	// Check if this is a dangerous action requiring confirmation
 	if r.Confirm != nil {
 		if reason, dangerous := IsDangerous(tc.Name); dangerous {
-			detail := fmt.Sprintf("%s: %s %v", reason, tc.Name, tc.Args)
+			action := fmt.Sprintf("%s — %s", reason, formatArgs(tc.Args))
 			// Generate diff preview for file-modifying tools
-			if diffStr := r.buildDiffPreview(tc); diffStr != "" {
-				detail = diffStr + "\n" + detail
-			}
-			if !r.Confirm(tc.Name+" "+formatArgs(tc.Args), detail) {
+			detail := r.buildDiffPreview(tc)
+			if !r.Confirm(action, detail) {
 				return "Action denied by user.", nil
 			}
 		}
@@ -887,13 +885,13 @@ func (r *Reasoner) recallMemories(input string) string {
 
 	// Recall from working memory (most relevant items)
 	if r.WorkingMem != nil {
-		items := r.WorkingMem.MostRelevant(3)
+		items := r.WorkingMem.MostRelevant(5)
 		if len(items) > 0 {
 			var memLines []string
 			for _, item := range items {
-				memLines = append(memLines, fmt.Sprintf("- %s: %v", item.Key, item.Value))
+				memLines = append(memLines, fmt.Sprintf("- %s → %v", item.Key, item.Value))
 			}
-			parts = append(parts, "[Working Memory]\n"+strings.Join(memLines, "\n"))
+			parts = append(parts, "[Previous context — use this to answer]\n"+strings.Join(memLines, "\n"))
 		}
 	}
 
@@ -1087,18 +1085,24 @@ func (r *Reasoner) storeToMemory(input, answer string) {
 		return
 	}
 
-	// Store the latest interaction in working memory
-	// Use the first 100 chars of input as key, full answer as value
+	// Store as a conversational exchange so the model understands context
 	key := input
-	if len(key) > 80 {
-		key = key[:80] + "..."
+	if len(key) > 60 {
+		key = key[:60] + "..."
 	}
 
-	// Truncate answer for working memory storage
 	value := answer
-	if len(value) > 200 {
-		value = value[:200] + "..."
+	if len(value) > 150 {
+		value = value[:150] + "..."
 	}
 
-	r.WorkingMem.Store("last:"+key, value, 0.8)
+	// Store the exchange with high strength for recent recall
+	r.WorkingMem.Store("user said: "+key, "I replied: "+value, 0.9)
+
+	// Extract and store key facts (names, preferences, etc.)
+	lower := strings.ToLower(input)
+	if strings.Contains(lower, "my name") || strings.Contains(lower, "i'm ") || strings.Contains(lower, "i am ") {
+		// Store the user's self-introduction as a persistent fact
+		r.WorkingMem.Store("user_identity", input, 1.0)
+	}
 }

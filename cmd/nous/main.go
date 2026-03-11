@@ -238,6 +238,8 @@ func main() {
 	llmSpinner := cognitive.NewSpinner()
 	firstToken := true
 
+	responseStarted := false // tracks whether we've printed any visible response text
+
 	reasoner.OnToken = func(token string, done bool) {
 		if firstToken {
 			llmSpinner.Stop()
@@ -255,30 +257,42 @@ func main() {
 				return
 			}
 			if couldBeToolJSON(current) {
-				// Still ambiguous — keep buffering
 				return
 			}
-			// Definitely not a tool call — flush everything buffered
-			fmt.Print(current)
+			// Definitely not a tool call — flush with indentation
+			if !responseStarted {
+				fmt.Print("  ")
+				responseStarted = true
+			}
+			// Add indentation after newlines for clean formatting
+			text := current
+			text = strings.ReplaceAll(text, "\n", "\n  ")
+			fmt.Print(text)
 			streamBuf.Reset()
 		} else {
 			if !inToolCall {
 				remaining := streamBuf.String()
 				if !isToolJSON(remaining) && strings.TrimSpace(remaining) != "" {
+					if !responseStarted {
+						fmt.Print("  ")
+						responseStarted = true
+					}
+					remaining = strings.ReplaceAll(remaining, "\n", "\n  ")
 					fmt.Print(remaining)
 				}
 				fmt.Println()
 			}
 			inToolCall = false
 			streamBuf.Reset()
-			// Reset for next LLM call
 			firstToken = true
 		}
 	}
 
-	// Tool status updates
+	// Tool status updates with clean formatting
 	reasoner.OnStatus = func(status string) {
-		fmt.Printf("%s%s%s\n", cognitive.ColorGray, status, cognitive.ColorReset)
+		// Stop spinner if running so status appears cleanly
+		llmSpinner.Stop()
+		fmt.Printf("  %s%s%s\n", cognitive.ColorGray, strings.TrimSpace(status), cognitive.ColorReset)
 	}
 
 	// Start cognitive streams
@@ -355,6 +369,7 @@ func main() {
 		// Submit to the perceiver and wait for reasoning to complete
 		fmt.Println()
 		firstToken = true
+		responseStarted = false
 		llmSpinner.Start("thinking...")
 		start := time.Now()
 		perceiver.Submit(input)
