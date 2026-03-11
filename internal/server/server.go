@@ -265,11 +265,23 @@ const webUI = `<!DOCTYPE html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'Courier New', monospace; background: #0a0a0a; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; }
+		body { font-family: 'Courier New', monospace; background: #0a0a0a; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; }
     .header { padding: 20px; text-align: center; border-bottom: 1px solid #333; }
     .header h1 { font-size: 24px; color: #00ff88; }
     .header p { font-size: 12px; color: #666; margin-top: 4px; }
-    .chat { flex: 1; overflow-y: auto; padding: 20px; }
+		.layout { flex: 1; display: grid; grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr); min-height: 0; }
+		.chat { overflow-y: auto; padding: 20px; border-right: 1px solid #222; }
+		.jobs { overflow-y: auto; padding: 20px; background: #0d0d0d; }
+		.jobs h2 { font-size: 14px; margin-bottom: 10px; color: #9bd3b0; }
+		.job { border: 1px solid #222; border-radius: 8px; padding: 12px; margin-bottom: 10px; background: #121212; }
+		.job .meta { font-size: 11px; color: #777; margin-bottom: 6px; display: flex; justify-content: space-between; gap: 8px; }
+		.job .status { font-weight: bold; text-transform: uppercase; }
+		.job .status.queued { color: #e7c15a; }
+		.job .status.running { color: #7cc7ff; }
+		.job .status.completed { color: #55d68a; }
+		.job .status.failed, .job .status.canceled { color: #ff7a7a; }
+		.job .message { font-size: 13px; margin-bottom: 8px; }
+		.job .result { font-size: 12px; color: #bbb; white-space: pre-wrap; }
     .msg { margin: 12px 0; padding: 12px 16px; border-radius: 8px; max-width: 80%; }
     .msg.user { background: #1a1a2e; margin-left: auto; text-align: right; }
     .msg.nous { background: #162016; border-left: 3px solid #00ff88; }
@@ -278,9 +290,15 @@ const webUI = `<!DOCTYPE html>
     .input-area input:focus { outline: none; border-color: #00ff88; }
     .input-area button { padding: 12px 24px; background: #00ff88; color: #000; border: none; border-radius: 6px; cursor: pointer; font-family: inherit; font-weight: bold; }
     .input-area button:hover { background: #00cc6a; }
+		.input-area button.secondary { background: #1d3526; color: #9feab8; border: 1px solid #2e6b45; }
+		.input-area button.secondary:hover { background: #274b35; }
     .input-area button:disabled { background: #333; color: #666; cursor: wait; }
     .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid #00ff88; border-top: 2px solid transparent; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 8px; }
     @keyframes spin { to { transform: rotate(360deg); } }
+		@media (max-width: 960px) {
+			.layout { grid-template-columns: 1fr; }
+			.chat { border-right: none; border-bottom: 1px solid #222; }
+		}
   </style>
 </head>
 <body>
@@ -288,15 +306,24 @@ const webUI = `<!DOCTYPE html>
     <h1>N O U S</h1>
     <p>Native Orchestration of Unified Streams</p>
   </div>
-  <div class="chat" id="chat"></div>
+	<div class="layout">
+		<div class="chat" id="chat"></div>
+		<aside class="jobs">
+			<h2>Background jobs</h2>
+			<div id="jobs"></div>
+		</aside>
+	</div>
   <div class="input-area">
     <input type="text" id="input" placeholder="Ask Nous anything..." autofocus>
     <button id="send" onclick="send()">Send</button>
+		<button id="queue" class="secondary" onclick="queueJob()">Queue</button>
   </div>
   <script>
     const chat = document.getElementById('chat');
+		const jobs = document.getElementById('jobs');
     const input = document.getElementById('input');
     const btn = document.getElementById('send');
+		const queueBtn = document.getElementById('queue');
 
     input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
 
@@ -305,6 +332,7 @@ const webUI = `<!DOCTYPE html>
       if (!msg) return;
       input.value = '';
       btn.disabled = true;
+			queueBtn.disabled = true;
 
       addMsg(msg, 'user');
       const loading = addMsg('<span class="spinner"></span>thinking...', 'nous');
@@ -321,8 +349,35 @@ const webUI = `<!DOCTYPE html>
         loading.innerHTML = 'Error: ' + e.message;
       }
       btn.disabled = false;
+			queueBtn.disabled = false;
       input.focus();
     }
+
+		async function queueJob() {
+			const msg = input.value.trim();
+			if (!msg) return;
+			input.value = '';
+			btn.disabled = true;
+			queueBtn.disabled = true;
+
+			addMsg(msg, 'user');
+			addMsg('queued for background execution', 'nous');
+
+			try {
+				await fetch('/api/jobs', {
+					method: 'POST',
+					headers: {'Content-Type': 'application/json'},
+					body: JSON.stringify({message: msg})
+				});
+				await refreshJobs();
+			} catch (e) {
+				addMsg('Queue error: ' + e.message, 'nous');
+			}
+
+			btn.disabled = false;
+			queueBtn.disabled = false;
+			input.focus();
+		}
 
     function addMsg(text, cls) {
       const div = document.createElement('div');
@@ -333,10 +388,49 @@ const webUI = `<!DOCTYPE html>
       return div;
     }
 
+		async function refreshJobs() {
+			try {
+				const res = await fetch('/api/jobs');
+				const data = await res.json();
+				jobs.innerHTML = '';
+
+				if (!data.jobs || data.jobs.length === 0) {
+					jobs.innerHTML = '<div class="job"><div class="result">No background jobs yet.</div></div>';
+					return;
+				}
+
+				for (const job of data.jobs) {
+					const card = document.createElement('div');
+					card.className = 'job';
+					const preview = (job.result || job.error || '').slice(0, 180);
+					card.innerHTML = `
+						<div class="meta">
+							<span>${job.id}</span>
+							<span class="status ${job.status}">${job.status}</span>
+						</div>
+						<div class="message">${escapeHtml(job.message)}</div>
+						<div class="result">${escapeHtml(preview || 'Waiting for output...')}</div>
+					`;
+					jobs.appendChild(card);
+				}
+			} catch (e) {
+				jobs.innerHTML = '<div class="job"><div class="result">Unable to load jobs.</div></div>';
+			}
+		}
+
+		function escapeHtml(text) {
+			return text
+				.replaceAll('&', '&amp;')
+				.replaceAll('<', '&lt;')
+				.replaceAll('>', '&gt;');
+		}
+
     fetch('/api/status').then(r=>r.json()).then(s=>{
       document.querySelector('.header p').textContent =
-        s.version + ' | ' + s.model + ' | ' + s.tool_count + ' tools | up ' + s.uptime;
+				s.version + ' | ' + s.model + ' | ' + s.tool_count + ' tools | ' + s.running_jobs + ' running | ' + s.queued_jobs + ' queued | up ' + s.uptime;
     });
+		refreshJobs();
+		setInterval(refreshJobs, 5000);
   </script>
 </body>
 </html>`
