@@ -166,6 +166,9 @@ func RegisterBuiltins(r *Registry, workDir string, allowShell bool, undo ...*mem
 		Name:        "patch",
 		Description: "Apply a multi-line edit to a file using a before/after patch. Args: path (required), before (the exact multi-line text to find), after (the replacement text).",
 		Execute: func(args map[string]string) (string, error) {
+			if undoStack != nil {
+				pushUndoForEdit(undoStack, resolvePath(workDir, args["path"]))
+			}
 			return toolPatch(workDir, args)
 		},
 	})
@@ -573,7 +576,7 @@ func toolFetch(args map[string]string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("fetch: invalid URL: %w", err)
 	}
-	req.Header.Set("User-Agent", "Nous/0.3.0")
+	req.Header.Set("User-Agent", "Nous/0.6.0")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -728,8 +731,8 @@ func toolGit(workDir string, args map[string]string) (string, error) {
 		return "", fmt.Errorf("git requires 'command' argument")
 	}
 
-	// Split the command string into arguments for exec
-	gitArgs := strings.Fields(command)
+	// Shell-aware argument splitting that respects quotes
+	gitArgs := splitShellArgs(command)
 
 	cmd := exec.Command("git", gitArgs...)
 	cmd.Dir = workDir
@@ -928,6 +931,36 @@ func toolDiff(workDir string, args map[string]string) (string, error) {
 	}
 
 	return output, nil
+}
+
+// splitShellArgs splits a command string respecting single and double quotes.
+// e.g., `commit -m "fix the bug"` → ["commit", "-m", "fix the bug"]
+func splitShellArgs(s string) []string {
+	var args []string
+	var current strings.Builder
+	inSingle := false
+	inDouble := false
+
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '\'' && !inDouble:
+			inSingle = !inSingle
+		case c == '"' && !inSingle:
+			inDouble = !inDouble
+		case c == ' ' && !inSingle && !inDouble:
+			if current.Len() > 0 {
+				args = append(args, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteByte(c)
+		}
+	}
+	if current.Len() > 0 {
+		args = append(args, current.String())
+	}
+	return args
 }
 
 // --- clipboard tool ---
