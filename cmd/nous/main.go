@@ -206,11 +206,9 @@ func main() {
 	reasoner.Recipes = recipeBook
 	reasoner.Predictor = predictor
 	planner := cognitive.NewPlanner(board, llm)
-	executor := cognitive.NewExecutor(board, llm)
+	executor := cognitive.NewExecutor(board, llm, toolReg)
 	reflector := cognitive.NewReflector(board, llm)
 	learner := cognitive.NewLearner(board, llm, *memoryPath)
-
-	executor.AllowShell = *allowShell
 
 	// Set up confirmation for dangerous actions
 	if *trustMode {

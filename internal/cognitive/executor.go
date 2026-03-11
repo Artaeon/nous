@@ -1,35 +1,27 @@
 package cognitive
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
-	"strings"
 	"time"
 
 	"github.com/artaeon/nous/internal/blackboard"
 	"github.com/artaeon/nous/internal/ollama"
+	"github.com/artaeon/nous/internal/tools"
 )
 
 // Executor runs tools and actions in the real world.
-// It watches the blackboard for pending actions and plan steps,
-// executes them safely, and records the results.
+// It watches the blackboard for plans created by the Planner,
+// executes each step using the shared tool registry, and records results.
 type Executor struct {
 	Base
-	// WorkDir is the working directory for shell commands.
-	WorkDir string
-	// AllowShell controls whether shell execution is permitted.
-	AllowShell bool
+	Tools *tools.Registry
 }
 
-func NewExecutor(board *blackboard.Blackboard, llm *ollama.Client) *Executor {
-	wd, _ := os.Getwd()
+func NewExecutor(board *blackboard.Blackboard, llm *ollama.Client, toolReg *tools.Registry) *Executor {
 	return &Executor{
-		Base:       Base{Board: board, LLM: llm},
-		WorkDir:    wd,
-		AllowShell: false, // Disabled by default for safety
+		Base:  Base{Board: board, LLM: llm},
+		Tools: toolReg,
 	}
 }
 
@@ -45,6 +37,10 @@ func (e *Executor) Run(ctx context.Context) error {
 		case ev := <-events:
 			plan, ok := ev.Payload.(blackboard.Plan)
 			if !ok {
+				continue
+			}
+			// Only execute plans in "draft" status (freshly created by Planner)
+			if plan.Status != "draft" {
 				continue
 			}
 			e.executePlan(ctx, plan)
@@ -92,6 +88,17 @@ func (e *Executor) executePlan(ctx context.Context, plan blackboard.Plan) {
 
 		e.Board.SetPlan(plan)
 
+		// Check for Reflector feedback — if it says needs_replan, abort
+		if replanID, ok := e.Board.Get("needs_replan"); ok {
+			if id, isStr := replanID.(string); isStr && id == step.ID {
+				plan.Status = "failed"
+				e.Board.SetPlan(plan)
+				e.Board.UpdateGoalStatus(plan.GoalID, "failed")
+				e.Board.Delete("needs_replan")
+				return
+			}
+		}
+
 		if !success {
 			plan.Status = "failed"
 			e.Board.SetPlan(plan)
@@ -106,89 +113,37 @@ func (e *Executor) executePlan(ctx context.Context, plan blackboard.Plan) {
 }
 
 func (e *Executor) executeStep(step *blackboard.Step) (string, error) {
-	switch strings.ToLower(step.Tool) {
-	case "shell":
-		return e.execShell(step.Args["raw"])
-	case "read":
-		return e.execRead(step.Args["raw"])
-	case "write":
-		return e.execWrite(step.Args)
-	case "search":
-		return e.execSearch(step.Args["raw"])
-	default:
-		return "", fmt.Errorf("unknown tool: %s", step.Tool)
-	}
-}
-
-func (e *Executor) execShell(command string) (string, error) {
-	if !e.AllowShell {
-		return "", fmt.Errorf("shell execution disabled — start with --allow-shell to enable")
+	toolName := step.Tool
+	if toolName == "" {
+		return "", fmt.Errorf("step has no tool specified")
 	}
 
-	cmd := exec.Command("sh", "-c", command)
-	cmd.Dir = e.WorkDir
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("shell error: %s\nstderr: %s", err, stderr.String())
-	}
-
-	return stdout.String(), nil
-}
-
-func (e *Executor) execRead(path string) (string, error) {
-	path = strings.TrimSpace(path)
-	data, err := os.ReadFile(path)
+	tool, err := e.Tools.Get(toolName)
 	if err != nil {
-		return "", fmt.Errorf("read %s: %w", path, err)
+		return "", fmt.Errorf("unknown tool %q: %w", toolName, err)
 	}
 
-	// Limit output size to avoid overwhelming the context
-	content := string(data)
-	if len(content) > 8192 {
-		content = content[:8192] + "\n... (truncated)"
+	// Build args from the step's Args map
+	args := make(map[string]string)
+	for k, v := range step.Args {
+		args[k] = v
 	}
 
-	return content, nil
-}
-
-func (e *Executor) execWrite(args map[string]string) (string, error) {
-	path := strings.TrimSpace(args["raw"])
-	content, ok := args["content"]
-	if !ok {
-		return "", fmt.Errorf("write requires 'content' argument")
+	// If there's a "raw" arg but no specific args, try to map it to common tool parameters
+	if raw, ok := args["raw"]; ok && len(args) == 1 {
+		switch toolName {
+		case "read", "ls", "tree", "mkdir":
+			args["path"] = raw
+		case "grep":
+			args["pattern"] = raw
+		case "glob":
+			args["pattern"] = raw
+		case "shell", "run":
+			args["command"] = raw
+		case "git":
+			args["command"] = raw
+		}
 	}
 
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		return "", fmt.Errorf("write %s: %w", path, err)
-	}
-
-	return fmt.Sprintf("wrote %d bytes to %s", len(content), path), nil
-}
-
-func (e *Executor) execSearch(query string) (string, error) {
-	// Simple recursive grep through the working directory
-	if !e.AllowShell {
-		return "", fmt.Errorf("search requires shell access — start with --allow-shell to enable")
-	}
-
-	cmd := exec.Command("grep", "-rn", "--include=*.go", "--include=*.md", "--include=*.txt", query, e.WorkDir)
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-
-	_ = cmd.Run() // grep returns exit 1 on no match
-
-	result := stdout.String()
-	if result == "" {
-		return "no matches found", nil
-	}
-
-	if len(result) > 4096 {
-		result = result[:4096] + "\n... (truncated)"
-	}
-
-	return result, nil
+	return tool.Execute(args)
 }
