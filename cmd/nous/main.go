@@ -91,12 +91,10 @@ func main() {
 	projectInfo := cognitive.ScanProject(workDir)
 	cognitive.CurrentProject = projectInfo
 
-	// Build codebase index (Go AST parsing for structural context)
+	// Build codebase index (Go AST symbols + file metadata for all languages)
 	nousDir := filepath.Join(workDir, ".nous")
 	codeIndex := index.NewCodebaseIndex(nousDir)
-	if projectInfo.Language == "Go" {
-		_ = codeIndex.Build(workDir)
-	}
+	_ = codeIndex.Build(workDir)
 
 	// Filesystem Sentinel — ambient file watching with inotify
 	var fileWatcher *sentinel.Watcher

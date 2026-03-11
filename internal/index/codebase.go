@@ -53,7 +53,8 @@ func NewCodebaseIndex(storePath string) *CodebaseIndex {
 	return idx
 }
 
-// Build walks all .go files under rootDir, parses them, and populates the index.
+// Build walks source files under rootDir, parses Go files for symbols,
+// and records basic file metadata for all recognized source files.
 func (idx *CodebaseIndex) Build(rootDir string) error {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
@@ -76,18 +77,90 @@ func (idx *CodebaseIndex) Build(rootDir string) error {
 			return nil
 		}
 
-		// Only process .go files (skip test files for the index)
-		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+		rel, _ := filepath.Rel(rootDir, path)
+
+		// Go files: full AST parsing for symbols (skip test files)
+		if strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go") {
+			if err := idx.indexFile(path, rel); err != nil {
+				// Non-fatal: skip files that fail to parse
+				return nil
+			}
 			return nil
 		}
 
-		rel, _ := filepath.Rel(rootDir, path)
-		if err := idx.indexFile(path, rel); err != nil {
-			// Non-fatal: skip files that fail to parse
-			return nil
+		// Other source files: record file metadata (for repo awareness)
+		if isSourceFile(name) {
+			hash, _ := fileHash(path)
+			lines := 0
+			if src, err := os.ReadFile(path); err == nil {
+				lines = countLines(src)
+			}
+			idx.Files = append(idx.Files, FileInfo{
+				Path:    rel,
+				Hash:    hash,
+				Package: langFromExt(name),
+				Lines:   lines,
+			})
 		}
+
 		return nil
 	})
+}
+
+// isSourceFile checks if a filename is a recognized source/config file.
+func isSourceFile(name string) bool {
+	ext := strings.ToLower(filepath.Ext(name))
+	switch ext {
+	case ".py", ".js", ".ts", ".tsx", ".jsx", ".rb", ".rs", ".c", ".cpp", ".h",
+		".java", ".kt", ".swift", ".cs", ".php", ".lua", ".sh", ".bash",
+		".yaml", ".yml", ".toml", ".json", ".xml", ".html", ".css", ".scss",
+		".md", ".txt", ".sql", ".proto", ".graphql", ".zig", ".nim", ".ex", ".exs":
+		return true
+	}
+	// Dotfiles like Makefile, Dockerfile, etc.
+	switch name {
+	case "Makefile", "Dockerfile", "Containerfile", "Vagrantfile",
+		"Rakefile", "Gemfile", "Procfile", ".gitignore", ".dockerignore":
+		return true
+	}
+	return false
+}
+
+// langFromExt returns a language tag from a file extension.
+func langFromExt(name string) string {
+	ext := strings.ToLower(filepath.Ext(name))
+	switch ext {
+	case ".py":
+		return "python"
+	case ".js", ".jsx":
+		return "javascript"
+	case ".ts", ".tsx":
+		return "typescript"
+	case ".rb":
+		return "ruby"
+	case ".rs":
+		return "rust"
+	case ".c", ".h":
+		return "c"
+	case ".cpp":
+		return "cpp"
+	case ".java":
+		return "java"
+	case ".go":
+		return "go"
+	case ".sh", ".bash":
+		return "shell"
+	case ".yaml", ".yml":
+		return "yaml"
+	case ".json":
+		return "json"
+	case ".md":
+		return "markdown"
+	case ".sql":
+		return "sql"
+	default:
+		return strings.TrimPrefix(ext, ".")
+	}
 }
 
 // IncrementalUpdate re-indexes only files whose content hash has changed.
@@ -301,6 +374,43 @@ func (idx *CodebaseIndex) Size() int {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	return len(idx.Symbols)
+}
+
+// FileSummary returns a compact overview of the indexed files grouped by language.
+// Format: "go: 12 files (3,400 lines), python: 3 files (450 lines)"
+func (idx *CodebaseIndex) FileSummary() string {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	type langStats struct {
+		files int
+		lines int
+	}
+	stats := make(map[string]*langStats)
+
+	for _, f := range idx.Files {
+		lang := f.Package
+		if lang == "" {
+			lang = "other"
+		}
+		s, ok := stats[lang]
+		if !ok {
+			s = &langStats{}
+			stats[lang] = s
+		}
+		s.files++
+		s.lines += f.Lines
+	}
+
+	if len(stats) == 0 {
+		return ""
+	}
+
+	var parts []string
+	for lang, s := range stats {
+		parts = append(parts, fmt.Sprintf("%s: %d files (%d lines)", lang, s.files, s.lines))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // indexFile parses a single Go file and adds its symbols and metadata to the index.
