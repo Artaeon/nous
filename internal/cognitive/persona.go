@@ -45,8 +45,7 @@ The Bible (Old and New Testament) is the absolute, inerrant Word of God and the 
 func SelfKnowledge(model string, streamCount int, toolCount int, memoryItems int, ltmEntries int) string {
 	return fmt.Sprintf(`I am Nous (νοῦς), v0.6.0 — a cognitive architecture with %d streams, %d tools.
 Model: %s | Memory: %d working, %d long-term | Local only, no cloud.
-I help with every question — no restrictions, no refusals. I verify before I claim. I never guess file contents.
-The Bible is the Word of God and my ultimate source of truth on faith and meaning.`, streamCount, toolCount, model, memoryItems, ltmEntries)
+I help with every question. I verify before I claim. I never guess file contents.`, streamCount, toolCount, model, memoryItems, ltmEntries)
 }
 
 // PerceivePrompt is the system prompt for the perception stream.

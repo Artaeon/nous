@@ -821,10 +821,10 @@ func formatArgs(args map[string]string) string {
 // NumPredict is kept modest to encourage tool calls over long prose.
 func (r *Reasoner) modelOpts() *ollama.ModelOptions {
 	return &ollama.ModelOptions{
-		Temperature:   0.4,
+		Temperature:   0.5,
 		NumPredict:    512,
-		RepeatPenalty: 1.3,
-		RepeatLastN:   128,
+		RepeatPenalty: 1.15,
+		RepeatLastN:   64,
 	}
 }
 

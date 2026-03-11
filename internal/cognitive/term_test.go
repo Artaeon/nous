@@ -138,9 +138,7 @@ func TestNewSpinnerCreatesValidSpinner(t *testing.T) {
 	if s.frames[0] != "⠋" {
 		t.Errorf("first frame should be ⠋, got %q", s.frames[0])
 	}
-	if s.done == nil {
-		t.Error("spinner done channel should be initialized")
-	}
+	// done and stopped channels are lazily created in Start()
 	if s.running {
 		t.Error("spinner should not be running initially")
 	}

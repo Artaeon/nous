@@ -84,6 +84,7 @@ type Spinner struct {
 	frames  []string
 	current int
 	done    chan struct{}
+	stopped chan struct{}
 	mu      sync.Mutex
 	running bool
 }
@@ -92,7 +93,6 @@ type Spinner struct {
 func NewSpinner() *Spinner {
 	return &Spinner{
 		frames: []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"},
-		done:   make(chan struct{}),
 	}
 }
 
@@ -105,11 +105,13 @@ func (s *Spinner) Start(label string) {
 	}
 	s.running = true
 	s.done = make(chan struct{})
+	s.stopped = make(chan struct{})
 	s.mu.Unlock()
 
 	go func() {
 		ticker := time.NewTicker(80 * time.Millisecond)
 		defer ticker.Stop()
+		defer close(s.stopped)
 		for {
 			select {
 			case <-s.done:
@@ -127,13 +129,17 @@ func (s *Spinner) Start(label string) {
 	}()
 }
 
-// Stop halts the spinner and clears its line.
+// Stop halts the spinner, waits for cleanup, then returns.
 func (s *Spinner) Stop() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if !s.running {
+		s.mu.Unlock()
 		return
 	}
 	s.running = false
 	close(s.done)
+	stopped := s.stopped
+	s.mu.Unlock()
+	// Wait for the goroutine to finish clearing the line
+	<-stopped
 }
