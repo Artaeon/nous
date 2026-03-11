@@ -2,6 +2,7 @@ package tools
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -993,5 +994,438 @@ func TestToolClipboard(t *testing.T) {
 		if strings.Contains(errStr, "neither") {
 			t.Logf("clipboard not available (expected in CI): %v", err)
 		}
+	}
+}
+
+// --- git tool ---
+
+func initGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	cmds := [][]string{
+		{"git", "init"},
+		{"git", "config", "user.email", "test@test.com"},
+		{"git", "config", "user.name", "Test"},
+	}
+	for _, args := range cmds {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git init setup failed: %s: %v", string(out), err)
+		}
+	}
+}
+
+func TestToolGit(t *testing.T) {
+	dir := setupTempDir(t)
+	initGitRepo(t, dir)
+
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false)
+
+	tool, _ := r.Get("git")
+
+	// git status in a fresh repo should work
+	result, err := tool.Execute(map[string]string{"command": "status"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Check for branch name in output (locale-independent: "master" or "main")
+	if !strings.Contains(result, "master") && !strings.Contains(result, "main") {
+		t.Errorf("expected git status to mention branch, got %q", result)
+	}
+
+	// Create a file, add and commit, then check log
+	writeFile(t, filepath.Join(dir, "hello.txt"), "hello world")
+	_, err = tool.Execute(map[string]string{"command": "add ."})
+	if err != nil {
+		t.Fatalf("git add failed: %v", err)
+	}
+
+	_, err = tool.Execute(map[string]string{"command": "commit -m initial"})
+	if err != nil {
+		t.Fatalf("git commit failed: %v", err)
+	}
+
+	result, err = tool.Execute(map[string]string{"command": "log --oneline"})
+	if err != nil {
+		t.Fatalf("git log failed: %v", err)
+	}
+	if !strings.Contains(result, "initial") {
+		t.Errorf("expected commit message in log, got %q", result)
+	}
+}
+
+func TestToolGitMissingCommand(t *testing.T) {
+	dir := setupTempDir(t)
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false)
+
+	tool, _ := r.Get("git")
+	_, err := tool.Execute(map[string]string{})
+	if err == nil {
+		t.Fatal("expected error for missing command")
+	}
+}
+
+// --- patch tool ---
+
+func TestToolPatch(t *testing.T) {
+	dir := setupTempDir(t)
+	original := "func main() {\n\tfmt.Println(\"hello\")\n\tfmt.Println(\"world\")\n}\n"
+	writeFile(t, filepath.Join(dir, "main.go"), original)
+
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false)
+
+	tool, _ := r.Get("patch")
+	result, err := tool.Execute(map[string]string{
+		"path":   "main.go",
+		"before": "fmt.Println(\"hello\")\n\tfmt.Println(\"world\")",
+		"after":  "fmt.Println(\"goodbye\")\n\tfmt.Println(\"universe\")",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "patched") {
+		t.Error("expected confirmation message")
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, "main.go"))
+	content := string(data)
+	if !strings.Contains(content, "goodbye") {
+		t.Error("expected patched file to contain 'goodbye'")
+	}
+	if !strings.Contains(content, "universe") {
+		t.Error("expected patched file to contain 'universe'")
+	}
+	if strings.Contains(content, "hello") {
+		t.Error("expected original text to be replaced")
+	}
+}
+
+func TestToolPatchNotFound(t *testing.T) {
+	dir := setupTempDir(t)
+	writeFile(t, filepath.Join(dir, "file.txt"), "some content\nhere\n")
+
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false)
+
+	tool, _ := r.Get("patch")
+	_, err := tool.Execute(map[string]string{
+		"path":   "file.txt",
+		"before": "nonexistent\nmultiline\ntext",
+		"after":  "replacement",
+	})
+	if err == nil {
+		t.Fatal("expected error when before text not found")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("expected 'not found' in error, got %q", err.Error())
+	}
+}
+
+func TestToolPatchAmbiguous(t *testing.T) {
+	dir := setupTempDir(t)
+	writeFile(t, filepath.Join(dir, "file.txt"), "block\nof code\n\nblock\nof code\n")
+
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false)
+
+	tool, _ := r.Get("patch")
+	_, err := tool.Execute(map[string]string{
+		"path":   "file.txt",
+		"before": "block\nof code",
+		"after":  "new block",
+	})
+	if err == nil {
+		t.Fatal("expected error when before text matches multiple times")
+	}
+	if !strings.Contains(err.Error(), "2 times") {
+		t.Errorf("expected error about multiple matches, got %q", err.Error())
+	}
+}
+
+func TestToolPatchPreservesPermissions(t *testing.T) {
+	dir := setupTempDir(t)
+	path := filepath.Join(dir, "script.sh")
+	writeFile(t, path, "#!/bin/bash\necho hello\n")
+	os.Chmod(path, 0755)
+
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false)
+
+	tool, _ := r.Get("patch")
+	_, err := tool.Execute(map[string]string{
+		"path":   "script.sh",
+		"before": "echo hello",
+		"after":  "echo world",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	info, _ := os.Stat(path)
+	if info.Mode().Perm() != 0755 {
+		t.Errorf("expected permissions 0755, got %o", info.Mode().Perm())
+	}
+}
+
+// --- replace_all tool ---
+
+func TestToolReplaceAll(t *testing.T) {
+	dir := setupTempDir(t)
+	writeFile(t, filepath.Join(dir, "a.go"), "package foo\n\nfunc foo() {}\n")
+	writeFile(t, filepath.Join(dir, "b.go"), "package foo\n\nvar foo = 1\n")
+	writeFile(t, filepath.Join(dir, "c.txt"), "foo bar foo\n")
+
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false)
+
+	tool, _ := r.Get("replace_all")
+	result, err := tool.Execute(map[string]string{
+		"old": "foo",
+		"new": "bar",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "replaced") {
+		t.Error("expected confirmation message")
+	}
+	if !strings.Contains(result, "3 files") {
+		t.Errorf("expected 3 files modified, got %q", result)
+	}
+
+	// Verify files were modified
+	data, _ := os.ReadFile(filepath.Join(dir, "a.go"))
+	if strings.Contains(string(data), "foo") {
+		t.Error("expected 'foo' to be replaced in a.go")
+	}
+
+	data, _ = os.ReadFile(filepath.Join(dir, "c.txt"))
+	if strings.Contains(string(data), "foo") {
+		t.Error("expected 'foo' to be replaced in c.txt")
+	}
+}
+
+func TestToolReplaceAllWithGlob(t *testing.T) {
+	dir := setupTempDir(t)
+	writeFile(t, filepath.Join(dir, "a.go"), "foo\n")
+	writeFile(t, filepath.Join(dir, "b.txt"), "foo\n")
+
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false)
+
+	tool, _ := r.Get("replace_all")
+	result, err := tool.Execute(map[string]string{
+		"old":  "foo",
+		"new":  "bar",
+		"glob": "*.go",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "1 files") {
+		t.Errorf("expected 1 file modified, got %q", result)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, "a.go"))
+	if string(data) != "bar\n" {
+		t.Errorf("expected 'bar\\n' in a.go, got %q", string(data))
+	}
+
+	data, _ = os.ReadFile(filepath.Join(dir, "b.txt"))
+	if string(data) != "foo\n" {
+		t.Errorf("expected 'foo\\n' in b.txt (unchanged), got %q", string(data))
+	}
+}
+
+func TestToolReplaceAllSkipsBinary(t *testing.T) {
+	dir := setupTempDir(t)
+	binaryContent := []byte("foo\x00bar")
+	os.WriteFile(filepath.Join(dir, "binary.dat"), binaryContent, 0644)
+	writeFile(t, filepath.Join(dir, "text.txt"), "foo\n")
+
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false)
+
+	tool, _ := r.Get("replace_all")
+	result, err := tool.Execute(map[string]string{
+		"old": "foo",
+		"new": "baz",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "1 files") {
+		t.Errorf("expected 1 file modified (binary skipped), got %q", result)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, "binary.dat"))
+	if string(data) != "foo\x00bar" {
+		t.Error("expected binary file to be unchanged")
+	}
+}
+
+func TestToolReplaceAllNoMatches(t *testing.T) {
+	dir := setupTempDir(t)
+	writeFile(t, filepath.Join(dir, "file.txt"), "hello world\n")
+
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false)
+
+	tool, _ := r.Get("replace_all")
+	result, err := tool.Execute(map[string]string{
+		"old": "nonexistent",
+		"new": "replacement",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "no occurrences") {
+		t.Errorf("expected 'no occurrences', got %q", result)
+	}
+}
+
+func TestToolReplaceAllSkipsHiddenDirs(t *testing.T) {
+	dir := setupTempDir(t)
+	os.MkdirAll(filepath.Join(dir, ".hidden"), 0755)
+	writeFile(t, filepath.Join(dir, ".hidden", "secret.txt"), "foo\n")
+	writeFile(t, filepath.Join(dir, "visible.txt"), "foo\n")
+
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false)
+
+	tool, _ := r.Get("replace_all")
+	result, err := tool.Execute(map[string]string{
+		"old": "foo",
+		"new": "bar",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "1 files") {
+		t.Errorf("expected 1 file modified (hidden dir skipped), got %q", result)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, ".hidden", "secret.txt"))
+	if string(data) != "foo\n" {
+		t.Error("expected hidden dir file to be unchanged")
+	}
+}
+
+// --- diff tool ---
+
+func TestToolDiff(t *testing.T) {
+	dir := setupTempDir(t)
+	initGitRepo(t, dir)
+
+	writeFile(t, filepath.Join(dir, "file.txt"), "original content\n")
+	cmd := exec.Command("git", "add", ".")
+	cmd.Dir = dir
+	cmd.Run()
+	cmd = exec.Command("git", "commit", "-m", "initial")
+	cmd.Dir = dir
+	cmd.Run()
+
+	writeFile(t, filepath.Join(dir, "file.txt"), "modified content\n")
+
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false)
+
+	tool, _ := r.Get("diff")
+	result, err := tool.Execute(map[string]string{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "original") || !strings.Contains(result, "modified") {
+		t.Errorf("expected diff showing changes, got %q", result)
+	}
+}
+
+func TestToolDiffStaged(t *testing.T) {
+	dir := setupTempDir(t)
+	initGitRepo(t, dir)
+
+	writeFile(t, filepath.Join(dir, "file.txt"), "original\n")
+	cmd := exec.Command("git", "add", ".")
+	cmd.Dir = dir
+	cmd.Run()
+	cmd = exec.Command("git", "commit", "-m", "initial")
+	cmd.Dir = dir
+	cmd.Run()
+
+	writeFile(t, filepath.Join(dir, "file.txt"), "staged change\n")
+	cmd = exec.Command("git", "add", ".")
+	cmd.Dir = dir
+	cmd.Run()
+
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false)
+
+	tool, _ := r.Get("diff")
+	result, err := tool.Execute(map[string]string{"staged": "true"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "staged change") {
+		t.Errorf("expected staged diff output, got %q", result)
+	}
+}
+
+func TestToolDiffWithPath(t *testing.T) {
+	dir := setupTempDir(t)
+	initGitRepo(t, dir)
+
+	writeFile(t, filepath.Join(dir, "a.txt"), "original a\n")
+	writeFile(t, filepath.Join(dir, "b.txt"), "original b\n")
+	cmd := exec.Command("git", "add", ".")
+	cmd.Dir = dir
+	cmd.Run()
+	cmd = exec.Command("git", "commit", "-m", "initial")
+	cmd.Dir = dir
+	cmd.Run()
+
+	writeFile(t, filepath.Join(dir, "a.txt"), "changed a\n")
+	writeFile(t, filepath.Join(dir, "b.txt"), "changed b\n")
+
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false)
+
+	tool, _ := r.Get("diff")
+	result, err := tool.Execute(map[string]string{"path": "a.txt"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "changed a") {
+		t.Errorf("expected diff for a.txt, got %q", result)
+	}
+	if strings.Contains(result, "changed b") {
+		t.Error("expected diff to NOT contain changes from b.txt")
+	}
+}
+
+func TestToolDiffNoChanges(t *testing.T) {
+	dir := setupTempDir(t)
+	initGitRepo(t, dir)
+
+	writeFile(t, filepath.Join(dir, "file.txt"), "content\n")
+	cmd := exec.Command("git", "add", ".")
+	cmd.Dir = dir
+	cmd.Run()
+	cmd = exec.Command("git", "commit", "-m", "initial")
+	cmd.Dir = dir
+	cmd.Run()
+
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false)
+
+	tool, _ := r.Get("diff")
+	result, err := tool.Execute(map[string]string{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "no changes" {
+		t.Errorf("expected 'no changes', got %q", result)
 	}
 }
