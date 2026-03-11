@@ -43,8 +43,9 @@ func (c *Conversation) Assistant(content string) {
 }
 
 // ToolResult adds a tool execution result as a user message.
+// Uses OBSERVE: prefix for the structured THINK/ACT/OBSERVE protocol.
 func (c *Conversation) ToolResult(toolName, result string) {
-	msg := fmt.Sprintf("[Tool Result: %s]\n%s", toolName, result)
+	msg := fmt.Sprintf("OBSERVE [%s]: %s", toolName, result)
 	c.messages = append(c.messages, ollama.Message{Role: "user", Content: msg})
 	c.truncate()
 }
@@ -52,6 +53,42 @@ func (c *Conversation) ToolResult(toolName, result string) {
 // Messages returns the current message list for an LLM call.
 func (c *Conversation) Messages() []ollama.Message {
 	return c.messages
+}
+
+// MessageCount returns the number of messages in the conversation.
+func (c *Conversation) MessageCount() int {
+	return len(c.messages)
+}
+
+// TokenEstimate returns approximate token count across all messages.
+func (c *Conversation) TokenEstimate(charsPerToken float64) int {
+	total := 0
+	for _, m := range c.messages {
+		total += len(m.Content)
+	}
+	if charsPerToken <= 0 {
+		charsPerToken = 4.0
+	}
+	return int(float64(total) / charsPerToken)
+}
+
+// CompressOldest replaces the oldest n non-system messages with a compressed summary.
+func (c *Conversation) CompressOldest(n int, compressed string) {
+	if len(c.messages) <= n+1 {
+		return
+	}
+	// Keep system message (index 0), replace messages [1..n] with compressed
+	hasSystem := len(c.messages) > 0 && c.messages[0].Role == "system"
+	if !hasSystem {
+		return
+	}
+	sys := c.messages[0]
+	remaining := make([]ollama.Message, len(c.messages[n+1:]))
+	copy(remaining, c.messages[n+1:])
+	c.messages = append(
+		[]ollama.Message{sys, {Role: "user", Content: "[Earlier context]\n" + compressed}},
+		remaining...,
+	)
 }
 
 // Summary returns a brief overview of the conversation state.

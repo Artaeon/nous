@@ -15,6 +15,7 @@ import (
 
 	"github.com/artaeon/nous/internal/blackboard"
 	"github.com/artaeon/nous/internal/cognitive"
+	"github.com/artaeon/nous/internal/compress"
 	"github.com/artaeon/nous/internal/memory"
 	"github.com/artaeon/nous/internal/ollama"
 	"github.com/artaeon/nous/internal/tools"
@@ -28,7 +29,7 @@ const banner = `
                 ╚═══════════════════════════════════╝
 `
 
-const version = "0.4.0"
+const version = "0.5.0"
 
 func main() {
 	// Flags
@@ -134,6 +135,7 @@ func main() {
 	reasoner.WorkingMem = wm
 	reasoner.LongTermMem = ltm
 	reasoner.ProjectMem = projMem
+	reasoner.Compressor = compress.NewCompressor(llm)
 	planner := cognitive.NewPlanner(board, llm)
 	executor := cognitive.NewExecutor(board, llm)
 	reflector := cognitive.NewReflector(board, llm)

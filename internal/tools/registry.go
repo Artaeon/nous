@@ -43,6 +43,17 @@ func (r *Registry) List() []Tool {
 	return out
 }
 
+// ListByNames returns tools matching the given names, preserving order.
+func (r *Registry) ListByNames(names []string) []Tool {
+	var out []Tool
+	for _, name := range names {
+		if t, ok := r.tools[name]; ok {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // Describe returns a formatted string listing all tools for LLM prompts.
 func (r *Registry) Describe() string {
 	var desc string

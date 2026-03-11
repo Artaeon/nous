@@ -7,16 +7,24 @@ import (
 	"strings"
 
 	"github.com/artaeon/nous/internal/blackboard"
+	"github.com/artaeon/nous/internal/compress"
 	"github.com/artaeon/nous/internal/memory"
 	"github.com/artaeon/nous/internal/ollama"
 	"github.com/artaeon/nous/internal/tools"
 )
 
-const maxToolIterations = 15
+const maxToolIterations = 8
 
 // Reasoner performs autonomous chain-of-thought inference with tool use.
 // It listens for percepts, reasons about them, and can autonomously chain
 // multiple tool calls to accomplish complex tasks — like an autonomous agent.
+//
+// The Cognitive Grounding system prevents hallucinations by:
+// 1. Progressive tool disclosure — only showing relevant tools per intent
+// 2. Structured THINK/ACT/OBSERVE protocol — forcing reasoning structure
+// 3. Smart result truncation — keeping tool results within token budget
+// 4. Context budget tracking — compressing when context fills up
+// 5. Synchronous reflection gate — catching errors before the next LLM call
 type Reasoner struct {
 	Base
 	Tools       *tools.Registry
@@ -24,9 +32,16 @@ type Reasoner struct {
 	WorkingMem  *memory.WorkingMemory
 	LongTermMem *memory.LongTermMemory
 	ProjectMem  *memory.ProjectMemory
+	Compressor  *compress.Compressor
+	Budget      *ContextBudget
+	Gate        *ReflectionGate
 	OnToken     func(token string, done bool)
 	OnStatus    func(status string)
 	Confirm     ConfirmFunc
+
+	// Active tool subset for current reasoning cycle
+	activeTools []tools.Tool
+	activeCats  map[ToolCategory]bool
 }
 
 // CurrentProject holds the scanned project info for the system prompt.
@@ -34,9 +49,12 @@ var CurrentProject *ProjectInfo
 
 func NewReasoner(board *blackboard.Blackboard, llm *ollama.Client, toolReg *tools.Registry) *Reasoner {
 	return &Reasoner{
-		Base:  Base{Board: board, LLM: llm},
-		Tools: toolReg,
-		Conv:  NewConversation(20),
+		Base:       Base{Board: board, LLM: llm},
+		Tools:      toolReg,
+		Conv:       NewConversation(20),
+		Budget:     DefaultBudget(),
+		Gate:       &ReflectionGate{},
+		activeCats: make(map[ToolCategory]bool),
 	}
 }
 
@@ -62,9 +80,20 @@ func (r *Reasoner) Run(ctx context.Context) error {
 }
 
 func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error {
-	// Build system prompt — compact version optimized for small models
-	systemPrompt := r.compactSystemPrompt()
+	// Reset reflection gate for this reasoning cycle
+	r.Gate.Reset()
 
+	// 1. Progressive Tool Disclosure — select relevant tools based on intent
+	r.activeTools = SelectToolsForIntent(percept.Intent, percept.Entities, percept.Raw, r.Tools.List())
+	r.activeCats = make(map[ToolCategory]bool)
+	for _, t := range r.activeTools {
+		if cat, ok := ToolCategoryMap[t.Name]; ok {
+			r.activeCats[cat] = true
+		}
+	}
+
+	// 2. Build system prompt with selected tool subset (saves ~500 tokens)
+	systemPrompt := r.compactSystemPrompt()
 	r.Conv.System(systemPrompt)
 
 	// Inject relevant memories into the user message
@@ -76,7 +105,7 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 
 	r.Conv.User(userMsg)
 
-	// Autonomous tool loop — keep going until the LLM gives a final answer
+	// 3. Autonomous tool loop with cognitive grounding
 	for i := 0; i < maxToolIterations; i++ {
 		select {
 		case <-ctx.Done():
@@ -84,38 +113,78 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 		default:
 		}
 
-		// Call LLM
-		var fullResponse string
-		var err error
-
-		if r.OnToken != nil {
-			fullResponse, err = r.streamCall()
-		} else {
-			fullResponse, err = r.batchCall()
+		// 4. Context Budget — force answer if context is nearly full
+		if r.Budget.ShouldForceAnswer(r.Conv.Messages()) {
+			r.emitStatus("  [budget] context full, forcing answer")
+			r.Conv.User("[System: Context budget exhausted. Give your final answer now based on what you know.]")
+			resp, err := r.callLLM()
+			if err != nil {
+				return fmt.Errorf("reasoner forced answer: %w", err)
+			}
+			r.Board.Set("last_answer", resp)
+			r.storeToMemory(percept.Raw, resp)
+			return nil
 		}
 
+		// 4b. Context Budget — compress old turns if getting tight
+		if r.Budget.ShouldCompress(r.Conv.Messages()) && i > 0 {
+			r.compressOldTurns()
+		}
+
+		// Call LLM
+		fullResponse, err := r.callLLM()
 		if err != nil {
 			return fmt.Errorf("reasoner iteration %d: %w", i, err)
 		}
 
 		r.Conv.Assistant(fullResponse)
 
-		// Parse the response for tool calls
+		// Parse the response for tool calls (supports THINK/ACT/OBSERVE protocol)
 		parsed := r.parseResponse(fullResponse)
 
 		// If there are tool calls, execute them and continue the loop
 		if len(parsed.ToolCalls) > 0 {
 			for _, tc := range parsed.ToolCalls {
+				// Handle request_tools meta-tool
+				if tc.Name == "request_tools" {
+					cat := ToolCategory(tc.Args["category"])
+					newTools := ExpandCategory(cat, r.Tools.List(), r.activeTools)
+					if len(newTools) > 0 {
+						r.activeTools = append(r.activeTools, newTools...)
+						r.activeCats[cat] = true
+						names := CategoryNames(cat, r.Tools.List())
+						r.emitStatus(fmt.Sprintf("  [tools] +%s", strings.Join(names, ", ")))
+						r.Conv.ToolResult("request_tools", "Now available: "+strings.Join(names, ", "))
+						// Update system prompt with expanded tool list
+						r.Conv.System(r.compactSystemPrompt())
+					} else {
+						r.Conv.ToolResult("request_tools", "Those tools are already available.")
+					}
+					continue
+				}
+
 				r.emitStatus(fmt.Sprintf("  [tool] %s", tc.Name))
 
 				result, toolErr := r.executeTool(tc)
-				if toolErr != nil {
-					result = fmt.Sprintf("Error: %v", toolErr)
+
+				// 3a. Smart truncation (tool-specific)
+				if toolErr == nil {
+					result = SmartTruncate(tc.Name, result)
 				}
 
-				// Truncate large results
-				if len(result) > 4096 {
-					result = result[:4096] + "\n... (truncated)"
+				// 3b. Result validation
+				result, hint := ValidateToolResult(tc.Name, result, toolErr)
+
+				// 5. Synchronous reflection gate
+				gateHint := r.Gate.Check(tc.Name, result, toolErr)
+
+				// Inject hints as system guidance
+				if hint != "" {
+					result = result + "\nHint: " + hint
+				}
+				if gateHint != "" {
+					r.emitStatus(fmt.Sprintf("  [reflect] %s", gateHint))
+					result = result + "\n[System: " + gateHint + "]"
 				}
 
 				r.Conv.ToolResult(tc.Name, result)
@@ -145,6 +214,61 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 	return nil
 }
 
+// callLLM calls the model with streaming or batch mode.
+func (r *Reasoner) callLLM() (string, error) {
+	if r.OnToken != nil {
+		return r.streamCall()
+	}
+	return r.batchCall()
+}
+
+// compressOldTurns compresses the oldest conversation turns to free context space.
+func (r *Reasoner) compressOldTurns() {
+	msgs := r.Conv.Messages()
+	if len(msgs) < 5 {
+		return
+	}
+
+	// Compress using LLM if compressor is available
+	if r.Compressor != nil {
+		// Gather oldest 4 non-system messages
+		var toCompress []string
+		count := 0
+		for _, m := range msgs[1:] {
+			if count >= 4 {
+				break
+			}
+			toCompress = append(toCompress, m.Role+": "+m.Content)
+			count++
+		}
+		combined := strings.Join(toCompress, "\n")
+		atom, err := r.Compressor.Compress(combined, "")
+		if err == nil && atom != nil {
+			r.Conv.CompressOldest(4, atom.Content)
+			r.emitStatus("  [budget] compressed old context")
+			return
+		}
+	}
+
+	// Fallback: rule-based compression (no LLM call)
+	var summary []string
+	count := 0
+	for _, m := range msgs[1:] {
+		if count >= 4 {
+			break
+		}
+		// Keep first line of each message as summary
+		first := strings.SplitN(m.Content, "\n", 2)[0]
+		if len(first) > 100 {
+			first = first[:100] + "..."
+		}
+		summary = append(summary, m.Role+": "+first)
+		count++
+	}
+	r.Conv.CompressOldest(4, strings.Join(summary, "\n"))
+	r.emitStatus("  [budget] compressed old context (rule-based)")
+}
+
 func (r *Reasoner) toolPrompt() string {
 	var sb strings.Builder
 	sb.WriteString("Available tools:\n")
@@ -158,6 +282,8 @@ func (r *Reasoner) toolPrompt() string {
 var WorkDir string
 
 // compactSystemPrompt returns a focused system prompt optimized for small models.
+// Uses the THINK/ACT/OBSERVE protocol and progressive tool disclosure to
+// minimize token usage while maximizing reasoning quality.
 func (r *Reasoner) compactSystemPrompt() string {
 	wd := WorkDir
 	if wd == "" {
@@ -185,36 +311,36 @@ func (r *Reasoner) compactSystemPrompt() string {
 		projectCtx = "\n" + CurrentProject.ContextString() + "\n"
 	}
 
+	// Use progressive tool disclosure — only show selected tools
+	toolList := r.toolPrompt()
+	if len(r.activeTools) > 0 {
+		toolList = ToolPromptForSubset(r.activeTools)
+	}
+
 	return fmt.Sprintf(`%s
 
 Working directory: %s
 %s
-You MUST use tools to interact with the filesystem. NEVER guess file contents.
+NEVER guess file contents. Use tools to verify.
 
-TOOL CALL FORMAT — output this JSON on its own line, nothing else:
-{"tool": "TOOL_NAME", "args": {"key": "value"}}
+RESPONSE FORMAT:
+THINK: [your reasoning about what to do]
+ACT: {"tool": "TOOL_NAME", "args": {"key": "value"}}
 
-EXAMPLES:
-User: "List files in this project"
-{"tool": "tree", "args": {}}
+You will then see: OBSERVE [tool_name]: [result]
 
-User: "Read the README"
-{"tool": "read", "args": {"path": "README.md"}}
+When ready to answer, respond normally (no THINK/ACT).
 
-User: "Find all Go files"
-{"tool": "glob", "args": {"pattern": "*.go"}}
-
-User: "Search for function main"
-{"tool": "grep", "args": {"pattern": "func main"}}
+Example:
+THINK: I need to see the project structure.
+ACT: {"tool": "ls", "args": {}}
 
 RULES:
-1. ALWAYS call a tool first to gather information. Never guess or hallucinate.
-2. Use relative paths (e.g. "README.md" not "/full/path/README.md").
-3. After a tool result, you can call more tools or give your final answer.
-4. Final answer: respond normally WITHOUT any JSON tool call.
-5. Be direct and concise.
+1. ALWAYS use a tool first. Never guess.
+2. Use relative paths.
+3. Be direct and concise.
 
-%s`, selfKnowledge, wd, projectCtx, r.toolPrompt())
+%s`, selfKnowledge, wd, projectCtx, toolList)
 }
 
 type toolCallRaw struct {
@@ -284,17 +410,28 @@ func (r *Reasoner) parseResponse(content string) parsedResponse {
 		parsed.ToolCalls = r.findInlineToolCalls(content)
 	}
 
-	// Extract THINK/ANSWER from non-tool text
+	// Extract THINK/ACT/ANSWER from non-tool text
 	text := strings.Join(nonToolParts, "")
+	var thinkParts []string
 	for _, line := range strings.Split(text, "\n") {
 		trimmed := strings.TrimSpace(line)
 		upper := strings.ToUpper(trimmed)
 
 		if strings.HasPrefix(upper, "THINK:") {
-			parsed.Think = strings.TrimSpace(trimmed[6:])
+			thinkParts = append(thinkParts, strings.TrimSpace(trimmed[6:]))
+		} else if strings.HasPrefix(upper, "ACT:") {
+			// Parse ACT: line as inline tool call JSON
+			actJSON := strings.TrimSpace(trimmed[4:])
+			var raw toolCallRaw
+			if err := json.Unmarshal([]byte(actJSON), &raw); err == nil && raw.Name != "" {
+				parsed.ToolCalls = append(parsed.ToolCalls, raw.normalize())
+			}
 		} else if strings.HasPrefix(upper, "ANSWER:") {
 			parsed.Answer = strings.TrimSpace(trimmed[7:])
 		}
+	}
+	if len(thinkParts) > 0 {
+		parsed.Think = strings.Join(thinkParts, " ")
 	}
 
 	// If no explicit ANSWER but also no tool calls, the whole text is the answer

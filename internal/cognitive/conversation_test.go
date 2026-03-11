@@ -86,8 +86,8 @@ func TestToolResult(t *testing.T) {
 	if msgs[0].Role != "user" {
 		t.Errorf("expected role 'user' for tool result, got %q", msgs[0].Role)
 	}
-	if !strings.Contains(msgs[0].Content, "[Tool Result: read]") {
-		t.Error("expected '[Tool Result: read]' in tool result message")
+	if !strings.Contains(msgs[0].Content, "OBSERVE [read]:") {
+		t.Error("expected 'OBSERVE [read]:' in tool result message")
 	}
 	if !strings.Contains(msgs[0].Content, "file contents here") {
 		t.Error("expected tool output in message content")
