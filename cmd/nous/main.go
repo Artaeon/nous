@@ -378,7 +378,7 @@ func main() {
 
 		// Handle commands
 		if strings.HasPrefix(input, "/") {
-			if handleCommand(input, board, llm, toolReg, wm, ltm, projMem, undoStack, sessionStore, currentSession, reasoner, projectInfo, episodic, collector) {
+			if handleCommand(input, board, llm, toolReg, wm, ltm, projMem, undoStack, sessionStore, currentSession, reasoner, learner, projectInfo, episodic, collector) {
 				continue
 			}
 		}
@@ -416,7 +416,7 @@ func main() {
 	}
 }
 
-func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Client, toolReg *tools.Registry, wm *memory.WorkingMemory, ltm *memory.LongTermMemory, projMem *memory.ProjectMemory, undoStack *memory.UndoStack, sessions *cognitive.SessionStore, current *cognitive.Session, reasoner *cognitive.Reasoner, project *cognitive.ProjectInfo, episodic *memory.EpisodicMemory, collector *training.Collector) bool {
+func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Client, toolReg *tools.Registry, wm *memory.WorkingMemory, ltm *memory.LongTermMemory, projMem *memory.ProjectMemory, undoStack *memory.UndoStack, sessions *cognitive.SessionStore, current *cognitive.Session, reasoner *cognitive.Reasoner, learner *cognitive.Learner, project *cognitive.ProjectInfo, episodic *memory.EpisodicMemory, collector *training.Collector) bool {
 	parts := strings.Fields(input)
 	cmd := strings.ToLower(parts[0])
 
@@ -444,6 +444,8 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
     /training          Show training data stats
     /export <fmt>      Export training data (jsonl/alpaca/chatml)
     /finetune          Generate Modelfile + fine-tuning guide
+    /plan <goal>       Decompose a goal into steps and execute via Planner
+    /patterns          Show learned behavioral patterns
     /undo              Revert the last file change
     /history           Show undo stack
     /goals             Show active goals
@@ -724,6 +726,79 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 		fmt.Println("    3. Update Modelfile with ADAPTER path")
 		fmt.Printf("    4. ollama create %s -f %s\n", cfg.Name, mfPath)
 		fmt.Printf("    5. nous --model %s\n", cfg.Name)
+
+	case "/plan":
+		if len(parts) < 2 {
+			fmt.Println("  usage: /plan <goal description>")
+			break
+		}
+		goalDesc := strings.Join(parts[1:], " ")
+		goalID := fmt.Sprintf("goal-%d", time.Now().UnixMilli())
+		fmt.Printf("  pushing goal: %s\n", goalDesc)
+		fmt.Println("  planning...")
+		board.PushGoal(blackboard.Goal{
+			ID:          goalID,
+			Description: goalDesc,
+			Priority:    1,
+			Status:      "pending",
+			CreatedAt:   time.Now(),
+		})
+		// Wait for the goal to complete (Planner→Executor→Learner pipeline)
+		deadline := time.After(120 * time.Second)
+		ticker := time.NewTicker(200 * time.Millisecond)
+		defer ticker.Stop()
+		done := false
+		for !done {
+			select {
+			case <-deadline:
+				fmt.Println("  (timeout — goal still in progress)")
+				done = true
+			case <-ticker.C:
+				plan, ok := board.PlanForGoal(goalID)
+				if !ok {
+					continue
+				}
+				switch plan.Status {
+				case "completed":
+					fmt.Println("  goal completed!")
+					for _, s := range plan.Steps {
+						status := "OK"
+						if s.Status == "failed" {
+							status = "FAIL"
+						}
+						desc := s.Description
+						if len(desc) > 60 {
+							desc = desc[:60] + "..."
+						}
+						fmt.Printf("    [%s] %s: %s\n", status, s.Tool, desc)
+					}
+					done = true
+				case "failed":
+					fmt.Println("  goal failed.")
+					for _, s := range plan.Steps {
+						if s.Status == "failed" {
+							fmt.Printf("    failed at: %s — %s\n", s.Tool, s.Result)
+						}
+					}
+					done = true
+				}
+			}
+		}
+
+	case "/patterns":
+		patterns := learner.Patterns()
+		if len(patterns) == 0 {
+			fmt.Println("  no patterns learned yet")
+			fmt.Println("  (patterns are extracted after successful multi-step interactions)")
+		} else {
+			fmt.Printf("  %d learned patterns:\n", len(patterns))
+			for i, p := range patterns {
+				chain := strings.Join(p.ToolChain, "→")
+				age := time.Since(p.LastUsed).Truncate(time.Second)
+				fmt.Printf("  %d. [%.0f%%] %s: %s (used %d times, %s ago)\n",
+					i+1, p.Confidence*100, p.Trigger, chain, p.Uses, age)
+			}
+		}
 
 	case "/clear":
 		reasoner.Conv = cognitive.NewConversation(20)
