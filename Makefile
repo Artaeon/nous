@@ -1,4 +1,4 @@
-.PHONY: build run clean test install serve docker
+.PHONY: build run clean test test-v test-race test-short ci install serve docker
 
 BINARY := nous
 SRC := ./cmd/nous
@@ -24,6 +24,12 @@ test:
 test-v:
 	go test ./... -v -count=1
 
+test-race:
+	go test ./... -race -count=1
+
+test-short:
+	go test ./... -short -count=1
+
 fmt:
 	go fmt ./...
 
@@ -31,6 +37,8 @@ vet:
 	go vet ./...
 
 lint: fmt vet
+
+ci: fmt vet test test-race
 
 # Install to /opt/nous with systemd service
 install: build
