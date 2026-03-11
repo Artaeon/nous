@@ -263,6 +263,108 @@ func (em *EpisodicMemory) SuccessRate() float64 {
 	return float64(successes) / float64(len(em.episodes))
 }
 
+// TopicFrequency returns the most frequently discussed topics across all episodes,
+// enabling the system to understand what the user cares about.
+func (em *EpisodicMemory) TopicFrequency(limit int) []TagCount {
+	em.mu.RLock()
+	defer em.mu.RUnlock()
+
+	freq := make(map[string]int)
+	for _, ep := range em.episodes {
+		for _, tag := range ep.Tags {
+			freq[tag]++
+		}
+	}
+
+	var counts []TagCount
+	for tag, count := range freq {
+		if count >= 2 { // only topics mentioned 2+ times
+			counts = append(counts, TagCount{Tag: tag, Count: count})
+		}
+	}
+
+	// Sort by count descending
+	for i := 0; i < len(counts); i++ {
+		for j := i + 1; j < len(counts); j++ {
+			if counts[j].Count > counts[i].Count {
+				counts[i], counts[j] = counts[j], counts[i]
+			}
+		}
+	}
+
+	if len(counts) > limit {
+		counts = counts[:limit]
+	}
+	return counts
+}
+
+// TagCount holds a topic tag and its occurrence count.
+type TagCount struct {
+	Tag   string
+	Count int
+}
+
+// RelatedEpisodes finds episodes that share tags with the given episode.
+// This enables "you also asked about X" style connections.
+func (em *EpisodicMemory) RelatedEpisodes(epID string, limit int) []Episode {
+	em.mu.RLock()
+	defer em.mu.RUnlock()
+
+	// Find the source episode
+	var sourceTags map[string]bool
+	for _, ep := range em.episodes {
+		if ep.ID == epID {
+			sourceTags = make(map[string]bool, len(ep.Tags))
+			for _, t := range ep.Tags {
+				sourceTags[t] = true
+			}
+			break
+		}
+	}
+	if sourceTags == nil {
+		return nil
+	}
+
+	type scored struct {
+		ep    Episode
+		score int
+	}
+	var matches []scored
+	for _, ep := range em.episodes {
+		if ep.ID == epID {
+			continue
+		}
+		score := 0
+		for _, t := range ep.Tags {
+			if sourceTags[t] {
+				score++
+			}
+		}
+		if score > 0 {
+			matches = append(matches, scored{ep: ep, score: score})
+		}
+	}
+
+	// Sort by overlap score desc
+	for i := 0; i < len(matches); i++ {
+		for j := i + 1; j < len(matches); j++ {
+			if matches[j].score > matches[i].score {
+				matches[i], matches[j] = matches[j], matches[i]
+			}
+		}
+	}
+
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+
+	results := make([]Episode, len(matches))
+	for i, m := range matches {
+		results[i] = m.ep
+	}
+	return results
+}
+
 // ToolUsageStats returns how many times each tool has been used across all episodes.
 func (em *EpisodicMemory) ToolUsageStats() map[string]int {
 	em.mu.RLock()
