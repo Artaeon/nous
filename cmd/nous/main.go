@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -342,7 +343,12 @@ func main() {
 	}
 
 	// --- REPL Mode ---
-	fmt.Printf("  %stype /help for commands, /quit to exit%s\n\n", cognitive.ColorDim, cognitive.ColorReset)
+	fmt.Print(cognitive.Panel("Quick start", []string{
+		cognitive.Styled(cognitive.ColorCyan, "/dashboard") + " overview of the local agent",
+		cognitive.Styled(cognitive.ColorCyan, "/help") + " browse commands and workflows",
+		cognitive.Styled(cognitive.ColorCyan, "/plan <goal>") + " delegate a longer task",
+		cognitive.Styled(cognitive.ColorCyan, "/quit") + " save and exit",
+	}))
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
@@ -418,45 +424,22 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 		os.Exit(0)
 
 	case "/help", "/h":
-		fmt.Print(`
-  Commands:
-    /help              Show this help
-    /status            Show cognitive system status
-    /memory            Show working memory contents
-    /longterm          Show long-term memory entries
-    /episodes          Show recent episodic memories
-    /search <query>    Semantic search through all memories
-    /remember <k> <v>  Remember a project fact
-    /recall <query>    Search project memory
-    /forget <key>      Forget a project fact
-    /training          Show training data stats
-    /autotune [force]  Show auto-tune status or force a tune
-    /export <fmt>      Export training data (jsonl/alpaca/chatml)
-    /finetune          Generate Modelfile + fine-tuning guide
-    /plan <goal>       Decompose a goal into steps and execute via Planner
-    /patterns          Show learned behavioral patterns
-    /undo              Revert the last file change
-    /history           Show undo stack
-    /goals             Show active goals
-    /model             Show current model info
-    /tools             List available tools
-    /project           Show project info
-    /sessions          List saved sessions
-    /save [name]       Save current session with a name
-    /clear             Clear conversation context
-    /quit              Exit Nous (auto-saves session)
-`)
+		fmt.Print(renderHelp())
+
+	case "/dashboard":
+		fmt.Print(renderDashboard(board, wm, ltm, projMem, undoStack, current, episodic, collector, autoTuner))
 
 	case "/status":
-		fmt.Printf("  Percepts: %d\n", len(board.Percepts()))
-		fmt.Printf("  Active goals: %d\n", len(board.ActiveGoals()))
-		fmt.Printf("  Working memory: %d items\n", wm.Size())
-		fmt.Printf("  Long-term memory: %d entries\n", ltm.Size())
-		fmt.Printf("  Project memory: %d facts\n", projMem.Size())
-		fmt.Printf("  Undo stack: %d entries\n", undoStack.Size())
-		fmt.Printf("  Recent actions: %d\n", len(board.RecentActions(100)))
-		fmt.Printf("  Conversation: %s\n", reasoner.Conv.Summary())
-		fmt.Printf("  Session: %s (%s)\n", current.Name, current.ID)
+		fmt.Print(cognitive.Section("System status"))
+		fmt.Print(cognitive.KeyValue("Percepts", fmt.Sprintf("%d", len(board.Percepts()))))
+		fmt.Print(cognitive.KeyValue("Active goals", fmt.Sprintf("%d", len(board.ActiveGoals()))))
+		fmt.Print(cognitive.KeyValue("Working memory", fmt.Sprintf("%d items", wm.Size())))
+		fmt.Print(cognitive.KeyValue("Long-term", fmt.Sprintf("%d entries", ltm.Size())))
+		fmt.Print(cognitive.KeyValue("Project facts", fmt.Sprintf("%d", projMem.Size())))
+		fmt.Print(cognitive.KeyValue("Undo stack", fmt.Sprintf("%d entries", undoStack.Size())))
+		fmt.Print(cognitive.KeyValue("Recent actions", fmt.Sprintf("%d", len(board.RecentActions(100)))))
+		fmt.Print(cognitive.KeyValue("Conversation", reasoner.Conv.Summary()))
+		fmt.Print(cognitive.KeyValue("Session", fmt.Sprintf("%s (%s)", current.Name, current.ID)))
 
 	case "/memory":
 		items := wm.MostRelevant(10)
@@ -486,28 +469,28 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 		}
 
 	case "/model":
-		fmt.Printf("  model: %s\n", llm.Model())
+		fmt.Print(cognitive.Section("Model routing"))
+		fmt.Print(cognitive.KeyValue("Active model", llm.Model()))
 		models, err := llm.ListModels()
 		if err == nil {
-			fmt.Println("  available models:")
+			fmt.Print(cognitive.Section("Available local models"))
 			for _, m := range models {
-				fmt.Printf("    - %s (%.1f MB)\n", m.Name, float64(m.Size)/(1024*1024))
+				fmt.Printf("  • %s%s%s  %s%.1f MB%s\n", cognitive.ColorCyan, m.Name, cognitive.ColorReset, cognitive.ColorDim, float64(m.Size)/(1024*1024), cognitive.ColorReset)
 			}
 		}
 
 	case "/tools":
-		for _, t := range toolReg.List() {
-			fmt.Printf("  %-10s %s\n", t.Name, t.Description)
-		}
+		fmt.Print(renderToolCatalog(toolReg))
 
 	case "/project":
-		fmt.Print(project.ContextString())
+		fmt.Print(renderProjectView(project))
 
 	case "/sessions":
 		list, err := sessions.List()
 		if err != nil || len(list) == 0 {
 			fmt.Println("  no saved sessions")
 		} else {
+			fmt.Print(cognitive.Section("Saved sessions"))
 			for _, s := range list {
 				marker := " "
 				if s.ID == current.ID {
@@ -517,7 +500,8 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 					marker, s.ID, s.Name, len(s.Messages),
 					s.UpdatedAt.Format("2006-01-02 15:04"))
 			}
-			fmt.Println("\n  resume with: nous --resume <ID>")
+			fmt.Println()
+			fmt.Print(cognitive.KeyValue("Resume", "nous --resume <ID>"))
 		}
 
 	case "/save":
@@ -825,6 +809,109 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 	}
 
 	return true
+}
+
+func renderHelp() string {
+	var b strings.Builder
+	b.WriteString(cognitive.Panel("Core workflows", []string{
+		cognitive.Styled(cognitive.ColorCyan, "/dashboard") + " snapshot of memory, sessions, training, and uptime signals",
+		cognitive.Styled(cognitive.ColorCyan, "/status") + " low-level runtime counters and current session state",
+		cognitive.Styled(cognitive.ColorCyan, "/plan <goal>") + " hand a longer task to the planner/executor pipeline",
+		cognitive.Styled(cognitive.ColorCyan, "/tools") + " browse built-in tools by category",
+	}))
+	b.WriteString(cognitive.Panel("Memory and recall", []string{
+		"/memory, /longterm, /episodes, /search <query>",
+		"/remember <key> <value>, /recall <query>, /forget <key>",
+	}))
+	b.WriteString(cognitive.Panel("Training and tuning", []string{
+		"/training, /autotune [force], /export <jsonl|alpaca|chatml>",
+		"/finetune to generate a Modelfile and local tuning guide",
+	}))
+	b.WriteString(cognitive.Panel("Sessions and safety", []string{
+		"/sessions, /save [name], /clear, /undo, /history, /quit",
+		"Tip: use /dashboard first when reconnecting to a long-lived session.",
+	}))
+	return b.String()
+}
+
+func renderDashboard(board *blackboard.Blackboard, wm *memory.WorkingMemory, ltm *memory.LongTermMemory, projMem *memory.ProjectMemory, undoStack *memory.UndoStack, current *cognitive.Session, episodic *memory.EpisodicMemory, collector *training.Collector, autoTuner *training.AutoTuner) string {
+	stats := autoTuner.Stats()
+	left := cognitive.Panel("Runtime", []string{
+		fmt.Sprintf("Percepts       %d", len(board.Percepts())),
+		fmt.Sprintf("Active goals   %d", len(board.ActiveGoals())),
+		fmt.Sprintf("Recent actions %d", len(board.RecentActions(25))),
+		fmt.Sprintf("Undo entries   %d", undoStack.Size()),
+	})
+	right := cognitive.Panel("Memory", []string{
+		fmt.Sprintf("Working   %d items", wm.Size()),
+		fmt.Sprintf("Long-term %d entries", ltm.Size()),
+		fmt.Sprintf("Project   %d facts", projMem.Size()),
+		fmt.Sprintf("Episodes  %d total (%.0f%% success)", episodic.Size(), episodic.SuccessRate()*100),
+	})
+	train := cognitive.Panel("Learning loop", []string{
+		fmt.Sprintf("Training pairs   %d", collector.Size()),
+		fmt.Sprintf("Avg quality      %.2f", stats.AvgQuality),
+		fmt.Sprintf("Tuned model      %s", stats.TunedName),
+		fmt.Sprintf("Ready to tune    %t", stats.Ready),
+	})
+	session := cognitive.Panel("Session", []string{
+		fmt.Sprintf("Name      %s", current.Name),
+		fmt.Sprintf("ID        %s", current.ID),
+		fmt.Sprintf("Messages  %d", len(current.Messages)),
+	})
+
+	return left + right + train + session
+}
+
+func renderToolCatalog(toolReg *tools.Registry) string {
+	toolsByName := make(map[string]tools.Tool)
+	for _, tool := range toolReg.List() {
+		toolsByName[tool.Name] = tool
+	}
+
+	var b strings.Builder
+	for _, category := range cognitive.AllCategories {
+		names := cognitive.CategoryNames(category, toolReg.List())
+		sort.Strings(names)
+		if len(names) == 0 {
+			continue
+		}
+		lines := make([]string, 0, len(names))
+		for _, name := range names {
+			tool := toolsByName[name]
+			lines = append(lines, fmt.Sprintf("%s%-14s%s %s", cognitive.ColorCyan, name, cognitive.ColorReset, tool.Description))
+		}
+		b.WriteString(cognitive.Panel(strings.Title(string(category)), lines))
+	}
+	return b.String()
+}
+
+func renderProjectView(project *cognitive.ProjectInfo) string {
+	lines := []string{
+		fmt.Sprintf("Name      %s", project.Name),
+		fmt.Sprintf("Language  %s", project.Language),
+		fmt.Sprintf("Files     %d", project.FileCount),
+	}
+	if len(project.KeyFiles) > 0 {
+		keys := append([]string(nil), project.KeyFiles...)
+		sort.Strings(keys)
+		if len(keys) > 4 {
+			keys = keys[:4]
+		}
+		lines = append(lines, fmt.Sprintf("Key files %s", strings.Join(keys, ", ")))
+	}
+
+	var b strings.Builder
+	b.WriteString(cognitive.Panel("Project", lines))
+	if strings.TrimSpace(project.Tree) != "" {
+		b.WriteString(cognitive.Section("Structure"))
+		for _, line := range strings.Split(strings.TrimSuffix(project.Tree, "\n"), "\n") {
+			b.WriteString("  ")
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
 }
 
 // scoreInteractionQuality rates an interaction for training data collection.
