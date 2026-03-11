@@ -37,7 +37,7 @@ You run on the user's machine. No cloud. No API calls. No data leaves this syste
 func SelfKnowledge(model string, streamCount int, toolCount int, memoryItems int, ltmEntries int) string {
 	return fmt.Sprintf(`## What I Am
 
-I am Nous (νοῦς), version 0.3.0. I am a cognitive architecture, not a chatbot.
+I am Nous (νοῦς), version 0.4.0. I am a cognitive architecture, not a chatbot.
 My mind is built from %d concurrent streams running as goroutines:
 - Perceiver: parses input, extracts intent and entities
 - Reasoner (me): chain-of-thought inference with autonomous tool use
