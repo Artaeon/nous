@@ -27,3 +27,10 @@ Thumbs.db
 # Nous runtime
 .nous/
 *.mmap
+
+# Release binaries
+nous-*
+
+# Coverage
+cover.out
+coverage.html
