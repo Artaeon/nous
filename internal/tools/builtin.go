@@ -48,7 +48,7 @@ func RegisterBuiltins(r *Registry, workDir string, allowShell bool, undo ...*mem
 
 	r.Register(Tool{
 		Name:        "edit",
-		Description: "Replace a specific string in a file. Args: path (required), old (the exact text to find), new (the replacement text).",
+		Description: "Replace text in a file. Args: path (required), old (text to find), new (replacement). Optional: line (line number for context — reads surrounding lines to find match).",
 		Execute: func(args map[string]string) (string, error) {
 			if undoStack != nil {
 				pushUndoForEdit(undoStack, resolvePath(workDir, args["path"]))
@@ -316,11 +316,37 @@ func toolEdit(workDir string, args map[string]string) (string, error) {
 	content := string(data)
 	count := strings.Count(content, oldStr)
 
+	// If exact match not found, try line-based context matching
 	if count == 0 {
-		return "", fmt.Errorf("old string not found in %s", path)
+		if lineStr, ok := args["line"]; ok {
+			if lineNum, err := strconv.Atoi(lineStr); err == nil {
+				// Use the line number to narrow the search context
+				result, editErr := lineContextEdit(content, path, lineNum, oldStr, newStr)
+				if editErr == nil {
+					if writeErr := os.WriteFile(path, []byte(result), 0644); writeErr != nil {
+						return "", fmt.Errorf("write edited file: %w", writeErr)
+					}
+					return fmt.Sprintf("edited %s near line %d", path, lineNum), nil
+				}
+			}
+		}
+
+		// Try trimmed match (ignore leading/trailing whitespace differences)
+		trimmedOld := strings.TrimSpace(oldStr)
+		if trimmedOld != "" {
+			lines := strings.Split(content, "\n")
+			for i, line := range lines {
+				if strings.Contains(strings.TrimSpace(line), trimmedOld) ||
+					strings.Contains(trimmedOld, strings.TrimSpace(line)) {
+					return "", fmt.Errorf("old string not found exactly in %s, but line %d looks similar: %q. Read the file around line %d to see exact content", path, i+1, strings.TrimSpace(line), i+1)
+				}
+			}
+		}
+
+		return "", fmt.Errorf("old string not found in %s. Read the file first to see exact content", path)
 	}
 	if count > 1 {
-		return "", fmt.Errorf("old string found %d times in %s — must be unique", count, path)
+		return "", fmt.Errorf("old string found %d times in %s — must be unique. Add more surrounding context", count, path)
 	}
 
 	newContent := strings.Replace(content, oldStr, newStr, 1)
@@ -329,6 +355,43 @@ func toolEdit(workDir string, args map[string]string) (string, error) {
 	}
 
 	return fmt.Sprintf("edited %s: replaced 1 occurrence", path), nil
+}
+
+// lineContextEdit finds the best match near a line number and applies the edit.
+func lineContextEdit(content, path string, lineNum int, oldStr, newStr string) (string, error) {
+	lines := strings.Split(content, "\n")
+	if lineNum < 1 || lineNum > len(lines) {
+		return "", fmt.Errorf("line %d out of range", lineNum)
+	}
+
+	// Search a window of ±5 lines around the target
+	start := lineNum - 6
+	if start < 0 {
+		start = 0
+	}
+	end := lineNum + 5
+	if end > len(lines) {
+		end = len(lines)
+	}
+
+	window := strings.Join(lines[start:end], "\n")
+	if strings.Contains(window, oldStr) {
+		// Found in the window — replace in full content
+		return strings.Replace(content, oldStr, newStr, 1), nil
+	}
+
+	// Try matching trimmed old string against lines in the window
+	trimmedOld := strings.TrimSpace(oldStr)
+	for i := start; i < end; i++ {
+		if strings.TrimSpace(lines[i]) == trimmedOld {
+			// Replace preserving original indentation
+			indent := lines[i][:len(lines[i])-len(strings.TrimLeft(lines[i], " \t"))]
+			lines[i] = indent + strings.TrimSpace(newStr)
+			return strings.Join(lines, "\n"), nil
+		}
+	}
+
+	return "", fmt.Errorf("no match near line %d", lineNum)
 }
 
 func toolGlob(workDir string, args map[string]string) (string, error) {
