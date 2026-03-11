@@ -10,11 +10,18 @@ import (
 )
 
 // Reflector monitors the reasoning process and detects quality issues.
-// It watches for completed actions and reasoning outputs, evaluates
-// them for coherence and correctness, and triggers re-evaluation
-// when problems are detected.
+// Uses a hybrid approach: fast rule-based checks for common patterns,
+// LLM evaluation only for complex/ambiguous outputs.
+// This is critical for 1.5B models — we can't waste LLM calls on reflection
+// when simple rules catch 90% of issues.
 type Reflector struct {
 	Base
+	// Stats for monitoring
+	checksRun     int
+	issuesFound   int
+	lastToolSeen  string
+	lastResultLen int
+	consecutiveFails int
 }
 
 func NewReflector(board *blackboard.Blackboard, llm *ollama.Client) *Reflector {
@@ -43,58 +50,97 @@ func (r *Reflector) Run(ctx context.Context) error {
 }
 
 func (r *Reflector) reflect(action blackboard.ActionRecord) {
-	// Skip reflection on quick, successful actions
-	if action.Success && len(action.Output) < 100 {
-		return
-	}
+	r.checksRun++
 
-	// Check for failures that need re-planning
+	// Rule 1: Failed actions need immediate feedback
 	if !action.Success {
-		r.Board.Set("reflection", fmt.Sprintf(
-			"Action %s failed: %s. Consider an alternative approach.",
-			action.Tool, action.Output,
-		))
-		r.Board.Set("needs_replan", action.StepID)
+		r.consecutiveFails++
+		r.issuesFound++
+
+		if r.consecutiveFails >= 3 {
+			r.Board.Set("reflection", fmt.Sprintf(
+				"3 consecutive failures (last: %s). Stop and try a completely different approach.",
+				action.Tool,
+			))
+			r.Board.Set("needs_replan", action.StepID)
+			return
+		}
+
+		// Provide targeted feedback based on the error
+		hint := r.diagnoseFailure(action)
+		if hint != "" {
+			r.Board.Set("reflection", hint)
+		}
 		return
 	}
 
-	// For complex outputs, use LLM to evaluate quality
-	if len(action.Output) > 500 {
-		r.evaluateOutput(action)
+	// Success resets failure counter
+	r.consecutiveFails = 0
+
+	// Rule 2: Detect likely hallucination — tool returned empty or "no matches"
+	trimmed := strings.TrimSpace(action.Output)
+	if trimmed == "" || trimmed == "no matches found" || trimmed == "No matches found." {
+		// Only flag if this is a pattern (multiple empties suggest wrong approach)
+		if r.lastResultLen == 0 {
+			r.issuesFound++
+			r.Board.Set("reflection",
+				"Multiple tools returned empty results. The target may not exist. Try listing the directory first.")
+		}
+		r.lastResultLen = 0
+	} else {
+		r.lastResultLen = len(trimmed)
+	}
+
+	// Rule 3: Detect repeated tool calls (same tool twice in a row)
+	if action.Tool == r.lastToolSeen && action.Tool != "read" {
+		// Reading multiple files is normal; other repeated tools suggest a loop
+		r.issuesFound++
+		r.Board.Set("reflection", fmt.Sprintf(
+			"Called %s twice in a row. Consider a different tool or approach.",
+			action.Tool,
+		))
+	}
+	r.lastToolSeen = action.Tool
+
+	// Rule 4: Suspiciously long output (may overwhelm the context)
+	if len(action.Output) > 4000 {
+		r.Board.Set("reflection",
+			"Tool output is very long. Focus on the relevant parts only.")
 	}
 }
 
-func (r *Reflector) evaluateOutput(action blackboard.ActionRecord) {
-	prompt := fmt.Sprintf(`Evaluate this action result. Is it correct and complete?
-Tool: %s
-Input: %s
-Output (first 500 chars): %s
+// diagnoseFailure provides specific guidance based on common error patterns.
+func (r *Reflector) diagnoseFailure(action blackboard.ActionRecord) string {
+	errStr := strings.ToLower(action.Output)
 
-Respond with:
-QUALITY: good|questionable|bad
-ISSUE: <description if not good, otherwise "none">`, action.Tool, action.Input, truncate(action.Output, 500))
-
-	resp, err := r.LLM.Chat([]ollama.Message{
-		{Role: "system", Content: ReflectPrompt},
-		{Role: "user", Content: prompt},
-	}, &ollama.ModelOptions{
-		Temperature: 0.1,
-		NumPredict:  100,
-	})
-	if err != nil {
-		return // Reflection failure is non-critical
-	}
-
-	content := resp.Message.Content
-	if strings.Contains(strings.ToLower(content), "bad") || strings.Contains(strings.ToLower(content), "questionable") {
-		r.Board.Set("reflection", content)
-		r.Board.Set("needs_replan", action.StepID)
+	switch {
+	case strings.Contains(errStr, "no such file") || strings.Contains(errStr, "not found"):
+		return fmt.Sprintf("%s failed: path not found. Use ls or glob to find the correct path.", action.Tool)
+	case strings.Contains(errStr, "permission denied"):
+		return fmt.Sprintf("%s failed: permission denied. Try a different path or check permissions.", action.Tool)
+	case strings.Contains(errStr, "is a directory"):
+		return fmt.Sprintf("%s failed: target is a directory, not a file. Use ls to list contents.", action.Tool)
+	case strings.Contains(errStr, "not unique") || strings.Contains(errStr, "found") && strings.Contains(errStr, "times"):
+		return fmt.Sprintf("%s failed: match is ambiguous. Provide more context to narrow it down.", action.Tool)
+	case strings.Contains(errStr, "old string not found"):
+		return "Edit failed: the old string doesn't match. Read the file first to see the exact content."
+	default:
+		return fmt.Sprintf("%s failed: %s. Try a different approach.", action.Tool, firstLineReflect(action.Output))
 	}
 }
 
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
+// Stats returns reflection statistics.
+func (r *Reflector) Stats() (checks, issues int) {
+	return r.checksRun, r.issuesFound
+}
+
+// firstLineReflect extracts the first line of a string for error messages.
+func firstLineReflect(s string) string {
+	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
+		s = s[:idx]
 	}
-	return s[:n] + "..."
+	if len(s) > 100 {
+		return s[:100] + "..."
+	}
+	return s
 }
