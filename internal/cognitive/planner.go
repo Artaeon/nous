@@ -49,7 +49,13 @@ Each step should be a single action. Use this format:
 
 STEP: <description> | TOOL: <tool_name> | ARGS: <arguments>
 
-Available tools: shell (run commands), read (read files), write (write files), search (search text), browse (fetch URLs)
+Available tools:
+- read (read a file), write (create/overwrite a file), edit (modify part of a file)
+- grep (search file contents), glob (find files by pattern), ls (list directory), tree (directory tree)
+- shell (run shell command), run (run a project command like build/test)
+- fetch (HTTP GET a URL), git (run git commands)
+- find_replace (regex find and replace), patch (multi-line edit), diff (compare files)
+- mkdir (create directory)
 
 Goal: %s`, goal.Description)
 
