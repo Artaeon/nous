@@ -16,6 +16,7 @@ import (
 	"github.com/artaeon/nous/internal/blackboard"
 	"github.com/artaeon/nous/internal/cognitive"
 	"github.com/artaeon/nous/internal/compress"
+	"github.com/artaeon/nous/internal/index"
 	"github.com/artaeon/nous/internal/memory"
 	"github.com/artaeon/nous/internal/ollama"
 	"github.com/artaeon/nous/internal/tools"
@@ -100,6 +101,17 @@ func main() {
 	cognitive.CurrentProject = projectInfo
 	fmt.Printf("%s (%s, %d files)\n", projectInfo.Name, projectInfo.Language, projectInfo.FileCount)
 
+	// Build codebase index (Go AST parsing for structural context)
+	nousDir := filepath.Join(workDir, ".nous")
+	codeIndex := index.NewCodebaseIndex(nousDir)
+	if projectInfo.Language == "Go" {
+		if err := codeIndex.Build(workDir); err != nil {
+			fmt.Printf("  index: %v\n", err)
+		} else {
+			fmt.Printf("  codebase index: %d symbols\n", codeIndex.Size())
+		}
+	}
+
 	// Initialize undo stack and tool registry
 	undoStack := memory.NewUndoStack(100)
 	toolReg := tools.NewRegistry()
@@ -145,6 +157,7 @@ func main() {
 	reasoner.LongTermMem = ltm
 	reasoner.ProjectMem = projMem
 	reasoner.Compressor = compress.NewCompressor(llm)
+	reasoner.CodeIndex = codeIndex
 	planner := cognitive.NewPlanner(board, llm)
 	executor := cognitive.NewExecutor(board, llm)
 	reflector := cognitive.NewReflector(board, llm)

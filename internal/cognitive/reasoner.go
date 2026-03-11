@@ -8,6 +8,7 @@ import (
 
 	"github.com/artaeon/nous/internal/blackboard"
 	"github.com/artaeon/nous/internal/compress"
+	"github.com/artaeon/nous/internal/index"
 	"github.com/artaeon/nous/internal/memory"
 	"github.com/artaeon/nous/internal/ollama"
 	"github.com/artaeon/nous/internal/tools"
@@ -33,6 +34,7 @@ type Reasoner struct {
 	LongTermMem *memory.LongTermMemory
 	ProjectMem  *memory.ProjectMemory
 	Compressor  *compress.Compressor
+	CodeIndex   *index.CodebaseIndex
 	Budget      *ContextBudget
 	Gate        *ReflectionGate
 	OnToken     func(token string, done bool)
@@ -591,6 +593,14 @@ func (r *Reasoner) recallMemories(input string) string {
 		}
 		if len(ltmLines) > 0 {
 			parts = append(parts, "[Long-term Memory]\n"+strings.Join(ltmLines, "\n"))
+		}
+	}
+
+	// Recall from codebase index (structural context)
+	if r.CodeIndex != nil && r.CodeIndex.Size() > 0 {
+		indexCtx := r.CodeIndex.RelevantContext(input, 5)
+		if indexCtx != "" {
+			parts = append(parts, indexCtx)
 		}
 	}
 
