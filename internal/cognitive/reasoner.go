@@ -185,7 +185,7 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 				if parsed.Answer != "" {
 					finalAnswer = parsed.Answer
 				}
-				r.Board.Set("last_answer", finalAnswer)
+				r.publishAnswer(finalAnswer)
 				if parsed.Think != "" {
 					r.Board.Set("last_thought", parsed.Think)
 				}
@@ -280,7 +280,7 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 				r.Conv = finalConv
 				resp, err := r.callLLM()
 				if err == nil {
-					r.Board.Set("last_answer", resp)
+					r.publishAnswer(resp)
 					r.storeToMemory(percept.Raw, resp)
 				}
 				return err
@@ -295,7 +295,7 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 		}
 	}
 
-	r.Board.Set("last_answer", "(reached maximum tool iterations)")
+	r.publishAnswer("(reached maximum tool iterations)")
 	return nil
 }
 
@@ -312,6 +312,16 @@ func (r *Reasoner) callLLM() (string, error) {
 		return "", err
 	}
 	return res.Content, err
+}
+
+func (r *Reasoner) publishAnswer(answer string) {
+	r.Board.Set("last_answer", answer)
+
+	if key, ok := r.Board.Get("answer_key"); ok {
+		if s, ok := key.(string); ok && strings.TrimSpace(s) != "" {
+			r.Board.Set(s, answer)
+		}
+	}
 }
 
 // callLLMNative calls the model and returns both content and native tool calls.
