@@ -2,6 +2,7 @@ package cognitive
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -85,16 +86,20 @@ func TestSmartTruncateRead(t *testing.T) {
 	// Create a file with 60 lines
 	var lines []string
 	for i := 0; i < 60; i++ {
-		lines = append(lines, "line content here")
+		lines = append(lines, fmt.Sprintf("line %d content here", i+1))
 	}
 	result := SmartTruncate("read", strings.Join(lines, "\n"))
-	if !strings.Contains(result, "[...20 lines omitted...]") {
+	if !strings.Contains(result, "lines omitted") {
 		t.Error("read truncation should show omitted line count")
 	}
-	// Should have first 20 + marker + last 20
-	parts := strings.Split(result, "[...20 lines omitted...]")
-	if len(parts) != 2 {
-		t.Error("should split into head and tail around the marker")
+	if !strings.Contains(result, "Landmarks") {
+		t.Error("read truncation should include landmark lines from middle")
+	}
+	if !strings.Contains(result, "[line") {
+		t.Error("read truncation should include line number markers")
+	}
+	if !strings.Contains(result, "read with offset/limit") {
+		t.Error("read truncation should hint about offset/limit")
 	}
 }
 
@@ -104,8 +109,8 @@ func TestSmartTruncateGrep(t *testing.T) {
 		lines = append(lines, "match line")
 	}
 	result := SmartTruncate("grep", strings.Join(lines, "\n"))
-	if !strings.Contains(result, "...and 15 more") {
-		t.Error("grep truncation should cap at 15 results")
+	if !strings.Contains(result, "...and 10 more") {
+		t.Error("grep truncation should cap at 20 results")
 	}
 }
 

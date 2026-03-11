@@ -69,22 +69,41 @@ func (b *ContextBudget) ShouldForceAnswer(msgs []ollama.Message) bool {
 }
 
 // SmartTruncate applies tool-specific truncation to keep results compact.
+// For code files, preserves line numbers so the LLM can reference specific lines.
 // This is critical for small models where every token matters.
 func SmartTruncate(toolName, result string) string {
 	lines := strings.Split(result, "\n")
 
 	switch toolName {
 	case "read":
-		// Keep first 20 + last 20 lines for files
+		// Keep first 25 + landmark lines from middle + last 15
+		// Include line markers so LLM can say "edit line 156"
 		if len(lines) > 50 {
-			head := strings.Join(lines[:20], "\n")
-			tail := strings.Join(lines[len(lines)-20:], "\n")
-			return fmt.Sprintf("%s\n[...%d lines omitted...]\n%s", head, len(lines)-40, tail)
+			head := strings.Join(lines[:25], "\n")
+			tail := strings.Join(lines[len(lines)-15:], "\n")
+
+			// Sample every 20th line from the middle for navigation
+			var landmarks []string
+			for i := 25; i < len(lines)-15; i += 20 {
+				trimmed := strings.TrimSpace(lines[i])
+				if trimmed != "" && trimmed != "{" && trimmed != "}" {
+					landmarks = append(landmarks, fmt.Sprintf("  [line %d] %s", i+1, trimmed))
+				}
+			}
+
+			omitted := len(lines) - 40
+			midSection := fmt.Sprintf("[...%d lines omitted. Landmarks from middle:]", omitted)
+			if len(landmarks) > 0 {
+				midSection += "\n" + strings.Join(landmarks, "\n")
+			}
+			midSection += "\n[Use read with offset/limit to see specific sections]"
+
+			return fmt.Sprintf("%s\n%s\n%s", head, midSection, tail)
 		}
 	case "grep", "glob":
-		// Cap search results at 15 matches
-		if len(lines) > 15 {
-			return strings.Join(lines[:15], "\n") + fmt.Sprintf("\n...and %d more", len(lines)-15)
+		// Cap search results at 20 matches (increased from 15)
+		if len(lines) > 20 {
+			return strings.Join(lines[:20], "\n") + fmt.Sprintf("\n...and %d more", len(lines)-20)
 		}
 	case "tree", "ls":
 		// Cap directory listings at 30 entries
