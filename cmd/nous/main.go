@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -24,14 +23,6 @@ import (
 	"github.com/artaeon/nous/internal/tools"
 	"github.com/artaeon/nous/internal/training"
 )
-
-const banner = `
-                ╔═══════════════════════════════════╗
-                ║             N O U S               ║
-                ║   Native Orchestration of         ║
-                ║       Unified Streams             ║
-                ╚═══════════════════════════════════╝
-`
 
 const version = "0.6.0"
 
@@ -53,24 +44,22 @@ func main() {
 		os.Exit(0)
 	}
 
-	fmt.Print(banner)
-	fmt.Printf("  version %s | %s | %d cores | %s RAM\n\n",
-		version, runtime.GOARCH, runtime.NumCPU(), formatMemory())
-
 	// Initialize Ollama client
 	llm := ollama.New(
 		ollama.WithHost(*host),
 		ollama.WithModel(*model),
 	)
 
-	// Check Ollama connectivity
-	fmt.Print("  connecting to ollama... ")
+	// Check Ollama connectivity with spinner
+	spinner := cognitive.NewSpinner()
+	spinner.Start("connecting to ollama...")
 	if err := llm.Ping(); err != nil {
-		fmt.Printf("FAILED\n  %v\n", err)
-		fmt.Println("\n  Make sure Ollama is running: ollama serve")
+		spinner.Stop()
+		fmt.Printf("  %s%s%s\n", cognitive.ColorRed, err, cognitive.ColorReset)
+		fmt.Println("  Make sure Ollama is running: ollama serve")
 		os.Exit(1)
 	}
-	fmt.Printf("OK (%s)\n", *model)
+	spinner.Stop()
 
 	// Verify model is available
 	models, err := llm.ListModels()
@@ -83,7 +72,7 @@ func main() {
 			}
 		}
 		if !found {
-			fmt.Printf("  warning: model '%s' not found locally\n", *model)
+			fmt.Printf("  %swarning: model '%s' not found locally%s\n", cognitive.ColorYellow, *model, cognitive.ColorReset)
 			fmt.Printf("  pull it with: ollama pull %s\n", *model)
 		}
 	}
@@ -91,9 +80,7 @@ func main() {
 	// Multi-model routing
 	router := cognitive.NewModelRouter(*host, *model)
 	if err := router.Discover(context.Background()); err != nil {
-		fmt.Printf("  model router: %v (using default)\n", err)
-	} else {
-		fmt.Printf("  %s\n", router.Status())
+		fmt.Printf("  %smodel router: %v (using default)%s\n", cognitive.ColorDim, err, cognitive.ColorReset)
 	}
 
 	// Get working directory
@@ -101,20 +88,14 @@ func main() {
 	cognitive.WorkDir = workDir
 
 	// Project auto-scan
-	fmt.Print("  scanning project... ")
 	projectInfo := cognitive.ScanProject(workDir)
 	cognitive.CurrentProject = projectInfo
-	fmt.Printf("%s (%s, %d files)\n", projectInfo.Name, projectInfo.Language, projectInfo.FileCount)
 
 	// Build codebase index (Go AST parsing for structural context)
 	nousDir := filepath.Join(workDir, ".nous")
 	codeIndex := index.NewCodebaseIndex(nousDir)
 	if projectInfo.Language == "Go" {
-		if err := codeIndex.Build(workDir); err != nil {
-			fmt.Printf("  index: %v\n", err)
-		} else {
-			fmt.Printf("  codebase index: %d symbols\n", codeIndex.Size())
-		}
+		_ = codeIndex.Build(workDir)
 	}
 
 	// Filesystem Sentinel — ambient file watching with inotify
@@ -129,17 +110,13 @@ func main() {
 		}
 	})
 	if err != nil {
-		fmt.Printf("  sentinel: %v (disabled)\n", err)
+		// sentinel disabled, not critical
 	} else {
 		go fileWatcher.Run()
-		fmt.Printf("  sentinel: watching %d dirs\n", fileWatcher.WatchCount())
 	}
 
 	// Tool Choreography — learned multi-step recipes
 	recipeBook := cognitive.NewRecipeBook(nousDir)
-	if recipeBook.Size() > 0 {
-		fmt.Printf("  recipes: %d learned\n", recipeBook.Size())
-	}
 
 	// Initialize undo stack and tool registry
 	undoStack := memory.NewUndoStack(100)
@@ -158,20 +135,19 @@ func main() {
 
 	// Project-level memory (stored in the project's .nous/ directory)
 	projMem := memory.NewProjectMemory(workDir)
-	fmt.Printf("  project memory: %d facts\n", projMem.Size())
 
 	// Episodic memory — remembers every interaction forever (semantic search via embeddings)
 	episodic := memory.NewEpisodicMemory(nousDir, llm.Embed)
-	if episodic.Size() > 0 {
-		fmt.Printf("  episodic memory: %d episodes (%.0f%% success rate)\n",
-			episodic.Size(), episodic.SuccessRate()*100)
-	}
 
 	// Training data collector — gathers successful interactions for fine-tuning
 	collector := training.NewCollector(nousDir)
-	if collector.Size() > 0 {
-		fmt.Printf("  training data: %d pairs\n", collector.Size())
-	}
+
+	// Auto-tuner — monitors training data and triggers Modelfile-based tuning
+	autoTuner := training.NewAutoTuner(collector, *model).
+		WithCreator(llm).
+		WithCallback(func(msg string) {
+			fmt.Printf("%s  [autotune] %s%s\n", cognitive.ColorYellow, msg, cognitive.ColorReset)
+		})
 
 	// Session management
 	sessionStore := cognitive.NewSessionStore(*memoryPath)
@@ -187,10 +163,9 @@ func main() {
 	if *sessionID != "" {
 		loaded, err := sessionStore.Load(*sessionID)
 		if err != nil {
-			fmt.Printf("  warning: could not resume session %s: %v\n", *sessionID, err)
+			fmt.Printf("  %swarning: could not resume session %s: %v%s\n", cognitive.ColorYellow, *sessionID, err, cognitive.ColorReset)
 		} else {
 			currentSession = loaded
-			fmt.Printf("  resumed session: %s (%d messages)\n", loaded.Name, len(loaded.Messages))
 		}
 	}
 
@@ -259,7 +234,15 @@ func main() {
 		return false
 	}
 
+	// Spinner for LLM thinking time — stopped on first token
+	llmSpinner := cognitive.NewSpinner()
+	firstToken := true
+
 	reasoner.OnToken = func(token string, done bool) {
+		if firstToken {
+			llmSpinner.Stop()
+			firstToken = false
+		}
 		streamBuf.WriteString(token)
 
 		if !done {
@@ -288,12 +271,14 @@ func main() {
 			}
 			inToolCall = false
 			streamBuf.Reset()
+			// Reset for next LLM call
+			firstToken = true
 		}
 	}
 
 	// Tool status updates
 	reasoner.OnStatus = func(status string) {
-		fmt.Printf("\033[90m%s\033[0m\n", status)
+		fmt.Printf("%s%s%s\n", cognitive.ColorGray, status, cognitive.ColorReset)
 	}
 
 	// Start cognitive streams
@@ -311,25 +296,9 @@ func main() {
 		}()
 	}
 
-	// Print status
+	// Print startup banner
 	toolList := toolReg.List()
-	toolNames := make([]string, len(toolList))
-	for i, t := range toolList {
-		toolNames[i] = t.Name
-	}
-
-	fmt.Printf("  %d cognitive streams active\n", len(streams))
-	fmt.Printf("  %d tools: %s\n", len(toolList), strings.Join(toolNames, ", "))
-	if *allowShell {
-		fmt.Print("  shell: ENABLED")
-		if *trustMode {
-			fmt.Print(" | trust mode: ON")
-		}
-		fmt.Println()
-	}
-	fmt.Printf("  session: %s\n", currentSession.ID)
-	fmt.Println()
-	fmt.Println("  I am Nous. I think, therefore I am — locally.")
+	fmt.Print(cognitive.Banner(version, *model, *host, len(toolList), 64))
 
 	// Handle graceful shutdown — save session + episodic memory
 	sigCh := make(chan os.Signal, 1)
@@ -362,12 +331,11 @@ func main() {
 	}
 
 	// --- REPL Mode ---
-	fmt.Println("  type /help for commands, /quit to exit")
-	fmt.Println()
+	fmt.Printf("  %stype /help for commands, /quit to exit%s\n\n", cognitive.ColorDim, cognitive.ColorReset)
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
-		fmt.Print("  nous> ")
+		fmt.Print(cognitive.Styled(cognitive.ColorCyan, "  \u03bd\u03bf\u1fe6\u03c2") + cognitive.Styled(cognitive.ColorGray, "> "))
 		if !scanner.Scan() {
 			break
 		}
@@ -379,13 +347,15 @@ func main() {
 
 		// Handle commands
 		if strings.HasPrefix(input, "/") {
-			if handleCommand(input, board, llm, toolReg, wm, ltm, projMem, undoStack, sessionStore, currentSession, reasoner, learner, projectInfo, episodic, collector) {
+			if handleCommand(input, board, llm, toolReg, wm, ltm, projMem, undoStack, sessionStore, currentSession, reasoner, learner, projectInfo, episodic, collector, autoTuner) {
 				continue
 			}
 		}
 
 		// Submit to the perceiver and wait for reasoning to complete
 		fmt.Println()
+		firstToken = true
+		llmSpinner.Start("thinking...")
 		start := time.Now()
 		perceiver.Submit(input)
 
@@ -412,13 +382,16 @@ func main() {
 		quality := scoreInteractionQuality(answer, duration, board)
 		go collector.Collect(sysPrompt, input, answer, nil, quality)
 
+		// Check if auto-tuning should trigger (non-blocking)
+		go autoTuner.Check()
+
 		// Auto-save session after each exchange
 		currentSession.Messages = reasoner.Conv.Messages()
 		go sessionStore.Save(currentSession)
 	}
 }
 
-func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Client, toolReg *tools.Registry, wm *memory.WorkingMemory, ltm *memory.LongTermMemory, projMem *memory.ProjectMemory, undoStack *memory.UndoStack, sessions *cognitive.SessionStore, current *cognitive.Session, reasoner *cognitive.Reasoner, learner *cognitive.Learner, project *cognitive.ProjectInfo, episodic *memory.EpisodicMemory, collector *training.Collector) bool {
+func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Client, toolReg *tools.Registry, wm *memory.WorkingMemory, ltm *memory.LongTermMemory, projMem *memory.ProjectMemory, undoStack *memory.UndoStack, sessions *cognitive.SessionStore, current *cognitive.Session, reasoner *cognitive.Reasoner, learner *cognitive.Learner, project *cognitive.ProjectInfo, episodic *memory.EpisodicMemory, collector *training.Collector, autoTuner *training.AutoTuner) bool {
 	parts := strings.Fields(input)
 	cmd := strings.ToLower(parts[0])
 
@@ -444,6 +417,7 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
     /recall <query>    Search project memory
     /forget <key>      Forget a project fact
     /training          Show training data stats
+    /autotune [force]  Show auto-tune status or force a tune
     /export <fmt>      Export training data (jsonl/alpaca/chatml)
     /finetune          Generate Modelfile + fine-tuning guide
     /plan <goal>       Decompose a goal into steps and execute via Planner
@@ -681,6 +655,33 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 			}
 		}
 
+	case "/autotune":
+		stats := autoTuner.Stats()
+		fmt.Printf("  auto-tune status:\n")
+		fmt.Printf("    training pairs:  %d / %d minimum\n", stats.PairCount, stats.MinPairs)
+		fmt.Printf("    avg quality:     %.2f (floor: %.2f)\n", stats.AvgQuality, stats.QualityFloor)
+		fmt.Printf("    tuned model:     %s\n", stats.TunedName)
+		if !stats.LastTuneAt.IsZero() {
+			fmt.Printf("    last tuned:      %s\n", stats.LastTuneAt.Format("2006-01-02 15:04:05"))
+			fmt.Printf("    next tune after: %s\n", stats.NextTuneAfter.Format("2006-01-02 15:04:05"))
+		} else {
+			fmt.Printf("    last tuned:      never\n")
+		}
+		if stats.Ready {
+			fmt.Printf("    status:          READY (conditions met)\n")
+		} else {
+			fmt.Printf("    status:          waiting\n")
+		}
+		// Handle /autotune force
+		if len(parts) > 1 && strings.ToLower(parts[1]) == "force" {
+			fmt.Println()
+			if autoTuner.ForceCheck() {
+				fmt.Println("  forced tune completed successfully")
+			} else {
+				fmt.Println("  forced tune did not trigger (need minimum pairs and quality)")
+			}
+		}
+
 	case "/export":
 		if len(parts) < 2 {
 			fmt.Println("  usage: /export <format>  (jsonl, alpaca, chatml)")
@@ -868,10 +869,6 @@ func scoreInteractionQuality(answer string, duration time.Duration, board *black
 	return quality
 }
 
-func waitForAnswer(board *blackboard.Blackboard) {
-	_ = waitForAnswerStr(board)
-}
-
 func waitForAnswerStr(board *blackboard.Blackboard) string {
 	deadline := time.After(300 * time.Second)
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -902,12 +899,3 @@ func defaultMemoryPath() string {
 	return filepath.Join(home, ".nous")
 }
 
-func formatMemory() string {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	totalMB := m.Sys / 1024 / 1024
-	if totalMB < 1024 {
-		return fmt.Sprintf("%d MB", totalMB)
-	}
-	return fmt.Sprintf("%.1f GB", float64(totalMB)/1024)
-}
