@@ -219,9 +219,11 @@ func TestReflectionGateForceStopOnManyIterations(t *testing.T) {
 	g.Check("read", "a", nil)
 	g.Check("ls", "b", nil)
 	g.Check("grep", "c", nil)
-	cr := g.Check("tree", "d", nil) // 4th unique call
+	g.Check("tree", "d", nil)
+	g.Check("glob", "e", nil)
+	cr := g.Check("diff", "f", nil) // 6th unique call
 	if !cr.ForceStop {
-		t.Error("4th tool call should force stop")
+		t.Error("6th tool call should force stop")
 	}
 }
 

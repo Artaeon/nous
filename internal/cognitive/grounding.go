@@ -208,8 +208,8 @@ func (g *ReflectionGate) Check(toolName, result string, err error) CheckResult {
 		}
 	}
 
-	// Nudge if too many iterations
-	if g.toolCallCount >= 4 {
+	// Nudge if too many iterations (allow up to 6 before forcing)
+	if g.toolCallCount >= 6 {
 		return CheckResult{Hint: "Answer now with what you have. Do NOT call another tool.", ForceStop: true}
 	}
 
