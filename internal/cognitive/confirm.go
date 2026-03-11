@@ -15,13 +15,13 @@ type ConfirmFunc func(action, detail string) bool
 func TerminalConfirm(action, detail string) bool {
 	fmt.Println()
 	if detail != "" {
-		// Detail may contain ANSI-colored diff preview
 		for _, line := range strings.Split(detail, "\n") {
 			fmt.Printf("  %s\n", line)
 		}
+		fmt.Println()
 	}
-	fmt.Printf("\n  \033[33m⚡ %s\033[0m\n", action)
-	fmt.Print("  \033[90mallow? [y/N]\033[0m ")
+	fmt.Printf("  %s%s%s\n", ColorYellow, action, ColorReset)
+	fmt.Printf("  %sallow? [y/N]%s ", ColorDim, ColorReset)
 
 	reader := bufio.NewReader(os.Stdin)
 	input, _ := reader.ReadString('\n')

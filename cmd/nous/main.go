@@ -52,11 +52,11 @@ func main() {
 
 	// Check Ollama connectivity with spinner
 	spinner := cognitive.NewSpinner()
-	spinner.Start("connecting to ollama...")
+	spinner.Start("connecting...")
 	if err := llm.Ping(); err != nil {
 		spinner.Stop()
 		fmt.Printf("  %s%s%s\n", cognitive.ColorRed, err, cognitive.ColorReset)
-		fmt.Println("  Make sure Ollama is running: ollama serve")
+		fmt.Printf("  %sollama serve%s to start\n", cognitive.ColorDim, cognitive.ColorReset)
 		os.Exit(1)
 	}
 	spinner.Stop()
@@ -72,15 +72,15 @@ func main() {
 			}
 		}
 		if !found {
-			fmt.Printf("  %swarning: model '%s' not found locally%s\n", cognitive.ColorYellow, *model, cognitive.ColorReset)
-			fmt.Printf("  pull it with: ollama pull %s\n", *model)
+			fmt.Printf("  %smodel '%s' not found — ollama pull %s%s\n", cognitive.ColorYellow, *model, *model, cognitive.ColorReset)
 		}
 	}
 
 	// Multi-model routing
 	router := cognitive.NewModelRouter(*host, *model)
 	if err := router.Discover(context.Background()); err != nil {
-		fmt.Printf("  %smodel router: %v (using default)%s\n", cognitive.ColorDim, err, cognitive.ColorReset)
+		// silently use default
+		_ = err
 	}
 
 	// Get working directory
@@ -146,7 +146,7 @@ func main() {
 	autoTuner := training.NewAutoTuner(collector, *model).
 		WithCreator(llm).
 		WithCallback(func(msg string) {
-			fmt.Printf("%s  [autotune] %s%s\n", cognitive.ColorYellow, msg, cognitive.ColorReset)
+			fmt.Printf("  %s%s%s\n", cognitive.ColorDim, msg, cognitive.ColorReset)
 		})
 
 	// Session management
@@ -292,7 +292,7 @@ func main() {
 	reasoner.OnStatus = func(status string) {
 		// Stop spinner if running so status appears cleanly
 		llmSpinner.Stop()
-		fmt.Printf("  %s%s%s\n", cognitive.ColorGray, strings.TrimSpace(status), cognitive.ColorReset)
+		fmt.Printf("%s%s%s\n", cognitive.ColorGray, status, cognitive.ColorReset)
 	}
 
 	// Start cognitive streams
@@ -305,7 +305,7 @@ func main() {
 		s := s
 		go func() {
 			if err := s.Run(ctx); err != nil && err != context.Canceled {
-				fmt.Fprintf(os.Stderr, "\n  [%s] error: %v\n", s.Name(), err)
+				fmt.Fprintf(os.Stderr, "  %s%s: %v%s\n", cognitive.ColorRed, s.Name(), err, cognitive.ColorReset)
 			}
 		}()
 	}
@@ -319,7 +319,7 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		fmt.Println("\n\n  saving session...")
+		fmt.Printf("\n\n  %ssaving...%s\n", cognitive.ColorDim, cognitive.ColorReset)
 		currentSession.Messages = reasoner.Conv.Messages()
 		sessionStore.Save(currentSession)
 		episodic.Save()
@@ -327,7 +327,6 @@ func main() {
 		if fileWatcher != nil {
 			fileWatcher.Stop()
 		}
-		fmt.Println("  goodbye.")
 		cancel()
 		os.Exit(0)
 	}()
@@ -349,7 +348,7 @@ func main() {
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
-		fmt.Print(cognitive.Styled(cognitive.ColorCyan, "  \u03bd\u03bf\u1fe6\u03c2") + cognitive.Styled(cognitive.ColorGray, "> "))
+		fmt.Print(cognitive.Prompt())
 		if !scanner.Scan() {
 			break
 		}
@@ -379,7 +378,7 @@ func main() {
 		duration := time.Since(start)
 
 		// Show timing footer
-		fmt.Printf("\n  %s%s%s\n\n", cognitive.ColorDim, formatDuration(duration), cognitive.ColorReset)
+		fmt.Printf("\n%s\n\n", cognitive.TimingFooter(duration))
 
 		// Record in episodic memory (remembers everything forever)
 		go episodic.Record(memory.Episode{
@@ -414,11 +413,10 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 
 	switch cmd {
 	case "/quit", "/exit", "/q":
-		fmt.Println("  saving session...")
+		fmt.Printf("  %ssaving...%s\n", cognitive.ColorDim, cognitive.ColorReset)
 		current.Messages = reasoner.Conv.Messages()
 		sessions.Save(current)
 		projMem.Flush()
-		fmt.Println("  goodbye.")
 		os.Exit(0)
 
 	case "/help", "/h":
@@ -906,13 +904,6 @@ func waitForAnswerStr(board *blackboard.Blackboard) string {
 			}
 		}
 	}
-}
-
-func formatDuration(d time.Duration) string {
-	if d < time.Second {
-		return fmt.Sprintf("%dms", d.Milliseconds())
-	}
-	return fmt.Sprintf("%.1fs", d.Seconds())
 }
 
 func defaultMemoryPath() string {

@@ -28,35 +28,52 @@ func Styled(color, text string) string {
 }
 
 // Banner returns the Nous startup banner with version info.
+// Clean minimal design inspired by modern CLI tools.
 func Banner(version, model, host string, toolCount int, memSlots int) string {
-	const width = 39 // inner width between side borders
-
-	border := func(left, mid, right string) string {
-		return "  " + ColorCyan + left + strings.Repeat("─", width) + right + ColorReset + "\n"
-	}
-	row := func(content string) string {
-		// content is already styled; compute visible length for padding
-		visible := visibleLen(content)
-		pad := width - 2 - visible // 2 for leading/trailing space
-		if pad < 0 {
-			pad = 0
-		}
-		return "  " + ColorCyan + "│" + ColorReset + " " + content + strings.Repeat(" ", pad) + " " + ColorCyan + "│" + ColorReset + "\n"
-	}
-
 	var b strings.Builder
 	b.WriteString("\n")
-	b.WriteString(border("╭", "─", "╮"))
-	b.WriteString(row(ColorBold + "νοῦς" + ColorReset + " v" + version))
-	b.WriteString(row(ColorDim + "Native Orchestration of Unified" + ColorReset))
-	b.WriteString(row(ColorDim + "Streams" + ColorReset))
-	b.WriteString("  " + ColorCyan + "├" + strings.Repeat("─", width) + "┤" + ColorReset + "\n")
-	b.WriteString(row(fmt.Sprintf("Model:  %s", model)))
-	b.WriteString(row(fmt.Sprintf("Host:   %s", host)))
-	b.WriteString(row(fmt.Sprintf("Tools:  %d available", toolCount)))
-	b.WriteString(row(fmt.Sprintf("Memory: %d slots", memSlots)))
-	b.WriteString(border("╰", "─", "╯"))
+	b.WriteString(fmt.Sprintf("  %snous%s %sv%s%s\n", ColorBold, ColorReset, ColorDim, version, ColorReset))
+	b.WriteString(fmt.Sprintf("  %s%s%s\n", ColorDim, strings.Repeat("─", 36), ColorReset))
+	b.WriteString(fmt.Sprintf("  %s%s%s  %s·%s  %s%s%s\n", ColorCyan, model, ColorReset, ColorDim, ColorReset, ColorGray, host, ColorReset))
+	b.WriteString(fmt.Sprintf("  %s%d tools  ·  %d memory slots%s\n", ColorDim, toolCount, memSlots, ColorReset))
+	b.WriteString("\n")
 	return b.String()
+}
+
+// Prompt returns the REPL prompt string.
+func Prompt() string {
+	return ColorCyan + "  › " + ColorReset
+}
+
+// Separator returns a thin horizontal line for visual breaks.
+func Separator() string {
+	return "  " + ColorDim + strings.Repeat("─", 36) + ColorReset + "\n"
+}
+
+// ToolStatus formats a tool call status line.
+// Format: "  tool_name  args  duration"
+func ToolStatus(name, args string, duration time.Duration) string {
+	d := formatDurationShort(duration)
+	if args != "" {
+		// Truncate long args
+		if len(args) > 40 {
+			args = args[:40] + "..."
+		}
+		return fmt.Sprintf("  %s%s%s  %s%s%s  %s%s%s", ColorMagenta, name, ColorReset, ColorGray, args, ColorReset, ColorDim, d, ColorReset)
+	}
+	return fmt.Sprintf("  %s%s%s  %s%s%s", ColorMagenta, name, ColorReset, ColorDim, d, ColorReset)
+}
+
+// TimingFooter returns a compact timing line.
+func TimingFooter(duration time.Duration) string {
+	return fmt.Sprintf("  %s%s%s", ColorDim, formatDurationShort(duration), ColorReset)
+}
+
+func formatDurationShort(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	return fmt.Sprintf("%.1fs", d.Seconds())
 }
 
 // visibleLen returns the display width of a string, stripping ANSI escapes.

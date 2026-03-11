@@ -60,7 +60,7 @@ func TestBannerContainsHost(t *testing.T) {
 func TestBannerContainsToolCount(t *testing.T) {
 	banner := Banner("0.3.0", "qwen2.5:1.5b", "localhost:11434", 9, 64)
 
-	if !strings.Contains(banner, "9 available") {
+	if !strings.Contains(banner, "9 tools") {
 		t.Error("banner should contain tool count")
 	}
 }
@@ -76,7 +76,7 @@ func TestBannerContainsVersion(t *testing.T) {
 func TestBannerContainsMemorySlots(t *testing.T) {
 	banner := Banner("0.3.0", "qwen2.5:1.5b", "localhost:11434", 9, 64)
 
-	if !strings.Contains(banner, "64 slots") {
+	if !strings.Contains(banner, "64 memory slots") {
 		t.Error("banner should contain memory slot count")
 	}
 }
@@ -84,20 +84,16 @@ func TestBannerContainsMemorySlots(t *testing.T) {
 func TestBannerContainsNousName(t *testing.T) {
 	banner := Banner("0.3.0", "qwen2.5:1.5b", "localhost:11434", 9, 64)
 
-	// Should contain the Greek nous name
-	if !strings.Contains(banner, "νοῦς") {
-		t.Error("banner should contain νοῦς")
+	if !strings.Contains(banner, "nous") {
+		t.Error("banner should contain nous")
 	}
 }
 
-func TestBannerHasBorders(t *testing.T) {
+func TestBannerHasSeparator(t *testing.T) {
 	banner := Banner("0.3.0", "qwen2.5:1.5b", "localhost:11434", 9, 64)
 
-	if !strings.Contains(banner, "╭") {
-		t.Error("banner should have top-left corner border")
-	}
-	if !strings.Contains(banner, "╯") {
-		t.Error("banner should have bottom-right corner border")
+	if !strings.Contains(banner, "─") {
+		t.Error("banner should have separator line")
 	}
 }
 
