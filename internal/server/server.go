@@ -73,7 +73,10 @@ func (s *Server) Start(version, model string, toolCount int) error {
 	}
 
 	// POST /api/chat — send a message, get a response
+	// Uses a mutex to serialize requests (one active conversation at a time)
+	// and per-request answer keys to avoid cross-request interference.
 	var chatMu sync.Mutex
+	var reqCounter uint64
 	mux.HandleFunc("/api/chat", cors(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -95,13 +98,18 @@ func (s *Server) Start(version, model string, toolCount int) error {
 		chatMu.Lock()
 		defer chatMu.Unlock()
 
+		// Use a per-request answer key to avoid stale reads
+		reqCounter++
+		answerKey := fmt.Sprintf("last_answer_%d", reqCounter)
+		s.board.Set("answer_key", answerKey)
+
 		start := time.Now()
 
 		// Submit to perceiver
 		s.perceiver.Submit(req.Message)
 
-		// Wait for answer
-		answer := waitForAnswer(s.board, 300*time.Second)
+		// Wait for answer (check both per-request key and fallback)
+		answer := waitForAnswer(s.board, 300*time.Second, answerKey)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(ChatResponse{
@@ -158,22 +166,27 @@ func (s *Server) Stop(ctx context.Context) error {
 	return s.server.Shutdown(ctx)
 }
 
-func waitForAnswer(board *blackboard.Blackboard, timeout time.Duration) string {
+func waitForAnswer(board *blackboard.Blackboard, timeout time.Duration, keys ...string) string {
 	deadline := time.After(timeout)
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
+
+	// Check per-request key first, then fallback to "last_answer"
+	checkKeys := append(keys, "last_answer")
 
 	for {
 		select {
 		case <-deadline:
 			return "(timeout waiting for response)"
 		case <-ticker.C:
-			if answer, ok := board.Get("last_answer"); ok {
-				board.Delete("last_answer")
-				if s, ok := answer.(string); ok {
-					return s
+			for _, key := range checkKeys {
+				if answer, ok := board.Get(key); ok {
+					board.Delete(key)
+					if s, ok := answer.(string); ok {
+						return s
+					}
+					return fmt.Sprintf("%v", answer)
 				}
-				return fmt.Sprintf("%v", answer)
 			}
 		}
 	}
