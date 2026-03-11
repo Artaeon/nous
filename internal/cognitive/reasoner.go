@@ -549,7 +549,15 @@ func (r *Reasoner) findInlineToolCalls(content string) []toolCall {
 func (r *Reasoner) executeTool(tc toolCall) (string, error) {
 	tool, err := r.Tools.Get(tc.Name)
 	if err != nil {
-		return "", err
+		// Fuzzy match: try to find the closest tool name
+		if corrected := r.fuzzyMatchTool(tc.Name); corrected != "" {
+			r.emitStatus(fmt.Sprintf("  [correct] %s → %s", tc.Name, corrected))
+			tc.Name = corrected
+			tool, err = r.Tools.Get(corrected)
+		}
+		if err != nil {
+			return "", fmt.Errorf("unknown tool %q (available: %s)", tc.Name, r.availableToolNames())
+		}
 	}
 
 	if tc.Args == nil {
@@ -735,6 +743,65 @@ func (r *Reasoner) consultPriorKnowledge(intent, rawInput string) string {
 		return ""
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// fuzzyMatchTool finds the closest tool name using simple substring/alias matching.
+// Handles common LLM mistakes like "find_replace" → "find_replace", "search" → "grep", etc.
+func (r *Reasoner) fuzzyMatchTool(name string) string {
+	lower := strings.ToLower(name)
+
+	// Common aliases that 1.5B models generate
+	aliases := map[string]string{
+		"search":        "grep",
+		"find":          "grep",
+		"cat":           "read",
+		"view":          "read",
+		"open":          "read",
+		"list":          "ls",
+		"dir":           "ls",
+		"create":        "write",
+		"touch":         "write",
+		"exec":          "shell",
+		"execute":       "shell",
+		"cmd":           "shell",
+		"command":       "shell",
+		"bash":          "shell",
+		"mv":            "shell",
+		"cp":            "shell",
+		"rm":            "shell",
+		"replace":       "find_replace",
+		"sed":           "find_replace",
+		"status":        "git",
+		"commit":        "git",
+		"log":           "git",
+		"browse":        "fetch",
+		"curl":          "fetch",
+		"wget":          "fetch",
+		"info":          "sysinfo",
+		"system":        "sysinfo",
+	}
+
+	if corrected, ok := aliases[lower]; ok {
+		return corrected
+	}
+
+	// Substring match: if the name contains a tool name or vice versa
+	for _, t := range r.Tools.List() {
+		if strings.Contains(lower, t.Name) || strings.Contains(t.Name, lower) {
+			return t.Name
+		}
+	}
+
+	return ""
+}
+
+// availableToolNames returns a comma-separated list of tool names for error messages.
+func (r *Reasoner) availableToolNames() string {
+	var names []string
+	for _, t := range r.Tools.List() {
+		names = append(names, t.Name)
+	}
+	return strings.Join(names, ", ")
 }
 
 // storeToMemory saves the current interaction context to working memory.
