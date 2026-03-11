@@ -2,6 +2,7 @@ package tools
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -153,6 +154,17 @@ func RegisterBuiltins(r *Registry, workDir string, allowShell bool, undo ...*mem
 		Description: "Show the diff between the current state and the last commit. Args: path (optional file path), staged (optional 'true' to show staged changes).",
 		Execute: func(args map[string]string) (string, error) {
 			return toolDiff(workDir, args)
+		},
+	})
+
+	r.Register(Tool{
+		Name:        "run",
+		Description: "Execute a command and capture output. Args: command (required), stdin (optional input to send). For running code: 'go run main.go', 'python script.py', etc.",
+		Execute: func(args map[string]string) (string, error) {
+			if !allowShell {
+				return "", fmt.Errorf("command execution disabled — start Nous with --allow-shell to enable")
+			}
+			return toolRun(workDir, args)
 		},
 	})
 }
@@ -745,6 +757,50 @@ func toolReplaceAll(workDir string, args map[string]string) (string, error) {
 	}
 
 	return fmt.Sprintf("replaced %d occurrences across %d files", totalOccurrences, filesModified), nil
+}
+
+// --- run tool ---
+
+func toolRun(workDir string, args map[string]string) (string, error) {
+	command := args["command"]
+	if command == "" {
+		return "", fmt.Errorf("run requires 'command' argument")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd.Dir = workDir
+
+	// Combine stdout and stderr
+	var combined bytes.Buffer
+	cmd.Stdout = &combined
+	cmd.Stderr = &combined
+
+	// Support optional stdin
+	if stdin, ok := args["stdin"]; ok && stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
+
+	err := cmd.Run()
+
+	output := combined.String()
+
+	// Truncate output
+	if len(output) > 8192 {
+		output = output[:8192] + "\n... (truncated)"
+	}
+
+	if ctx.Err() == context.DeadlineExceeded {
+		return output, fmt.Errorf("run: command timed out after 60 seconds")
+	}
+
+	if err != nil {
+		return output, fmt.Errorf("run: %v", err)
+	}
+
+	return output, nil
 }
 
 func toolDiff(workDir string, args map[string]string) (string, error) {

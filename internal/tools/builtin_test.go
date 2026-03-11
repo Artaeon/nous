@@ -2,7 +2,6 @@ package tools
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -606,7 +605,7 @@ func TestRegisterBuiltinsRegistersAllTools(t *testing.T) {
 	r := NewRegistry()
 	RegisterBuiltins(r, dir, false)
 
-	expectedTools := []string{"read", "write", "edit", "glob", "grep", "ls", "shell", "mkdir", "tree", "fetch", "git", "patch", "replace_all", "diff"}
+	expectedTools := []string{"read", "write", "edit", "glob", "grep", "ls", "shell", "mkdir", "tree", "fetch", "git", "patch", "replace_all", "diff", "run"}
 	tools := r.List()
 
 	registered := map[string]bool{}
@@ -677,5 +676,57 @@ func TestToolFetch(t *testing.T) {
 		if !strings.Contains(err.Error(), "fetch") {
 			t.Errorf("expected 'fetch' in error, got %q", err.Error())
 		}
+	}
+}
+
+// --- run tool ---
+
+func TestToolRun(t *testing.T) {
+	dir := setupTempDir(t)
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, true) // allowShell=true
+
+	tool, _ := r.Get("run")
+
+	// Test basic command execution
+	result, err := tool.Execute(map[string]string{"command": "echo hello"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "hello") {
+		t.Errorf("expected 'hello' in output, got %q", result)
+	}
+
+	// Test with stdin
+	result, err = tool.Execute(map[string]string{
+		"command": "cat",
+		"stdin":   "from stdin",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "from stdin") {
+		t.Errorf("expected 'from stdin' in output, got %q", result)
+	}
+
+	// Test with missing command
+	_, err = tool.Execute(map[string]string{})
+	if err == nil {
+		t.Fatal("expected error for missing command argument")
+	}
+}
+
+func TestToolRunDisabled(t *testing.T) {
+	dir := setupTempDir(t)
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false) // allowShell=false
+
+	tool, _ := r.Get("run")
+	_, err := tool.Execute(map[string]string{"command": "echo hello"})
+	if err == nil {
+		t.Fatal("expected error when shell is disabled")
+	}
+	if !strings.Contains(err.Error(), "disabled") {
+		t.Errorf("expected 'disabled' in error, got %q", err.Error())
 	}
 }
