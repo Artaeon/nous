@@ -42,6 +42,22 @@ func (c *Conversation) Assistant(content string) {
 	c.truncate()
 }
 
+// AssistantToolCalls adds an assistant message that contains tool calls (native API).
+func (c *Conversation) AssistantToolCalls(content string, toolCalls []ollama.ToolCall) {
+	c.messages = append(c.messages, ollama.Message{
+		Role:      "assistant",
+		Content:   content,
+		ToolCalls: toolCalls,
+	})
+	c.truncate()
+}
+
+// NativeToolResult adds a tool result message using the native tool API (role=tool).
+func (c *Conversation) NativeToolResult(toolName, result string) {
+	c.messages = append(c.messages, ollama.ToolResultMessage(toolName, result))
+	c.truncate()
+}
+
 // ToolResult adds a tool execution result as a user message.
 // Uses OBSERVE: prefix for the structured THINK/ACT/OBSERVE protocol.
 func (c *Conversation) ToolResult(toolName, result string) {

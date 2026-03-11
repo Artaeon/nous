@@ -50,23 +50,79 @@ func New(opts ...Option) *Client {
 	return c
 }
 
+// --- Message Types ---
+
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role      string     `json:"role"`
+	Content   string     `json:"content"`
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"` // present when assistant calls tools
+	ToolName  string     `json:"tool_name,omitempty"`  // set when role=="tool"
 }
 
+// ToolCall represents a tool invocation returned by the model.
+type ToolCall struct {
+	Function ToolCallFunction `json:"function"`
+}
+
+// ToolCallFunction contains the function name and parsed arguments.
+type ToolCallFunction struct {
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments"`
+}
+
+// --- Tool Definition Types (for requests) ---
+
+// Tool represents a tool the model can call via the native API.
+type Tool struct {
+	Type     string       `json:"type"`
+	Function ToolFunction `json:"function"`
+}
+
+// ToolFunction describes a callable function.
+type ToolFunction struct {
+	Name        string               `json:"name"`
+	Description string               `json:"description"`
+	Parameters  ToolFunctionParams   `json:"parameters"`
+}
+
+// ToolFunctionParams is the JSON Schema for function parameters.
+type ToolFunctionParams struct {
+	Type       string                  `json:"type"`
+	Properties map[string]ToolProperty `json:"properties"`
+	Required   []string                `json:"required,omitempty"`
+}
+
+// ToolProperty describes a single parameter in the JSON Schema.
+type ToolProperty struct {
+	Type        string   `json:"type"`
+	Description string   `json:"description,omitempty"`
+	Enum        []string `json:"enum,omitempty"`
+}
+
+// ToolResultMessage creates a message to send tool results back to the model.
+func ToolResultMessage(toolName, content string) Message {
+	return Message{
+		Role:     "tool",
+		Content:  content,
+		ToolName: toolName,
+	}
+}
+
+// --- Request/Response Types ---
+
 type GenerateRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream"`
+	Model    string        `json:"model"`
+	Messages []Message     `json:"messages"`
+	Stream   bool          `json:"stream"`
 	Options  *ModelOptions `json:"options,omitempty"`
+	Tools    []Tool        `json:"tools,omitempty"`
 }
 
 type ModelOptions struct {
-	Temperature float64 `json:"temperature,omitempty"`
-	TopP        float64 `json:"top_p,omitempty"`
-	NumCtx      int     `json:"num_ctx,omitempty"`
-	NumPredict  int     `json:"num_predict,omitempty"`
+	Temperature float64  `json:"temperature,omitempty"`
+	TopP        float64  `json:"top_p,omitempty"`
+	NumCtx      int      `json:"num_ctx,omitempty"`
+	NumPredict  int      `json:"num_predict,omitempty"`
 	Stop        []string `json:"stop,omitempty"`
 }
 
@@ -84,13 +140,22 @@ type GenerateResponse struct {
 	EvalDuration       int64 `json:"eval_duration,omitempty"`
 }
 
-// Chat sends a message sequence and returns the full response.
+// --- Chat Methods ---
+
+// Chat sends a message sequence and returns the full response (no tools).
 func (c *Client) Chat(messages []Message, opts *ModelOptions) (*GenerateResponse, error) {
+	return c.ChatWithTools(messages, nil, opts)
+}
+
+// ChatWithTools sends a message sequence with tool definitions.
+// When the model decides to call a tool, resp.Message.ToolCalls will be populated.
+func (c *Client) ChatWithTools(messages []Message, tools []Tool, opts *ModelOptions) (*GenerateResponse, error) {
 	req := GenerateRequest{
 		Model:    c.model,
 		Messages: messages,
 		Stream:   false,
 		Options:  opts,
+		Tools:    tools,
 	}
 
 	body, err := json.Marshal(req)
@@ -120,13 +185,27 @@ func (c *Client) Chat(messages []Message, opts *ModelOptions) (*GenerateResponse
 // StreamCallback is called for each token chunk during streaming.
 type StreamCallback func(token string, done bool)
 
+// ToolStreamCallback is called during streaming with native tool support.
+// When the model calls a tool, toolCalls is non-nil and token is empty.
+type ToolStreamCallback func(token string, toolCalls []ToolCall, done bool)
+
 // ChatStream sends a message sequence and streams the response token by token.
 func (c *Client) ChatStream(messages []Message, opts *ModelOptions, callback StreamCallback) (*GenerateResponse, error) {
+	return c.ChatStreamWithTools(messages, nil, opts, func(token string, _ []ToolCall, done bool) {
+		if callback != nil {
+			callback(token, done)
+		}
+	})
+}
+
+// ChatStreamWithTools streams a response with native tool calling support.
+func (c *Client) ChatStreamWithTools(messages []Message, tools []Tool, opts *ModelOptions, callback ToolStreamCallback) (*GenerateResponse, error) {
 	req := GenerateRequest{
 		Model:    c.model,
 		Messages: messages,
 		Stream:   true,
 		Options:  opts,
+		Tools:    tools,
 	}
 
 	body, err := json.Marshal(req)
@@ -156,7 +235,7 @@ func (c *Client) ChatStream(messages []Message, opts *ModelOptions, callback Str
 		}
 
 		if callback != nil {
-			callback(chunk.Message.Content, chunk.Done)
+			callback(chunk.Message.Content, chunk.Message.ToolCalls, chunk.Done)
 		}
 
 		if chunk.Done {
@@ -170,6 +249,8 @@ func (c *Client) ChatStream(messages []Message, opts *ModelOptions, callback Str
 
 	return &final, nil
 }
+
+// --- Server Methods ---
 
 // Ping checks if the Ollama server is reachable.
 func (c *Client) Ping() error {
@@ -233,19 +314,16 @@ func (c *Client) Clone(model string) *Client {
 
 // --- Embeddings API ---
 
-// EmbedRequest is the request body for /api/embeddings.
 type EmbedRequest struct {
 	Model  string `json:"model"`
 	Prompt string `json:"prompt"`
 }
 
-// EmbedResponse holds the embedding vector from Ollama.
 type EmbedResponse struct {
 	Embedding []float64 `json:"embedding"`
 }
 
 // Embed generates an embedding vector for the given text.
-// Uses the configured model (most Ollama models support embeddings).
 func (c *Client) Embed(text string) ([]float64, error) {
 	req := EmbedRequest{
 		Model:  c.model,
@@ -276,22 +354,19 @@ func (c *Client) Embed(text string) ([]float64, error) {
 	return result.Embedding, nil
 }
 
-// --- Create Model API (for fine-tuning) ---
+// --- Create Model API ---
 
-// CreateModelRequest is the request body for /api/create.
 type CreateModelRequest struct {
 	Name      string `json:"name"`
 	Modelfile string `json:"modelfile"`
 	Stream    bool   `json:"stream"`
 }
 
-// CreateModelResponse holds the response from model creation.
 type CreateModelResponse struct {
 	Status string `json:"status"`
 }
 
 // CreateModel creates a new Ollama model from a Modelfile.
-// This is the key to baking Nous's personality into the model itself.
 func (c *Client) CreateModel(name, modelfile string) error {
 	req := CreateModelRequest{
 		Name:      name,
