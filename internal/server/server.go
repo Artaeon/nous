@@ -18,6 +18,7 @@ import (
 type Server struct {
 	board     *blackboard.Blackboard
 	perceiver *cognitive.Perceiver
+	jobs      *JobManager
 	addr      string
 	server    *http.Server
 }
@@ -41,6 +42,13 @@ type StatusResponse struct {
 	Percepts   int    `json:"percepts"`
 	Goals      int    `json:"goals"`
 	ToolCount  int    `json:"tool_count"`
+	QueuedJobs int    `json:"queued_jobs"`
+	RunningJobs int   `json:"running_jobs"`
+}
+
+// JobsResponse is the JSON response for listing background jobs.
+type JobsResponse struct {
+	Jobs []Job `json:"jobs"`
 }
 
 // New creates a Nous HTTP server.
@@ -48,6 +56,7 @@ func New(addr string, board *blackboard.Blackboard, perceiver *cognitive.Perceiv
 	return &Server{
 		board:     board,
 		perceiver: perceiver,
+		jobs:      NewJobManager(),
 		addr:      addr,
 	}
 }
@@ -77,6 +86,20 @@ func (s *Server) Start(version, model string, toolCount int) error {
 	// and per-request answer keys to avoid cross-request interference.
 	var chatMu sync.Mutex
 	var reqCounter uint64
+	submitPrompt := func(message string) (string, int64) {
+		chatMu.Lock()
+		defer chatMu.Unlock()
+
+		reqCounter++
+		answerKey := fmt.Sprintf("last_answer_%d", reqCounter)
+		s.board.Set("answer_key", answerKey)
+
+		start := time.Now()
+		s.perceiver.Submit(message)
+		answer := waitForAnswer(s.board, 300*time.Second, answerKey)
+		return answer, time.Since(start).Milliseconds()
+	}
+	s.jobs.StartWorker(submitPrompt)
 	mux.HandleFunc("/api/chat", cors(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -94,32 +117,71 @@ func (s *Server) Start(version, model string, toolCount int) error {
 			return
 		}
 
-		// Serialize chat requests (one at a time)
-		chatMu.Lock()
-		defer chatMu.Unlock()
-
-		// Use a per-request answer key to avoid stale reads
-		reqCounter++
-		answerKey := fmt.Sprintf("last_answer_%d", reqCounter)
-		s.board.Set("answer_key", answerKey)
-
-		start := time.Now()
-
-		// Submit to perceiver
-		s.perceiver.Submit(req.Message)
-
-		// Wait for answer (check both per-request key and fallback)
-		answer := waitForAnswer(s.board, 300*time.Second, answerKey)
+		answer, duration := submitPrompt(req.Message)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(ChatResponse{
 			Answer:   answer,
-			Duration: time.Since(start).Milliseconds(),
+			Duration: duration,
 		})
+	}))
+
+	// POST /api/jobs — queue a background task for the always-on server worker.
+	mux.HandleFunc("/api/jobs", cors(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "POST":
+			var req ChatRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid JSON", http.StatusBadRequest)
+				return
+			}
+			if strings.TrimSpace(req.Message) == "" {
+				http.Error(w, "empty message", http.StatusBadRequest)
+				return
+			}
+			job := s.jobs.Submit(req.Message)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			json.NewEncoder(w).Encode(job)
+		case "GET":
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(JobsResponse{Jobs: s.jobs.List()})
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+
+	// GET/DELETE /api/jobs/{id} — inspect or cancel a queued background task.
+	mux.HandleFunc("/api/jobs/", cors(func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimPrefix(r.URL.Path, "/api/jobs/")
+		if strings.TrimSpace(id) == "" {
+			http.NotFound(w, r)
+			return
+		}
+
+		switch r.Method {
+		case "GET":
+			job, ok := s.jobs.Get(id)
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(job)
+		case "DELETE":
+			if !s.jobs.Cancel(id) {
+				http.Error(w, "job not cancelable", http.StatusConflict)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	}))
 
 	// GET /api/status — system status
 	mux.HandleFunc("/api/status", cors(func(w http.ResponseWriter, r *http.Request) {
+		queuedJobs, runningJobs, _, _ := s.jobs.Stats()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(StatusResponse{
 			Version:   version,
@@ -128,6 +190,8 @@ func (s *Server) Start(version, model string, toolCount int) error {
 			Percepts:  len(s.board.Percepts()),
 			Goals:     len(s.board.ActiveGoals()),
 			ToolCount: toolCount,
+			QueuedJobs: queuedJobs,
+			RunningJobs: runningJobs,
 		})
 	}))
 
