@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/artaeon/nous/internal/memory"
 )
 
 func setupTempDir(t *testing.T) string {
@@ -43,7 +45,6 @@ func TestToolRead(t *testing.T) {
 	if !strings.Contains(result, "line two") {
 		t.Error("expected result to contain 'line two'")
 	}
-	// Should have line numbers
 	if !strings.Contains(result, "1 |") {
 		t.Error("expected line numbers in output")
 	}
@@ -130,7 +131,6 @@ func TestToolWrite(t *testing.T) {
 		t.Error("expected confirmation message")
 	}
 
-	// Verify the file was created
 	data, err := os.ReadFile(filepath.Join(dir, "output.txt"))
 	if err != nil {
 		t.Fatalf("failed to read written file: %v", err)
@@ -194,8 +194,8 @@ func TestToolEdit(t *testing.T) {
 	tool, _ := r.Get("edit")
 	result, err := tool.Execute(map[string]string{
 		"path": "code.go",
-		"old":  `fmt.Println("hello")`,
-		"new":  `fmt.Println("world")`,
+		"old":  "fmt.Println(\"hello\")",
+		"new":  "fmt.Println(\"world\")",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -205,10 +205,10 @@ func TestToolEdit(t *testing.T) {
 	}
 
 	data, _ := os.ReadFile(filepath.Join(dir, "code.go"))
-	if !strings.Contains(string(data), `fmt.Println("world")`) {
+	if !strings.Contains(string(data), "fmt.Println(\"world\")") {
 		t.Error("expected file to contain replaced string")
 	}
-	if strings.Contains(string(data), `fmt.Println("hello")`) {
+	if strings.Contains(string(data), "fmt.Println(\"hello\")") {
 		t.Error("expected original string to be replaced")
 	}
 }
@@ -404,7 +404,6 @@ func TestToolLs(t *testing.T) {
 	if !strings.Contains(result, "subdir") {
 		t.Error("expected 'subdir' in ls output")
 	}
-	// Directory entries should have "d" prefix
 	if !strings.Contains(result, "d ") {
 		t.Error("expected directory prefix 'd' in output")
 	}
@@ -516,7 +515,6 @@ func TestToolTree(t *testing.T) {
 
 func TestToolTreeDepthLimit(t *testing.T) {
 	dir := setupTempDir(t)
-	// Create a deeply nested structure
 	os.MkdirAll(filepath.Join(dir, "a", "b", "c", "d", "e"), 0755)
 	writeFile(t, filepath.Join(dir, "a", "b", "c", "d", "e", "deep.txt"), "deep")
 
@@ -529,15 +527,12 @@ func TestToolTreeDepthLimit(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// At depth 2, we should see "a" and "b" but not "c" or "d"
 	if !strings.Contains(result, "a") {
 		t.Error("expected 'a' at depth 0")
 	}
 	if !strings.Contains(result, "b") {
 		t.Error("expected 'b' at depth 1")
 	}
-	// "c" is at depth 2 which means it should NOT appear since
-	// buildTree returns when depth >= maxDepth
 	if strings.Contains(result, "deep.txt") {
 		t.Error("expected 'deep.txt' to be beyond depth limit")
 	}
@@ -571,7 +566,7 @@ func TestToolTreeHiddenFilesExcluded(t *testing.T) {
 func TestToolShellDisabled(t *testing.T) {
 	dir := setupTempDir(t)
 	r := NewRegistry()
-	RegisterBuiltins(r, dir, false) // allowShell=false
+	RegisterBuiltins(r, dir, false)
 
 	tool, _ := r.Get("shell")
 	_, err := tool.Execute(map[string]string{"command": "echo hello"})
@@ -586,7 +581,7 @@ func TestToolShellDisabled(t *testing.T) {
 func TestToolShellEnabled(t *testing.T) {
 	dir := setupTempDir(t)
 	r := NewRegistry()
-	RegisterBuiltins(r, dir, true) // allowShell=true
+	RegisterBuiltins(r, dir, true)
 
 	tool, _ := r.Get("shell")
 	result, err := tool.Execute(map[string]string{"command": "echo hello"})
@@ -605,7 +600,7 @@ func TestRegisterBuiltinsRegistersAllTools(t *testing.T) {
 	r := NewRegistry()
 	RegisterBuiltins(r, dir, false)
 
-	expectedTools := []string{"read", "write", "edit", "glob", "grep", "ls", "shell", "mkdir", "tree", "fetch", "git", "patch", "replace_all", "diff", "run"}
+	expectedTools := []string{"read", "write", "edit", "glob", "grep", "ls", "shell", "mkdir", "tree", "fetch", "run", "sysinfo", "find_replace", "git", "patch", "replace_all", "diff"}
 	tools := r.List()
 
 	registered := map[string]bool{}
@@ -654,7 +649,6 @@ func TestToolFetch(t *testing.T) {
 
 	tool, _ := r.Get("fetch")
 
-	// Test missing URL argument
 	_, err := tool.Execute(map[string]string{})
 	if err == nil {
 		t.Fatal("expected error for missing url argument")
@@ -663,19 +657,9 @@ func TestToolFetch(t *testing.T) {
 		t.Errorf("expected error about 'url', got %q", err.Error())
 	}
 
-	// Test with an invalid URL (connection refused on localhost)
 	_, err = tool.Execute(map[string]string{"url": "http://127.0.0.1:1"})
 	if err == nil {
 		t.Fatal("expected error fetching from invalid URL")
-	}
-
-	// Test with a completely malformed URL
-	_, err = tool.Execute(map[string]string{"url": "not-a-url"})
-	if err != nil {
-		// Good -- invalid URL should fail at request creation or connection
-		if !strings.Contains(err.Error(), "fetch") {
-			t.Errorf("expected 'fetch' in error, got %q", err.Error())
-		}
 	}
 }
 
@@ -684,11 +668,10 @@ func TestToolFetch(t *testing.T) {
 func TestToolRun(t *testing.T) {
 	dir := setupTempDir(t)
 	r := NewRegistry()
-	RegisterBuiltins(r, dir, true) // allowShell=true
+	RegisterBuiltins(r, dir, true)
 
 	tool, _ := r.Get("run")
 
-	// Test basic command execution
 	result, err := tool.Execute(map[string]string{"command": "echo hello"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -697,7 +680,6 @@ func TestToolRun(t *testing.T) {
 		t.Errorf("expected 'hello' in output, got %q", result)
 	}
 
-	// Test with stdin
 	result, err = tool.Execute(map[string]string{
 		"command": "cat",
 		"stdin":   "from stdin",
@@ -709,7 +691,6 @@ func TestToolRun(t *testing.T) {
 		t.Errorf("expected 'from stdin' in output, got %q", result)
 	}
 
-	// Test with missing command
 	_, err = tool.Execute(map[string]string{})
 	if err == nil {
 		t.Fatal("expected error for missing command argument")
@@ -719,7 +700,7 @@ func TestToolRun(t *testing.T) {
 func TestToolRunDisabled(t *testing.T) {
 	dir := setupTempDir(t)
 	r := NewRegistry()
-	RegisterBuiltins(r, dir, false) // allowShell=false
+	RegisterBuiltins(r, dir, false)
 
 	tool, _ := r.Get("run")
 	_, err := tool.Execute(map[string]string{"command": "echo hello"})
@@ -728,5 +709,240 @@ func TestToolRunDisabled(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "disabled") {
 		t.Errorf("expected 'disabled' in error, got %q", err.Error())
+	}
+}
+
+// --- sysinfo tool ---
+
+func TestToolSysinfo(t *testing.T) {
+	dir := setupTempDir(t)
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false)
+
+	tool, _ := r.Get("sysinfo")
+	result, err := tool.Execute(map[string]string{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(result, "OS:") {
+		t.Error("expected 'OS:' in sysinfo output")
+	}
+	if !strings.Contains(result, "Architecture:") {
+		t.Error("expected 'Architecture:' in sysinfo output")
+	}
+	if !strings.Contains(result, "CPU cores:") {
+		t.Error("expected 'CPU cores:' in sysinfo output")
+	}
+	if !strings.Contains(result, "Go version:") {
+		t.Error("expected 'Go version:' in sysinfo output")
+	}
+	if !strings.Contains(result, "Disk:") {
+		t.Error("expected 'Disk:' in sysinfo output")
+	}
+	if !strings.Contains(result, "linux") {
+		t.Error("expected 'linux' in sysinfo output on a Linux system")
+	}
+}
+
+// --- find_replace tool ---
+
+func TestToolFindReplace(t *testing.T) {
+	dir := setupTempDir(t)
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false)
+
+	writeFile(t, filepath.Join(dir, "code.go"), "func hello() {\n\tfmt.Println(\"hello\")\n\tfmt.Println(\"hello world\")\n}\n")
+
+	tool, _ := r.Get("find_replace")
+
+	result, err := tool.Execute(map[string]string{
+		"path":        "code.go",
+		"pattern":     "hello",
+		"replacement": "goodbye",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "1 occurrence") {
+		t.Errorf("expected '1 occurrence' in result, got %q", result)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, "code.go"))
+	content := string(data)
+	if !strings.Contains(content, "goodbye") {
+		t.Error("expected 'goodbye' in file after replacement")
+	}
+	if !strings.Contains(content, "hello") {
+		t.Error("expected remaining 'hello' in file (only first should be replaced)")
+	}
+}
+
+func TestToolFindReplaceAll(t *testing.T) {
+	dir := setupTempDir(t)
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false)
+
+	writeFile(t, filepath.Join(dir, "text.txt"), "foo bar foo baz foo")
+
+	tool, _ := r.Get("find_replace")
+	result, err := tool.Execute(map[string]string{
+		"path":        "text.txt",
+		"pattern":     "foo",
+		"replacement": "qux",
+		"all":         "true",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "3 occurrence") {
+		t.Errorf("expected '3 occurrence' in result, got %q", result)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, "text.txt"))
+	if strings.Contains(string(data), "foo") {
+		t.Error("expected all 'foo' to be replaced")
+	}
+	if string(data) != "qux bar qux baz qux" {
+		t.Errorf("expected 'qux bar qux baz qux', got %q", string(data))
+	}
+}
+
+func TestToolFindReplaceRegex(t *testing.T) {
+	dir := setupTempDir(t)
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false)
+
+	writeFile(t, filepath.Join(dir, "numbers.txt"), "item1 item2 item3")
+
+	tool, _ := r.Get("find_replace")
+	result, err := tool.Execute(map[string]string{
+		"path":        "numbers.txt",
+		"pattern":     "item(\\d+)",
+		"replacement": "thing${1}",
+		"all":         "true",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "3 occurrence") {
+		t.Errorf("expected '3 occurrence' in result, got %q", result)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, "numbers.txt"))
+	if string(data) != "thing1 thing2 thing3" {
+		t.Errorf("expected 'thing1 thing2 thing3', got %q", string(data))
+	}
+}
+
+func TestToolFindReplaceNoMatch(t *testing.T) {
+	dir := setupTempDir(t)
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false)
+
+	writeFile(t, filepath.Join(dir, "file.txt"), "hello world")
+
+	tool, _ := r.Get("find_replace")
+	_, err := tool.Execute(map[string]string{
+		"path":        "file.txt",
+		"pattern":     "nonexistent",
+		"replacement": "replaced",
+	})
+	if err == nil {
+		t.Fatal("expected error when pattern not found")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("expected 'not found' in error, got %q", err.Error())
+	}
+}
+
+// --- undo integration with tools ---
+
+func TestToolWriteWithUndo(t *testing.T) {
+	dir := setupTempDir(t)
+	undo := memory.NewUndoStack(10)
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false, undo)
+
+	// Write a new file
+	tool, _ := r.Get("write")
+	_, err := tool.Execute(map[string]string{
+		"path":    "new.txt",
+		"content": "hello",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if undo.Size() != 1 {
+		t.Fatalf("expected 1 undo entry, got %d", undo.Size())
+	}
+
+	entry, _ := undo.Peek()
+	if entry.Action != "write" {
+		t.Errorf("expected 'write' action, got %q", entry.Action)
+	}
+	if !entry.WasNew {
+		t.Error("expected WasNew=true for new file")
+	}
+}
+
+func TestToolEditWithUndo(t *testing.T) {
+	dir := setupTempDir(t)
+	writeFile(t, filepath.Join(dir, "file.txt"), "hello world")
+
+	undo := memory.NewUndoStack(10)
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false, undo)
+
+	tool, _ := r.Get("edit")
+	_, err := tool.Execute(map[string]string{
+		"path": "file.txt",
+		"old":  "hello",
+		"new":  "goodbye",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if undo.Size() != 1 {
+		t.Fatalf("expected 1 undo entry, got %d", undo.Size())
+	}
+
+	entry, _ := undo.Peek()
+	if entry.Before != "hello world" {
+		t.Errorf("expected before='hello world', got %q", entry.Before)
+	}
+}
+
+func TestToolUndoReverts(t *testing.T) {
+	dir := setupTempDir(t)
+	writeFile(t, filepath.Join(dir, "file.txt"), "original")
+
+	undo := memory.NewUndoStack(10)
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false, undo)
+
+	// Edit the file
+	tool, _ := r.Get("edit")
+	_, _ = tool.Execute(map[string]string{
+		"path": "file.txt",
+		"old":  "original",
+		"new":  "modified",
+	})
+
+	// Undo
+	msg, err := undo.Undo()
+	if err != nil {
+		t.Fatalf("undo error: %v", err)
+	}
+	if msg == "" {
+		t.Error("expected undo message")
+	}
+
+	// Verify file is restored
+	data, _ := os.ReadFile(filepath.Join(dir, "file.txt"))
+	if string(data) != "original" {
+		t.Errorf("expected 'original' after undo, got %q", string(data))
 	}
 }

@@ -10,15 +10,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/artaeon/nous/internal/memory"
 )
 
 // RegisterBuiltins adds all standard tools to the registry.
-// If undo is non-nil, write/edit/mkdir operations push entries onto the undo stack.
+// If an UndoStack is provided, write/edit/mkdir/find_replace operations push entries onto it.
 func RegisterBuiltins(r *Registry, workDir string, allowShell bool, undo ...*memory.UndoStack) {
 	var undoStack *memory.UndoStack
 	if len(undo) > 0 {
@@ -37,9 +39,8 @@ func RegisterBuiltins(r *Registry, workDir string, allowShell bool, undo ...*mem
 		Name:        "write",
 		Description: "Create or overwrite a file. Args: path (required), content (required).",
 		Execute: func(args map[string]string) (string, error) {
-			path := resolvePath(workDir, args["path"])
 			if undoStack != nil {
-				pushUndoForWrite(undoStack, path, args["content"])
+				pushUndoForWrite(undoStack, resolvePath(workDir, args["path"]), args["content"])
 			}
 			return toolWrite(workDir, args)
 		},
@@ -49,9 +50,8 @@ func RegisterBuiltins(r *Registry, workDir string, allowShell bool, undo ...*mem
 		Name:        "edit",
 		Description: "Replace a specific string in a file. Args: path (required), old (the exact text to find), new (the replacement text).",
 		Execute: func(args map[string]string) (string, error) {
-			path := resolvePath(workDir, args["path"])
 			if undoStack != nil {
-				pushUndoForEdit(undoStack, path, args)
+				pushUndoForEdit(undoStack, resolvePath(workDir, args["path"]))
 			}
 			return toolEdit(workDir, args)
 		},
@@ -96,13 +96,12 @@ func RegisterBuiltins(r *Registry, workDir string, allowShell bool, undo ...*mem
 		Name:        "mkdir",
 		Description: "Create a directory (and parents). Args: path (required).",
 		Execute: func(args map[string]string) (string, error) {
-			path := resolvePath(workDir, args["path"])
 			if undoStack != nil {
+				path := resolvePath(workDir, args["path"])
 				undoStack.Push(memory.UndoEntry{
-					Path:      path,
-					Action:    "mkdir",
-					WasNew:    true,
-					Timestamp: time.Now(),
+					Path:   path,
+					Action: "mkdir",
+					WasNew: true,
 				})
 			}
 			return toolMkdir(workDir, args)
@@ -119,9 +118,39 @@ func RegisterBuiltins(r *Registry, workDir string, allowShell bool, undo ...*mem
 
 	r.Register(Tool{
 		Name:        "fetch",
-		Description: "Fetch content from a URL. Args: url (required). Returns the text content (HTML tags stripped for readability).",
+		Description: "Fetch content from a URL. Args: url (required). Returns text content (HTML tags stripped).",
 		Execute: func(args map[string]string) (string, error) {
 			return toolFetch(args)
+		},
+	})
+
+	r.Register(Tool{
+		Name:        "run",
+		Description: "Execute a command and capture output. Args: command (required), stdin (optional). Requires --allow-shell.",
+		Execute: func(args map[string]string) (string, error) {
+			if !allowShell {
+				return "", fmt.Errorf("command execution disabled — start Nous with --allow-shell to enable")
+			}
+			return toolRun(workDir, args)
+		},
+	})
+
+	r.Register(Tool{
+		Name:        "sysinfo",
+		Description: "Show system information: OS, architecture, CPU, disk. Args: none.",
+		Execute: func(args map[string]string) (string, error) {
+			return toolSysinfo(workDir)
+		},
+	})
+
+	r.Register(Tool{
+		Name:        "find_replace",
+		Description: "Regex find and replace in a file. Args: path (required), pattern (required regex), replacement (required), all (optional 'true').",
+		Execute: func(args map[string]string) (string, error) {
+			if undoStack != nil {
+				pushUndoForEdit(undoStack, resolvePath(workDir, args["path"]))
+			}
+			return toolFindReplace(workDir, args)
 		},
 	})
 
@@ -156,16 +185,36 @@ func RegisterBuiltins(r *Registry, workDir string, allowShell bool, undo ...*mem
 			return toolDiff(workDir, args)
 		},
 	})
+}
 
-	r.Register(Tool{
-		Name:        "run",
-		Description: "Execute a command and capture output. Args: command (required), stdin (optional input to send). For running code: 'go run main.go', 'python script.py', etc.",
-		Execute: func(args map[string]string) (string, error) {
-			if !allowShell {
-				return "", fmt.Errorf("command execution disabled — start Nous with --allow-shell to enable")
-			}
-			return toolRun(workDir, args)
-		},
+// pushUndoForWrite records the state before a write operation.
+func pushUndoForWrite(undo *memory.UndoStack, path, newContent string) {
+	before := ""
+	wasNew := true
+	if data, err := os.ReadFile(path); err == nil {
+		before = string(data)
+		wasNew = false
+	}
+	undo.Push(memory.UndoEntry{
+		Path:   path,
+		Action: "write",
+		Before: before,
+		After:  newContent,
+		WasNew: wasNew,
+	})
+}
+
+// pushUndoForEdit records the state before an edit/find_replace operation.
+func pushUndoForEdit(undo *memory.UndoStack, path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	undo.Push(memory.UndoEntry{
+		Path:   path,
+		Action: "edit",
+		Before: string(data),
+		WasNew: false,
 	})
 }
 
@@ -190,7 +239,6 @@ func toolRead(workDir string, args map[string]string) (string, error) {
 	content := string(data)
 	lines := strings.Split(content, "\n")
 
-	// Handle offset and limit
 	offset := 0
 	if v, ok := args["offset"]; ok {
 		if n, err := strconv.Atoi(v); err == nil {
@@ -214,7 +262,6 @@ func toolRead(workDir string, args map[string]string) (string, error) {
 		end = len(lines)
 	}
 
-	// Format with line numbers
 	var out strings.Builder
 	for i := offset; i < end; i++ {
 		fmt.Fprintf(&out, "%4d | %s\n", i+1, lines[i])
@@ -230,7 +277,6 @@ func toolWrite(workDir string, args map[string]string) (string, error) {
 		return "", fmt.Errorf("write requires 'path' argument")
 	}
 
-	// Create parent directories
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return "", fmt.Errorf("mkdir for write: %w", err)
 	}
@@ -289,10 +335,9 @@ func toolGlob(workDir string, args map[string]string) (string, error) {
 
 	err := filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil // skip errors
+			return nil
 		}
 
-		// Skip hidden directories and common noise
 		if info.IsDir() {
 			name := info.Name()
 			if strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" {
@@ -304,7 +349,6 @@ func toolGlob(workDir string, args map[string]string) (string, error) {
 		rel, _ := filepath.Rel(base, path)
 		matched, _ := filepath.Match(pattern, info.Name())
 
-		// Also try matching against the relative path for ** patterns
 		if !matched {
 			matched, _ = filepath.Match(pattern, rel)
 		}
@@ -349,7 +393,6 @@ func toolGrep(workDir string, args map[string]string) (string, error) {
 		grepArgs = append(grepArgs, "--include="+glob)
 	}
 
-	// Exclude common noise
 	grepArgs = append(grepArgs,
 		"--exclude-dir=.git",
 		"--exclude-dir=node_modules",
@@ -362,14 +405,13 @@ func toolGrep(workDir string, args map[string]string) (string, error) {
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 
-	_ = cmd.Run() // grep exit 1 = no matches
+	_ = cmd.Run()
 
 	result := stdout.String()
 	if result == "" {
 		return "no matches found", nil
 	}
 
-	// Truncate output
 	lines := strings.Split(result, "\n")
 	if len(lines) > 50 {
 		lines = lines[:50]
@@ -430,7 +472,6 @@ func toolShell(workDir string, args map[string]string) (string, error) {
 		return output, fmt.Errorf("exit %v", err)
 	}
 
-	// Truncate
 	if len(output) > 8192 {
 		output = output[:8192] + "\n... (truncated)"
 	}
@@ -458,7 +499,6 @@ func toolTree(workDir string, args map[string]string) (string, error) {
 		if info, err := os.Stat(resolved); err == nil && info.IsDir() {
 			base = resolved
 		}
-		// If path doesn't exist, silently fall back to workDir
 	}
 
 	maxDepth := 3
@@ -483,7 +523,6 @@ func buildTree(out *strings.Builder, path, prefix string, depth, maxDepth int) {
 		return
 	}
 
-	// Filter hidden and noise
 	var visible []os.DirEntry
 	for _, e := range entries {
 		name := e.Name()
@@ -508,46 +547,6 @@ func buildTree(out *strings.Builder, path, prefix string, depth, maxDepth int) {
 			buildTree(out, filepath.Join(path, e.Name()), prefix+childPrefix, depth+1, maxDepth)
 		}
 	}
-}
-
-// --- undo helpers ---
-
-// pushUndoForWrite records the state before a write operation.
-func pushUndoForWrite(undo *memory.UndoStack, path, newContent string) {
-	before := ""
-	wasNew := true
-	if data, err := os.ReadFile(path); err == nil {
-		before = string(data)
-		wasNew = false
-	}
-	undo.Push(memory.UndoEntry{
-		Path:      path,
-		Action:    "write",
-		Before:    before,
-		After:     newContent,
-		Timestamp: time.Now(),
-		WasNew:    wasNew,
-	})
-}
-
-// pushUndoForEdit records the state before an edit operation.
-func pushUndoForEdit(undo *memory.UndoStack, path string, args map[string]string) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return // file doesn't exist — edit will fail anyway
-	}
-	before := string(data)
-	oldStr := args["old"]
-	newStr := args["new"]
-	after := strings.Replace(before, oldStr, newStr, 1)
-	undo.Push(memory.UndoEntry{
-		Path:      path,
-		Action:    "edit",
-		Before:    before,
-		After:     after,
-		Timestamp: time.Now(),
-		WasNew:    false,
-	})
 }
 
 // --- fetch tool ---
@@ -578,24 +577,141 @@ func toolFetch(args map[string]string) (string, error) {
 		return "", fmt.Errorf("fetch %s: HTTP %d %s", url, resp.StatusCode, resp.Status)
 	}
 
-	// Read body with a limit to avoid huge downloads
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB max read
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return "", fmt.Errorf("fetch: reading body: %w", err)
 	}
 
-	// Strip HTML tags
 	text := htmlTagRegex.ReplaceAllString(string(body), " ")
-	// Collapse whitespace
 	text = whitespaceRegex.ReplaceAllString(text, " ")
 	text = strings.TrimSpace(text)
 
-	// Truncate to 8192 chars
 	if len(text) > 8192 {
 		text = text[:8192] + "\n... (truncated)"
 	}
 
 	return text, nil
+}
+
+// --- run tool ---
+
+func toolRun(workDir string, args map[string]string) (string, error) {
+	command := args["command"]
+	if command == "" {
+		return "", fmt.Errorf("run requires 'command' argument")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd.Dir = workDir
+
+	var combined bytes.Buffer
+	cmd.Stdout = &combined
+	cmd.Stderr = &combined
+
+	if stdin, ok := args["stdin"]; ok && stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
+
+	err := cmd.Run()
+	output := combined.String()
+
+	if len(output) > 8192 {
+		output = output[:8192] + "\n... (truncated)"
+	}
+
+	if ctx.Err() == context.DeadlineExceeded {
+		return output, fmt.Errorf("run: command timed out after 60 seconds")
+	}
+
+	if err != nil {
+		return output, fmt.Errorf("run: %v", err)
+	}
+
+	return output, nil
+}
+
+// --- sysinfo tool ---
+
+func toolSysinfo(workDir string) (string, error) {
+	var out strings.Builder
+
+	hostname, _ := os.Hostname()
+
+	fmt.Fprintf(&out, "OS:           %s\n", runtime.GOOS)
+	fmt.Fprintf(&out, "Architecture: %s\n", runtime.GOARCH)
+	fmt.Fprintf(&out, "CPU cores:    %d\n", runtime.NumCPU())
+	fmt.Fprintf(&out, "Hostname:     %s\n", hostname)
+	fmt.Fprintf(&out, "Go version:   %s\n", runtime.Version())
+
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(workDir, &stat); err == nil {
+		availableBytes := stat.Bavail * uint64(stat.Bsize)
+		totalBytes := stat.Blocks * uint64(stat.Bsize)
+		availGB := float64(availableBytes) / (1 << 30)
+		totalGB := float64(totalBytes) / (1 << 30)
+		fmt.Fprintf(&out, "Disk:         %.1f GB available / %.1f GB total\n", availGB, totalGB)
+	}
+
+	return out.String(), nil
+}
+
+// --- find_replace tool ---
+
+func toolFindReplace(workDir string, args map[string]string) (string, error) {
+	path := resolvePath(workDir, args["path"])
+	if path == "" {
+		return "", fmt.Errorf("find_replace requires 'path' argument")
+	}
+
+	pattern := args["pattern"]
+	if pattern == "" {
+		return "", fmt.Errorf("find_replace requires 'pattern' argument")
+	}
+
+	replacement := args["replacement"]
+
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return "", fmt.Errorf("find_replace: invalid regex %q: %w", pattern, err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("find_replace: read %s: %w", path, err)
+	}
+
+	content := string(data)
+	replaceAll := args["all"] == "true"
+
+	var newContent string
+	var count int
+
+	if replaceAll {
+		matches := re.FindAllStringIndex(content, -1)
+		count = len(matches)
+		newContent = re.ReplaceAllString(content, replacement)
+	} else {
+		loc := re.FindStringIndex(content)
+		if loc != nil {
+			count = 1
+			newContent = content[:loc[0]] + re.ReplaceAllString(content[loc[0]:loc[1]], replacement) + content[loc[1]:]
+		} else {
+			newContent = content
+		}
+	}
+
+	if count == 0 {
+		return "", fmt.Errorf("find_replace: pattern %q not found in %s", pattern, path)
+	}
+
+	if err := os.WriteFile(path, []byte(newContent), 0644); err != nil {
+		return "", fmt.Errorf("find_replace: write %s: %w", path, err)
+	}
+
+	return fmt.Sprintf("replaced %d occurrence(s) in %s", count, path), nil
 }
 
 func toolGit(workDir string, args map[string]string) (string, error) {
@@ -757,50 +873,6 @@ func toolReplaceAll(workDir string, args map[string]string) (string, error) {
 	}
 
 	return fmt.Sprintf("replaced %d occurrences across %d files", totalOccurrences, filesModified), nil
-}
-
-// --- run tool ---
-
-func toolRun(workDir string, args map[string]string) (string, error) {
-	command := args["command"]
-	if command == "" {
-		return "", fmt.Errorf("run requires 'command' argument")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
-	cmd.Dir = workDir
-
-	// Combine stdout and stderr
-	var combined bytes.Buffer
-	cmd.Stdout = &combined
-	cmd.Stderr = &combined
-
-	// Support optional stdin
-	if stdin, ok := args["stdin"]; ok && stdin != "" {
-		cmd.Stdin = strings.NewReader(stdin)
-	}
-
-	err := cmd.Run()
-
-	output := combined.String()
-
-	// Truncate output
-	if len(output) > 8192 {
-		output = output[:8192] + "\n... (truncated)"
-	}
-
-	if ctx.Err() == context.DeadlineExceeded {
-		return output, fmt.Errorf("run: command timed out after 60 seconds")
-	}
-
-	if err != nil {
-		return output, fmt.Errorf("run: %v", err)
-	}
-
-	return output, nil
 }
 
 func toolDiff(workDir string, args map[string]string) (string, error) {
