@@ -2,6 +2,7 @@ package tools
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -600,7 +601,7 @@ func TestRegisterBuiltinsRegistersAllTools(t *testing.T) {
 	r := NewRegistry()
 	RegisterBuiltins(r, dir, false)
 
-	expectedTools := []string{"read", "write", "edit", "glob", "grep", "ls", "shell", "mkdir", "tree", "fetch", "run", "sysinfo", "find_replace", "git", "patch", "replace_all", "diff"}
+	expectedTools := []string{"read", "write", "edit", "glob", "grep", "ls", "shell", "mkdir", "tree", "fetch", "run", "sysinfo", "find_replace", "git", "patch", "replace_all", "diff", "clipboard"}
 	tools := r.List()
 
 	registered := map[string]bool{}
@@ -944,5 +945,54 @@ func TestToolUndoReverts(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(dir, "file.txt"))
 	if string(data) != "original" {
 		t.Errorf("expected 'original' after undo, got %q", string(data))
+	}
+}
+
+// --- clipboard tool ---
+
+func TestToolClipboard(t *testing.T) {
+	dir := setupTempDir(t)
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false)
+
+	tool, _ := r.Get("clipboard")
+
+	// Test missing action
+	_, err := tool.Execute(map[string]string{})
+	if err == nil {
+		t.Fatal("expected error for missing action argument")
+	}
+	if !strings.Contains(err.Error(), "action") {
+		t.Errorf("expected 'action' in error, got %q", err.Error())
+	}
+
+	// Test invalid action
+	_, err = tool.Execute(map[string]string{"action": "invalid"})
+	if err != nil {
+		errStr := err.Error()
+		// Either "neither xclip nor xsel" (no clipboard tool) or "unknown action"
+		if !strings.Contains(errStr, "neither") && !strings.Contains(errStr, "unknown action") {
+			t.Errorf("expected clipboard-related error, got %q", errStr)
+		}
+	}
+
+	// Test write without content -- may fail due to no xclip/xsel, that's OK
+	_, err = tool.Execute(map[string]string{"action": "write"})
+	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "neither") {
+			t.Logf("clipboard not available (expected in CI): %v", err)
+		} else if strings.Contains(errStr, "content") {
+			t.Logf("correctly requires content for write: %v", err)
+		}
+	}
+
+	// Test read -- will likely fail due to no clipboard tool in test env
+	_, err = tool.Execute(map[string]string{"action": "read"})
+	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "neither") {
+			t.Logf("clipboard not available (expected in CI): %v", err)
+		}
 	}
 }

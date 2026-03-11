@@ -185,6 +185,14 @@ func RegisterBuiltins(r *Registry, workDir string, allowShell bool, undo ...*mem
 			return toolDiff(workDir, args)
 		},
 	})
+
+	r.Register(Tool{
+		Name:        "clipboard",
+		Description: "Read from or write to the system clipboard. Args: action (required: 'read' or 'write'), content (required for write).",
+		Execute: func(args map[string]string) (string, error) {
+			return toolClipboard(args)
+		},
+	})
 }
 
 // pushUndoForWrite records the state before a write operation.
@@ -920,4 +928,60 @@ func toolDiff(workDir string, args map[string]string) (string, error) {
 	}
 
 	return output, nil
+}
+
+// --- clipboard tool ---
+
+func toolClipboard(args map[string]string) (string, error) {
+	action := args["action"]
+	if action == "" {
+		return "", fmt.Errorf("clipboard requires 'action' argument ('read' or 'write')")
+	}
+
+	// Determine which clipboard tool is available
+	clipTool := ""
+	if path, err := exec.LookPath("xclip"); err == nil && path != "" {
+		clipTool = "xclip"
+	} else if path, err := exec.LookPath("xsel"); err == nil && path != "" {
+		clipTool = "xsel"
+	}
+
+	if clipTool == "" {
+		return "", fmt.Errorf("clipboard: neither xclip nor xsel is installed — install one with: sudo apt install xclip")
+	}
+
+	switch action {
+	case "read":
+		var cmd *exec.Cmd
+		if clipTool == "xclip" {
+			cmd = exec.Command("xclip", "-selection", "clipboard", "-o")
+		} else {
+			cmd = exec.Command("xsel", "--clipboard", "--output")
+		}
+		out, err := cmd.Output()
+		if err != nil {
+			return "", fmt.Errorf("clipboard read: %w", err)
+		}
+		return string(out), nil
+
+	case "write":
+		content := args["content"]
+		if content == "" {
+			return "", fmt.Errorf("clipboard write requires 'content' argument")
+		}
+		var cmd *exec.Cmd
+		if clipTool == "xclip" {
+			cmd = exec.Command("xclip", "-selection", "clipboard")
+		} else {
+			cmd = exec.Command("xsel", "--clipboard", "--input")
+		}
+		cmd.Stdin = strings.NewReader(content)
+		if err := cmd.Run(); err != nil {
+			return "", fmt.Errorf("clipboard write: %w", err)
+		}
+		return fmt.Sprintf("wrote %d bytes to clipboard", len(content)), nil
+
+	default:
+		return "", fmt.Errorf("clipboard: unknown action %q (use 'read' or 'write')", action)
+	}
 }
