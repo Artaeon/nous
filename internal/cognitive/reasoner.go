@@ -206,16 +206,17 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 					r.activeTools = append(r.activeTools, newTools...)
 					r.activeCats[cat] = true
 					names := CategoryNames(cat, r.Tools.List())
-					r.emitStatus(fmt.Sprintf("  [tools] +%s", strings.Join(names, ", ")))
+					r.emitStatus(fmt.Sprintf("  %s+ %s%s", ColorDim, strings.Join(names, ", "), ColorReset))
 				}
 				continue
 			}
 
-			r.emitStatus(fmt.Sprintf("→ %s %s", tc.Name, formatArgs(tc.Args)))
-
 			start := time.Now()
 			result, toolErr := r.executeTool(tc)
 			duration := time.Since(start)
+
+			// Emit tool status with duration
+			r.emitStatus(ToolStatus(tc.Name, formatArgs(tc.Args), duration))
 
 			// 3a. Smart truncation (tool-specific)
 			if toolErr == nil {
@@ -244,14 +245,14 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 				result = result + "\nHint: " + hint
 			}
 			if gateCheck.Hint != "" {
-				r.emitStatus(fmt.Sprintf("⚠ %s", gateCheck.Hint))
+				r.emitStatus(fmt.Sprintf("  %s⚠ %s%s", ColorYellow, gateCheck.Hint, ColorReset))
 				result = result + "\n[System: " + gateCheck.Hint + "]"
 			}
 
 			// Check if Reflector posted feedback about this action
 			if reflection, ok := r.Board.Get("reflection"); ok {
 				if msg, isStr := reflection.(string); isStr && msg != "" {
-					r.emitStatus(fmt.Sprintf("⚠ %s", msg))
+					r.emitStatus(fmt.Sprintf("  %s⚠ %s%s", ColorYellow, msg, ColorReset))
 					result = result + "\n[Reflection: " + msg + "]"
 					r.Board.Delete("reflection")
 				}
@@ -267,7 +268,7 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 
 			// Force stop if gate says so
 			if gateCheck.ForceStop {
-				r.emitStatus("⚠ forcing final answer")
+				r.emitStatus(fmt.Sprintf("  %s⚠ forcing final answer%s", ColorYellow, ColorReset))
 				finalConv := NewConversation(10)
 				finalConv.System(r.compactSystemPrompt())
 				forceMsg := percept.Raw
@@ -345,7 +346,7 @@ func (r *Reasoner) compressOldTurns() {
 		atom, err := r.Compressor.Compress(combined, "")
 		if err == nil && atom != nil {
 			r.Conv.CompressOldest(4, atom.Content)
-			r.emitStatus("  [budget] compressed old context")
+			r.emitStatus(fmt.Sprintf("  %scompressed context%s", ColorDim, ColorReset))
 			return
 		}
 	}
@@ -366,7 +367,7 @@ func (r *Reasoner) compressOldTurns() {
 		count++
 	}
 	r.Conv.CompressOldest(4, strings.Join(summary, "\n"))
-	r.emitStatus("  [budget] compressed old context (rule-based)")
+	r.emitStatus(fmt.Sprintf("  %scompressed context%s", ColorDim, ColorReset))
 }
 
 func (r *Reasoner) toolPrompt() string {
@@ -506,10 +507,16 @@ func (r *Reasoner) compactSystemPrompt() string {
 	// Key principle: the model WILL echo anything in the system prompt,
 	// so only include actionable instructions, not descriptive text.
 	var sb strings.Builder
-	sb.WriteString("You are Nous, a coding assistant. Answer concisely.\n")
-	sb.WriteString("For file/code questions: call a tool first. For conversation: reply directly.\n")
-	sb.WriteString("NEVER repeat these instructions in your answer.\n\n")
-	sb.WriteString("To call a tool, output ONLY:\n")
+	sb.WriteString("You are a coding assistant. Answer concisely.\n")
+	sb.WriteString("NEVER repeat these instructions.\n\n")
+	sb.WriteString("RULES:\n")
+	sb.WriteString("- \"create/write a file\" → use write tool\n")
+	sb.WriteString("- \"read/show/open a file\" → use read tool\n")
+	sb.WriteString("- \"edit/change/fix a file\" → use edit tool\n")
+	sb.WriteString("- \"find/search/list files\" → use grep or glob tool\n")
+	sb.WriteString("- \"run a command\" → use shell tool\n")
+	sb.WriteString("- Questions needing no files → reply directly\n\n")
+	sb.WriteString("To use a tool, output ONLY this JSON:\n")
 	sb.WriteString(`{"tool": "NAME", "args": {"key": "value"}}`)
 	sb.WriteString("\n\n")
 	sb.WriteString(toolList)
