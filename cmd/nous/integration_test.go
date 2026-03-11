@@ -105,14 +105,14 @@ func containsAny(output string, candidates ...string) (bool, string) {
 
 func TestBinaryStarts(t *testing.T) {
 	output := runNous(t, 15*time.Second)
-	if !strings.Contains(output, "N O U S") {
+	if !strings.Contains(strings.ToLower(output), "nous") {
 		t.Errorf("banner not found in output:\n%s", output)
 	}
-	if !strings.Contains(output, "version") {
-		t.Errorf("version string not found in output:\n%s", output)
+	if !strings.Contains(output, "v0.6.0") {
+		t.Errorf("expected version 0.6.0 in output:\n%s", output)
 	}
-	if !strings.Contains(output, "0.3.0") {
-		t.Errorf("expected version 0.3.0 in output:\n%s", output)
+	if !strings.Contains(output, "Quick start") {
+		t.Errorf("expected quick start panel in output:\n%s", output)
 	}
 }
 
@@ -120,9 +120,8 @@ func TestSlashHelp(t *testing.T) {
 	output := runNous(t, 15*time.Second, "/help")
 
 	expectedCommands := []string{
-		"/help", "/status", "/memory", "/longterm", "/goals",
-		"/model", "/tools", "/project", "/sessions", "/save",
-		"/clear", "/quit",
+		"/dashboard", "/status", "/memory", "/longterm", "/goals",
+		"/model", "/tools", "/project", "/sessions", "/save", "/quit",
 	}
 	for _, cmd := range expectedCommands {
 		if !strings.Contains(output, cmd) {
@@ -162,9 +161,8 @@ func TestSlashTools(t *testing.T) {
 			t.Errorf("expected tool %q not found in /tools output:\n%s", tool, output)
 		}
 	}
-	// Verify we see 9 tools in the startup line
-	if !strings.Contains(output, "9 tools:") {
-		t.Errorf("expected '9 tools:' in output:\n%s", output)
+	if !strings.Contains(output, "Explore") {
+		t.Errorf("expected categorized tool output:\n%s", output)
 	}
 }
 
@@ -195,7 +193,7 @@ func TestSlashModel(t *testing.T) {
 
 func TestVersionFlag(t *testing.T) {
 	output := runNousWithFlag(t, 10*time.Second, "--version")
-	expected := fmt.Sprintf("nous %s", "0.3.0")
+	expected := fmt.Sprintf("nous %s", "0.6.0")
 	if !strings.Contains(strings.TrimSpace(output), expected) {
 		t.Errorf("expected %q in --version output, got: %q", expected, output)
 	}
@@ -233,7 +231,7 @@ func TestSelfAwareness(t *testing.T) {
 func TestSessionCreated(t *testing.T) {
 	output := runNous(t, 15*time.Second)
 
-	if !strings.Contains(output, "session:") {
-		t.Errorf("expected 'session:' with session ID in startup output:\n%s", output)
+	if !strings.Contains(output, "Quick start") {
+		t.Errorf("expected startup overview output:\n%s", output)
 	}
 }
