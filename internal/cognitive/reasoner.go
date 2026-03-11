@@ -92,20 +92,19 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 		}
 	}
 
-	// 2. Build system prompt with selected tool subset (saves ~500 tokens)
-	systemPrompt := r.compactSystemPrompt()
-	r.Conv.System(systemPrompt)
+	// Create pipeline for this reasoning cycle.
+	// Instead of accumulating messages that fill the context window,
+	// each iteration gets a fresh conversation with only:
+	//   - compact system prompt
+	//   - original query + memory context
+	//   - compressed one-line summaries of all previous steps
+	//   - the latest tool result (if any)
+	pipe := NewPipeline(percept.Raw)
 
-	// Inject relevant memories into the user message
-	userMsg := percept.Raw
+	// Pre-compute memory context once (doesn't change between iterations)
 	memoryCtx := r.recallMemories(percept.Raw)
-	if memoryCtx != "" {
-		userMsg = percept.Raw + "\n\n" + memoryCtx
-	}
 
-	r.Conv.User(userMsg)
-
-	// 3. Autonomous tool loop with cognitive grounding
+	// 2. Autonomous tool loop with fresh-context pipeline
 	for i := 0; i < maxToolIterations; i++ {
 		select {
 		case <-ctx.Done():
@@ -113,25 +112,31 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 		default:
 		}
 
-		// 4. Context Budget — force answer if context is nearly full
-		if r.Budget.ShouldForceAnswer(r.Conv.Messages()) {
-			r.emitStatus("  [budget] context full, forcing answer")
-			r.Conv.User("[System: Context budget exhausted. Give your final answer now based on what you know.]")
-			resp, err := r.callLLM()
-			if err != nil {
-				return fmt.Errorf("reasoner forced answer: %w", err)
-			}
-			r.Board.Set("last_answer", resp)
-			r.storeToMemory(percept.Raw, resp)
-			return nil
+		// Build FRESH conversation each iteration — this is the key innovation.
+		// The LLM never sees accumulated stale context, only compressed summaries.
+		conv := NewConversation(10)
+		conv.System(r.compactSystemPrompt())
+
+		// Inject user query + memory + pipeline context (compressed steps)
+		userMsg := percept.Raw
+		if memoryCtx != "" {
+			userMsg += "\n\n" + memoryCtx
+		}
+		if pipeCtx := pipe.BuildContext(); pipeCtx != "" {
+			userMsg += "\n\n" + pipeCtx
+		}
+		conv.User(userMsg)
+
+		// If we have a raw result from the last step, include it as a tool observation
+		if pipe.StepCount() > 0 && pipe.LastResult() != "" {
+			lastStep := pipe.steps[len(pipe.steps)-1]
+			conv.ToolResult(lastStep.ToolName, SmartTruncate(lastStep.ToolName, lastStep.RawResult))
 		}
 
-		// 4b. Context Budget — compress old turns if getting tight
-		if r.Budget.ShouldCompress(r.Conv.Messages()) && i > 0 {
-			r.compressOldTurns()
-		}
+		// Set conv for streaming (OnToken callback) and LLM calls
+		r.Conv = conv
 
-		// Call LLM
+		// Call LLM with fresh context
 		fullResponse, err := r.callLLM()
 		if err != nil {
 			return fmt.Errorf("reasoner iteration %d: %w", i, err)
@@ -154,11 +159,6 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 						r.activeCats[cat] = true
 						names := CategoryNames(cat, r.Tools.List())
 						r.emitStatus(fmt.Sprintf("  [tools] +%s", strings.Join(names, ", ")))
-						r.Conv.ToolResult("request_tools", "Now available: "+strings.Join(names, ", "))
-						// Update system prompt with expanded tool list
-						r.Conv.System(r.compactSystemPrompt())
-					} else {
-						r.Conv.ToolResult("request_tools", "Those tools are already available.")
 					}
 					continue
 				}
@@ -178,7 +178,7 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 				// 5. Synchronous reflection gate
 				gateCheck := r.Gate.Check(tc.Name, result, toolErr)
 
-				// Inject hints as system guidance
+				// Inject hints into result for pipeline compression
 				if hint != "" {
 					result = result + "\nHint: " + hint
 				}
@@ -187,12 +187,22 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 					result = result + "\n[System: " + gateCheck.Hint + "]"
 				}
 
-				r.Conv.ToolResult(tc.Name, result)
+				// Compress and add to pipeline
+				pipe.AddStep(tc.Name, result)
 
 				// Force stop if gate says so
 				if gateCheck.ForceStop {
 					r.emitStatus("  [reflect] forcing final answer")
-					r.Conv.User("[System: You MUST give your final answer now. No more tool calls.]")
+					// Build one final fresh conversation with force-stop instruction
+					finalConv := NewConversation(10)
+					finalConv.System(r.compactSystemPrompt())
+					forceMsg := percept.Raw
+					if pipeCtx := pipe.BuildContext(); pipeCtx != "" {
+						forceMsg += "\n\n" + pipeCtx
+					}
+					forceMsg += "\n\n[System: You MUST give your final answer now. No more tool calls.]"
+					finalConv.User(forceMsg)
+					r.Conv = finalConv
 					resp, err := r.callLLM()
 					if err == nil {
 						r.Board.Set("last_answer", resp)
@@ -201,7 +211,7 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 					return err
 				}
 			}
-			continue // Loop back for next LLM call with tool results
+			continue // Loop back for next LLM call with fresh context
 		}
 
 		// No tool calls — this is the final answer
