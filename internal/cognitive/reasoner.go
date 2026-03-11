@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/artaeon/nous/internal/blackboard"
 	"github.com/artaeon/nous/internal/compress"
@@ -169,7 +170,9 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 
 				r.emitStatus(fmt.Sprintf("  [tool] %s", tc.Name))
 
+				start := time.Now()
 				result, toolErr := r.executeTool(tc)
+				duration := time.Since(start)
 
 				// 3a. Smart truncation (tool-specific)
 				if toolErr == nil {
@@ -178,6 +181,17 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 
 				// 3b. Result validation
 				result, hint := ValidateToolResult(tc.Name, result, toolErr)
+
+				// Emit action_recorded for Reflector stream
+				r.Board.RecordAction(blackboard.ActionRecord{
+					StepID:    fmt.Sprintf("reason-%d-%d", i, len(pipe.steps)),
+					Tool:      tc.Name,
+					Input:     formatArgs(tc.Args),
+					Output:    result,
+					Success:   toolErr == nil,
+					Duration:  duration,
+					Timestamp: time.Now(),
+				})
 
 				// 5. Synchronous reflection gate
 				gateCheck := r.Gate.Check(tc.Name, result, toolErr)
@@ -189,6 +203,15 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 				if gateCheck.Hint != "" {
 					r.emitStatus(fmt.Sprintf("  [reflect] %s", gateCheck.Hint))
 					result = result + "\n[System: " + gateCheck.Hint + "]"
+				}
+
+				// Check if Reflector posted feedback about this action
+				if reflection, ok := r.Board.Get("reflection"); ok {
+					if msg, isStr := reflection.(string); isStr && msg != "" {
+						r.emitStatus(fmt.Sprintf("  [reflector] %s", msg))
+						result = result + "\n[Reflection: " + msg + "]"
+						r.Board.Delete("reflection")
+					}
 				}
 
 				// Compress and add to pipeline
@@ -233,6 +256,34 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 		// Record successful tool sequence as a recipe
 		if r.Recipes != nil && pipe.StepCount() >= 2 {
 			r.Recipes.Record(pipe, percept.Intent, percept.Raw)
+		}
+
+		// Emit goal completion so Learner can extract patterns
+		if pipe.StepCount() >= 1 {
+			goalID := fmt.Sprintf("reason-%d", time.Now().UnixMilli())
+			r.Board.PushGoal(blackboard.Goal{
+				ID:          goalID,
+				Description: percept.Raw,
+				Status:      "pending",
+				CreatedAt:   time.Now(),
+			})
+			// Build a plan from the executed pipeline for the Learner
+			var steps []blackboard.Step
+			for j, s := range pipe.steps {
+				steps = append(steps, blackboard.Step{
+					ID:          fmt.Sprintf("%s-step-%d", goalID, j),
+					Description: s.Summary,
+					Tool:        s.ToolName,
+					Status:      "done",
+					Result:      s.Summary,
+				})
+			}
+			r.Board.SetPlan(blackboard.Plan{
+				GoalID: goalID,
+				Steps:  steps,
+				Status: "completed",
+			})
+			r.Board.UpdateGoalStatus(goalID, "completed")
 		}
 
 		// Store to memory for future recall
