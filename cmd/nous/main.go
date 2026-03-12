@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/artaeon/nous/internal/assistant"
 	"github.com/artaeon/nous/internal/blackboard"
@@ -1427,8 +1428,9 @@ func assistantGreeting(store *assistant.Store, now time.Time, de bool) string {
 }
 
 func assistantPreferenceSummary(store *assistant.Store, now time.Time, de bool) string {
-	prefs := store.Preferences()
-	if len(prefs) == 0 {
+	prefs := visiblePreferences(store)
+	notes := profileNotes(store)
+	if len(prefs) == 0 && len(notes) == 0 {
 		if de {
 			return "Ich habe noch keine gespeicherten Präferenzen über dich. Wenn du möchtest, kannst du mir welche geben."
 		}
@@ -1442,18 +1444,104 @@ func assistantPreferenceSummary(store *assistant.Store, now time.Time, de bool) 
 		}
 		parts = append(parts, fmt.Sprintf("%s=%s", pref.Key, pref.Value))
 	}
+	noteText := ""
+	if len(notes) > 0 {
+		kept := notes
+		if len(kept) > 2 {
+			kept = kept[:2]
+		}
+		if de {
+			noteText = " Persönliche Hinweise: " + strings.Join(kept, "; ") + "."
+		} else {
+			noteText = " Personal notes: " + strings.Join(kept, "; ") + "."
+		}
+	}
 
 	if task, ok := nextScheduledTask(store, now); ok {
 		if de {
-			return fmt.Sprintf("Ich kenne bisher diese Präferenzen: %s. Im Moment ist besonders relevant, dass als Nächstes \"%s\" um %s ansteht.", strings.Join(parts, ", "), task.Title, task.DueAt.Format("15:04"))
+			base := fmt.Sprintf("Ich kenne bisher diese Präferenzen: %s.", strings.Join(parts, ", "))
+			if len(parts) == 0 {
+				base = "Ich kenne bisher schon ein paar Dinge über dich."
+			}
+			return base + noteText + fmt.Sprintf(" Im Moment ist besonders relevant, dass als Nächstes \"%s\" um %s ansteht.", task.Title, task.DueAt.Format("15:04"))
 		}
-		return fmt.Sprintf("So far I know these preferences: %s. The most relevant one right now is that %q is coming up at %s.", strings.Join(parts, ", "), task.Title, task.DueAt.Format("15:04"))
+		base := fmt.Sprintf("So far I know these preferences: %s.", strings.Join(parts, ", "))
+		if len(parts) == 0 {
+			base = "So far I already know a few things about you."
+		}
+		return base + noteText + fmt.Sprintf(" The most relevant one right now is that %q is coming up at %s.", task.Title, task.DueAt.Format("15:04"))
 	}
 
 	if de {
-		return "Ich kenne bisher diese Präferenzen: " + strings.Join(parts, ", ") + "."
+		if len(parts) == 0 {
+			return "Ich kenne bisher schon ein paar Dinge über dich." + noteText
+		}
+		return "Ich kenne bisher diese Präferenzen: " + strings.Join(parts, ", ") + "." + noteText
 	}
-	return "So far I know these preferences: " + strings.Join(parts, ", ") + "."
+	if len(parts) == 0 {
+		return "So far I already know a few things about you." + noteText
+	}
+	return "So far I know these preferences: " + strings.Join(parts, ", ") + "." + noteText
+}
+
+func visiblePreferences(store *assistant.Store) []assistant.Preference {
+	if store == nil {
+		return nil
+	}
+	prefs := store.Preferences()
+	out := make([]assistant.Preference, 0, len(prefs))
+	for _, pref := range prefs {
+		if strings.HasPrefix(pref.Key, "profile.") {
+			continue
+		}
+		out = append(out, pref)
+	}
+	return out
+}
+
+func profileNotes(store *assistant.Store) []string {
+	if store == nil {
+		return nil
+	}
+	prefs := store.Preferences()
+	out := make([]string, 0, len(prefs))
+	for _, pref := range prefs {
+		if strings.HasPrefix(pref.Key, "profile.") && strings.TrimSpace(pref.Value) != "" {
+			out = append(out, pref.Value)
+		}
+	}
+	return out
+}
+
+func rememberedProfileNote(input string) (string, string, bool) {
+	trimmed := strings.TrimSpace(input)
+	lower := strings.ToLower(trimmed)
+	prefixes := []string{"remember that ", "remember this: ", "remember this ", "please remember that "}
+	statement := ""
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(lower, prefix) {
+			statement = strings.TrimSpace(trimmed[len(prefix):])
+			break
+		}
+	}
+	if statement == "" {
+		return "", "", false
+	}
+	statement = strings.TrimSpace(strings.TrimRight(statement, ".!?"))
+	if statement == "" {
+		return "", "", false
+	}
+
+	words := strings.FieldsFunc(strings.ToLower(statement), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	})
+	if len(words) == 0 {
+		return "", "", false
+	}
+	if len(words) > 5 {
+		words = words[:5]
+	}
+	return "profile." + strings.Join(words, "_"), statement, true
 }
 
 func assistantCheckIn(store *assistant.Store, now time.Time, de bool) string {
@@ -1581,7 +1669,7 @@ func buildAssistantContext(store *assistant.Store, input string, recent string, 
 	if recent != "" {
 		lines = append(lines, "Recent conversation: "+recent)
 	}
-	prefs := store.Preferences()
+	prefs := visiblePreferences(store)
 	if len(prefs) > 0 {
 		prefLines := make([]string, 0, min(len(prefs), 5))
 		for i, pref := range prefs {
@@ -1591,6 +1679,18 @@ func buildAssistantContext(store *assistant.Store, input string, recent string, 
 			prefLines = append(prefLines, fmt.Sprintf("%s=%s", pref.Key, pref.Value))
 		}
 		lines = append(lines, "Preferences: "+strings.Join(prefLines, ", "))
+	}
+
+	notes := profileNotes(store)
+	if len(notes) > 0 {
+		noteLines := make([]string, 0, min(len(notes), 3))
+		for i, note := range notes {
+			if i >= 3 {
+				break
+			}
+			noteLines = append(noteLines, note)
+		}
+		lines = append(lines, "Personal notes: "+strings.Join(noteLines, " | "))
 	}
 
 	overdue := store.Overdue(now)
@@ -1700,6 +1800,15 @@ func answerAssistantQuery(store *assistant.Store, input string, recent string, n
 
 	lang := preferenceValue(store, "language")
 	de := strings.HasPrefix(strings.ToLower(lang), "de")
+
+	if key, value, ok := rememberedProfileNote(input); ok {
+		if err := store.SetPreference(key, value); err == nil {
+			if de {
+				return fmt.Sprintf("Verstanden. Ich merke mir: %s.", value), true
+			}
+			return fmt.Sprintf("Got it. I'll remember that %s.", value), true
+		}
+	}
 
 	if isPlainGreeting(lower) {
 		return assistantGreeting(store, now, de), true

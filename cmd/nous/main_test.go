@@ -281,6 +281,7 @@ func TestAnswerAssistantQuerySupportsGreetingAndPreferenceSummary(t *testing.T) 
 	now := time.Date(2026, 3, 11, 10, 0, 0, 0, time.UTC)
 	_ = store.SetPreference("language", "de")
 	_ = store.SetPreference("focus", "Deep work before meetings")
+	_ = store.SetPreference("profile.meetings", "you get anxious before meetings")
 	_, _ = store.AddTask("Send update", now.Add(90*time.Minute), "")
 
 	greeting, ok := answerAssistantQuery(store, "hello", "", now)
@@ -297,10 +298,36 @@ func TestAnswerAssistantQuerySupportsGreetingAndPreferenceSummary(t *testing.T) 
 	if !ok {
 		t.Fatal("expected preference summary answer")
 	}
-	for _, check := range []string{"language=de", "focus=Deep work before meetings", "Send update"} {
+	for _, check := range []string{"language=de", "focus=Deep work before meetings", "you get anxious before meetings", "Send update"} {
 		if !strings.Contains(prefAnswer, check) {
 			t.Fatalf("preference summary should contain %q, got %q", check, prefAnswer)
 		}
+	}
+}
+
+func TestAnswerAssistantQueryCanRememberPersonalNotes(t *testing.T) {
+	store := assistant.NewStore(t.TempDir())
+	now := time.Date(2026, 3, 12, 10, 0, 0, 0, time.UTC)
+
+	answer, ok := answerAssistantQuery(store, "remember that I get anxious before meetings", "", now)
+	if !ok {
+		t.Fatal("expected remember-note answer")
+	}
+	if !strings.Contains(strings.ToLower(answer), "anxious before meetings") {
+		t.Fatalf("remember answer should echo stored note, got %q", answer)
+	}
+
+	summary, ok := answerAssistantQuery(store, "what do you know about me now", "", now)
+	if !ok {
+		t.Fatal("expected self-summary answer")
+	}
+	if !strings.Contains(strings.ToLower(summary), "anxious before meetings") {
+		t.Fatalf("self-summary should include remembered note, got %q", summary)
+	}
+
+	ctx := buildAssistantContext(store, "help me focus", "", now)
+	if !strings.Contains(strings.ToLower(ctx), "personal notes") || !strings.Contains(strings.ToLower(ctx), "anxious before meetings") {
+		t.Fatalf("assistant context should include remembered personal notes, got %q", ctx)
 	}
 }
 
