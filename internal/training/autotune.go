@@ -21,6 +21,7 @@ type AutoTuner struct {
 	minPairs     int             // minimum pairs before considering tuning (default: 50)
 	qualityFloor float64         // minimum average quality (default: 0.7)
 	lastTuneAt   time.Time       // when we last triggered tuning
+	lastAttemptAt time.Time      // when we last attempted tuning (success or failure)
 	cooldown     time.Duration   // minimum time between tuning attempts (default: 1 hour)
 	onTune       func(msg string) // callback for status updates
 	creator      ModelCreator    // Ollama client for creating models
@@ -97,10 +98,12 @@ func (a *AutoTuner) Check() bool {
 	}
 
 	if a.creator == nil {
+		a.lastAttemptAt = time.Now()
 		a.onTune("auto-tune skipped: no Ollama client configured")
 		return false
 	}
 
+	a.lastAttemptAt = time.Now()
 	a.onTune("Starting auto fine-tune...")
 
 	// Build a system prompt that embeds learned patterns from training data
@@ -135,7 +138,11 @@ func (a *AutoTuner) ShouldTune() bool {
 // shouldTuneLocked checks conditions without locking (caller must hold mu).
 func (a *AutoTuner) shouldTuneLocked() bool {
 	// Check cooldown
-	if !a.lastTuneAt.IsZero() && time.Since(a.lastTuneAt) < a.cooldown {
+	lastAttempt := a.lastAttemptAt
+	if lastAttempt.IsZero() || a.lastTuneAt.After(lastAttempt) {
+		lastAttempt = a.lastTuneAt
+	}
+	if !lastAttempt.IsZero() && time.Since(lastAttempt) < a.cooldown {
 		return false
 	}
 
@@ -185,7 +192,9 @@ func (a *AutoTuner) ForceCheck() bool {
 	a.mu.Lock()
 	// Temporarily zero out lastTuneAt to bypass cooldown
 	saved := a.lastTuneAt
+	savedAttempt := a.lastAttemptAt
 	a.lastTuneAt = time.Time{}
+	a.lastAttemptAt = time.Time{}
 	a.mu.Unlock()
 
 	triggered := a.Check()
@@ -194,6 +203,7 @@ func (a *AutoTuner) ForceCheck() bool {
 		// Restore if we didn't actually tune
 		a.mu.Lock()
 		a.lastTuneAt = saved
+		a.lastAttemptAt = savedAttempt
 		a.mu.Unlock()
 	}
 

@@ -127,6 +127,26 @@ func TestCheckReturnsFalseOnCreatorError(t *testing.T) {
 	}
 }
 
+func TestFailedAttemptStillEntersCooldown(t *testing.T) {
+	c := newTestCollector(60, 0.9)
+	mock := &mockCreator{err: errMock}
+	at := NewAutoTuner(c, "qwen2.5:1.5b").
+		WithCreator(mock).
+		WithCooldown(1 * time.Hour)
+
+	if at.Check() {
+		t.Fatal("first Check should fail when creator errors")
+	}
+
+	mock.called = false
+	if at.Check() {
+		t.Fatal("second Check should be blocked by cooldown after a failed attempt")
+	}
+	if mock.called {
+		t.Fatal("creator should not be called again during cooldown after failure")
+	}
+}
+
 var errMock = &mockError{}
 
 type mockError struct{}
