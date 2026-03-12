@@ -1402,7 +1402,10 @@ func topicFromText(text string) string {
 	}
 	if first := strings.Index(trimmed, "\""); first >= 0 {
 		if second := strings.Index(trimmed[first+1:], "\""); second >= 0 {
-			return strings.TrimSpace(trimmed[first+1 : first+1+second])
+			quoted := strings.TrimSpace(trimmed[first+1 : first+1+second])
+			if len(strings.Fields(quoted)) > 0 && len(strings.Fields(quoted)) <= 4 {
+				return quoted
+			}
 		}
 	}
 
@@ -1455,10 +1458,10 @@ func topicFromText(text string) string {
 }
 
 func conversationFocusTopic(recent string) string {
-	if topic := topicFromText(lastAssistantLine(recent)); topic != "" {
+	if topic := topicFromText(lastUserLine(recent)); topic != "" {
 		return topic
 	}
-	if topic := topicFromText(lastUserLine(recent)); topic != "" {
+	if topic := topicFromText(lastAssistantLine(recent)); topic != "" {
 		return topic
 	}
 	lower := strings.ToLower(recent)
@@ -1786,6 +1789,32 @@ func assistantReflectionReply(recent string, de bool) string {
 	return fmt.Sprintf("My guess is that %q has turned into a pressure task. When something feels important but still vague, people often avoid it for a while to get relief from tension or self-judgment. That does not mean you're lazy — %q just needs a smaller, safer starting point.", topic, topic)
 }
 
+func topicSmallStep(topic string, de bool) string {
+	lower := strings.ToLower(strings.TrimSpace(topic))
+	if lower == "" {
+		if de {
+			return "wähle eine Sache und gib ihr jetzt 10 ruhige Minuten"
+		}
+		return "pick one thing and give it 10 calm minutes right now"
+	}
+	if strings.Contains(lower, "meeting") {
+		if de {
+			return fmt.Sprintf("bereite %q jetzt 10 Minuten lang ruhig vor", topic)
+		}
+		return fmt.Sprintf("prepare for %q for just 10 calm minutes now", topic)
+	}
+	if strings.Contains(lower, "invoice") || strings.Contains(lower, "rechnung") {
+		if de {
+			return fmt.Sprintf("öffne %q jetzt und bringe sie 10 Minuten lang voran", topic)
+		}
+		return fmt.Sprintf("open %q now and move it forward for just 10 minutes", topic)
+	}
+	if de {
+		return fmt.Sprintf("öffne %q jetzt und arbeite nur 10 Minuten daran", topic)
+	}
+	return fmt.Sprintf("open %q now and work on it for just 10 minutes", topic)
+}
+
 func isGermanAffirmation(lower string) bool {
 	switch lower {
 	case "das klingt richtig", "das klingt gut", "genau", "macht sinn", "ja das passt", "okay", "ok", "ja":
@@ -1798,9 +1827,9 @@ func isGermanAffirmation(lower string) bool {
 func assistantSmallStepReply(store *assistant.Store, recent string, now time.Time, de bool) string {
 	if topic := conversationFocusTopic(recent); topic != "" {
 		if de {
-			return fmt.Sprintf("Gut. Der nächste kleine Schritt ist ganz konkret: öffne %q jetzt und arbeite nur 10 Minuten daran.", topic)
+			return "Gut. Der nächste kleine Schritt ist ganz konkret: " + topicSmallStep(topic, true) + "."
 		}
-		return fmt.Sprintf("Good. The next small step is concrete: open %q now and work on it for just 10 minutes.", topic)
+		return "Good. The next small step is concrete: " + topicSmallStep(topic, false) + "."
 	}
 	overdue := store.Overdue(now)
 	if len(overdue) > 0 {

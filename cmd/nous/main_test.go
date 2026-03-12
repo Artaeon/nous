@@ -449,6 +449,26 @@ func TestAnswerAssistantQueryHandlesGermanReflectivePrompts(t *testing.T) {
 	}
 }
 
+func TestAnswerAssistantQueryPrefersUserTopicOverAssistantQuote(t *testing.T) {
+	store := assistant.NewStore(t.TempDir())
+	now := time.Date(2026, 3, 12, 10, 0, 0, 0, time.UTC)
+	recent := "User: I get overwhelmed before meetings\nAssistant: It sounds like you might be feeling anxious about the upcoming meeting. Let's break it down into manageable steps and review your notes for \"Creating a System for Analyzing Complex Data\"."
+
+	answer, ok := answerAssistantQuery(store, "that sounds right", recent, now)
+	if !ok {
+		t.Fatal("expected affirmation reply")
+	}
+	if !strings.Contains(strings.ToLower(answer), "meeting") {
+		t.Fatalf("affirmation reply should stay on the user's meeting topic, got %q", answer)
+	}
+	if strings.Contains(strings.ToLower(answer), "creating a system for analyzing complex data") {
+		t.Fatalf("affirmation reply should ignore long hallucinated assistant quotes, got %q", answer)
+	}
+	if !strings.Contains(strings.ToLower(answer), "prepare for") {
+		t.Fatalf("affirmation reply should use natural meeting wording, got %q", answer)
+	}
+}
+
 func TestScoreInteractionQualityRewardsFastSuccessfulAnswers(t *testing.T) {
 	board := blackboard.New()
 	board.RecordAction(blackboard.ActionRecord{StepID: "1", Tool: "read", Success: true, Timestamp: time.Now()})
