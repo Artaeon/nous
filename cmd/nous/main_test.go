@@ -318,6 +318,17 @@ func TestAnswerAssistantQueryUsesRecentConversationForFollowUps(t *testing.T) {
 			t.Fatalf("follow-up answer should contain %q, got %q", check, answer)
 		}
 	}
+
+	_, _ = store.AddTask("Finish report", now.Add(2*time.Hour), "")
+	answer, ok = answerAssistantQuery(store, "okay", recent, now)
+	if !ok {
+		t.Fatal("expected short confirmation follow-up answer")
+	}
+	for _, check := range []string{"Finish report", "next small step"} {
+		if !strings.Contains(strings.ToLower(answer), strings.ToLower(check)) {
+			t.Fatalf("confirmation follow-up should contain %q, got %q", check, answer)
+		}
+	}
 }
 
 func TestScoreInteractionQualityRewardsFastSuccessfulAnswers(t *testing.T) {
