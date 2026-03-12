@@ -1384,6 +1384,90 @@ func lastAssistantLine(recent string) string {
 	return strings.TrimSpace(recent)
 }
 
+func lastUserLine(recent string) string {
+	lines := strings.Split(strings.TrimSpace(recent), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(line, "User: ") {
+			return strings.TrimPrefix(line, "User: ")
+		}
+	}
+	return ""
+}
+
+func topicFromText(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return ""
+	}
+	if first := strings.Index(trimmed, "\""); first >= 0 {
+		if second := strings.Index(trimmed[first+1:], "\""); second >= 0 {
+			return strings.TrimSpace(trimmed[first+1 : first+1+second])
+		}
+	}
+
+	lower := strings.ToLower(trimmed)
+	markers := []string{" on my ", " on the ", " my ", " the "}
+	stopWords := map[string]bool{
+		"a": true, "an": true, "and": true, "because": true, "before": true,
+		"but": true, "day": true, "days": true, "feels": true, "for": true,
+		"from": true, "has": true, "have": true, "if": true, "is": true,
+		"it": true, "of": true, "right": true, "since": true, "that": true,
+		"the": true, "this": true, "today": true, "tomorrow": true, "week": true,
+		"weeks": true, "with": true,
+	}
+	for _, marker := range markers {
+		idx := strings.Index(lower, marker)
+		if idx < 0 {
+			continue
+		}
+		rest := trimmed[idx+len(marker):]
+		words := strings.Fields(rest)
+		topicWords := make([]string, 0, 3)
+		for _, word := range words {
+			clean := strings.TrimFunc(word, func(r rune) bool {
+				return !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != '-'
+			})
+			if clean == "" {
+				continue
+			}
+			if stopWords[strings.ToLower(clean)] {
+				break
+			}
+			topicWords = append(topicWords, clean)
+			if len(topicWords) >= 3 {
+				break
+			}
+		}
+		if len(topicWords) > 0 {
+			return strings.Join(topicWords, " ")
+		}
+	}
+
+	for _, topic := range []string{"report", "meeting", "invoice", "design review"} {
+		if strings.Contains(lower, topic) {
+			return topic
+		}
+	}
+	return ""
+}
+
+func conversationFocusTopic(recent string) string {
+	if topic := topicFromText(lastAssistantLine(recent)); topic != "" {
+		return topic
+	}
+	if topic := topicFromText(lastUserLine(recent)); topic != "" {
+		return topic
+	}
+	lower := strings.ToLower(recent)
+	for _, topic := range []string{"report", "meeting", "invoice", "design review"} {
+		if strings.Contains(lower, topic) {
+			return topic
+		}
+	}
+	return ""
+}
+
 func assistantGreeting(store *assistant.Store, now time.Time, de bool) string {
 	prefix := "Good morning"
 	if now.Hour() >= 12 && now.Hour() < 18 {
@@ -1544,6 +1628,36 @@ func rememberedProfileNote(input string) (string, string, bool) {
 	return "profile." + strings.Join(words, "_"), statement, true
 }
 
+func isSignalWordRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsNumber(r) || r == '_'
+}
+
+func containsIntentSignal(text string, signal string) bool {
+	if signal == "" {
+		return false
+	}
+	if strings.IndexFunc(signal, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	}) >= 0 {
+		return strings.Contains(text, signal)
+	}
+	for start := 0; start < len(text); {
+		idx := strings.Index(text[start:], signal)
+		if idx < 0 {
+			return false
+		}
+		idx += start
+		beforeOK := idx == 0 || !isSignalWordRune(rune(text[idx-1]))
+		afterIdx := idx + len(signal)
+		afterOK := afterIdx >= len(text) || !isSignalWordRune(rune(text[afterIdx]))
+		if beforeOK && afterOK {
+			return true
+		}
+		start = idx + len(signal)
+	}
+	return false
+}
+
 func assistantCheckIn(store *assistant.Store, now time.Time, de bool) string {
 	done := store.CompletedToday(now)
 	overdue := store.Overdue(now)
@@ -1639,7 +1753,44 @@ func assistantFocusReply(store *assistant.Store, now time.Time, de bool) string 
 	return "Nothing urgent is open right now. Pick one task, set a short focus block, and start small."
 }
 
-func assistantSmallStepReply(store *assistant.Store, now time.Time, de bool) string {
+func assistantProcrastinationReply(input string, recent string, de bool) string {
+	topic := topicFromText(input)
+	if topic == "" {
+		topic = conversationFocusTopic(recent)
+	}
+	if topic == "" {
+		if de {
+			return "Das klingt nicht nach Faulheit. Meist bedeutet Prokrastination, dass die Aufgabe zu groß, zu unklar oder emotional aufgeladen wirkt. Lass uns den Einstieg kleiner und sicherer machen."
+		}
+		return "That does not sound like laziness. Procrastination usually means the task feels too big, too vague, or too loaded. Let's make the entry point smaller and safer."
+	}
+	if de {
+		return fmt.Sprintf("Es klingt so, als hätte %q inzwischen zu viel Druck bekommen. Das ist meistens kein Faulheitsproblem, sondern ein Zeichen dafür, dass der Einstieg zu groß oder zu unklar wirkt. Lass uns %q auf einen winzigen Anfang reduzieren: öffne es und schreibe nur drei grobe Stichpunkte.", topic, topic)
+	}
+	return fmt.Sprintf("It sounds like %q has picked up too much pressure. That usually is not laziness; it means the starting point feels too big or too unclear. Let's shrink %q to a tiny entry point: open it and write just three rough bullet points.", topic, topic)
+}
+
+func assistantReflectionReply(recent string, de bool) string {
+	topic := conversationFocusTopic(recent)
+	if topic == "" {
+		if de {
+			return "Meine Vermutung: Dein Kopf schützt dich gerade vor etwas, das schwer, unklar oder zu bewertbar wirkt. Das heißt nicht, dass mit dir etwas nicht stimmt — die Aufgabe braucht nur einen kleineren Einstiegspunkt."
+		}
+		return "My guess is that your brain is protecting you from something that feels heavy, unclear, or easy to judge yourself over. That does not mean something is wrong with you — it usually means the task needs a smaller entry point."
+	}
+	if de {
+		return fmt.Sprintf("Meine Vermutung: %q ist inzwischen zu einer Druck-Aufgabe geworden. Wenn etwas wichtig wirkt, aber noch keinen klaren Einstieg hat, weichen wir oft aus, um Anspannung oder Selbstkritik kurz zu vermeiden. Das heißt nicht, dass du faul bist — %q braucht nur einen kleineren, sichereren Anfang.", topic, topic)
+	}
+	return fmt.Sprintf("My guess is that %q has turned into a pressure task. When something feels important but still vague, people often avoid it for a while to get relief from tension or self-judgment. That does not mean you're lazy — %q just needs a smaller, safer starting point.", topic, topic)
+}
+
+func assistantSmallStepReply(store *assistant.Store, recent string, now time.Time, de bool) string {
+	if topic := conversationFocusTopic(recent); topic != "" {
+		if de {
+			return fmt.Sprintf("Gut. Der nächste kleine Schritt ist ganz konkret: öffne %q jetzt und arbeite nur 10 Minuten daran.", topic)
+		}
+		return fmt.Sprintf("Good. The next small step is concrete: open %q now and work on it for just 10 minutes.", topic)
+	}
 	overdue := store.Overdue(now)
 	if len(overdue) > 0 {
 		if de {
@@ -1793,7 +1944,7 @@ func answerAssistantQuery(store *assistant.Store, input string, recent string, n
 		"semantic", "ranking", "working memory", "decay",
 	}
 	for _, sig := range codeSignals {
-		if strings.Contains(lower, sig) {
+		if containsIntentSignal(lower, sig) {
 			return "", false
 		}
 	}
@@ -1841,14 +1992,25 @@ func answerAssistantQuery(store *assistant.Store, input string, recent string, n
 		}
 		if lower == "yes" || lower == "yeah" || lower == "ok" || lower == "okay" {
 			if de {
-				return assistantSmallStepReply(store, now, de), true
+				return assistantSmallStepReply(store, recent, now, de), true
 			}
-			return assistantSmallStepReply(store, now, de), true
+			return assistantSmallStepReply(store, recent, now, de), true
+		}
+		if lower == "that sounds right" || lower == "exactly" || lower == "makes sense" || lower == "yes that fits" {
+			return assistantSmallStepReply(store, recent, now, de), true
 		}
 	}
 
 	if strings.Contains(lower, "help me plan my day") || strings.Contains(lower, "plan my day") || strings.Contains(lower, "organize my day") || strings.Contains(lower, "prioritize my day") {
 		return assistantPlanReply(store, now, de), true
+	}
+
+	if strings.Contains(lower, "procrastinating") {
+		return assistantProcrastinationReply(input, recent, de), true
+	}
+
+	if strings.Contains(lower, "why do you think that keeps happening") || strings.Contains(lower, "why does that keep happening") || strings.Contains(lower, "why is that keeping happening") {
+		return assistantReflectionReply(recent, de), true
 	}
 
 	if strings.Contains(lower, "help me focus") || strings.Contains(lower, "i feel overwhelmed") || strings.Contains(lower, "i'm overwhelmed") || strings.Contains(lower, "i am overwhelmed") || strings.Contains(lower, "i feel stressed") || strings.Contains(lower, "i'm stressed") {
@@ -2065,7 +2227,7 @@ func shouldInjectAssistantContext(input string) bool {
 		"edit", "write ", "grep",
 	}
 	for _, sig := range codeSignals {
-		if strings.Contains(lower, sig) {
+		if containsIntentSignal(lower, sig) {
 			return false
 		}
 	}

@@ -351,10 +351,53 @@ func TestAnswerAssistantQueryUsesRecentConversationForFollowUps(t *testing.T) {
 	if !ok {
 		t.Fatal("expected short confirmation follow-up answer")
 	}
-	for _, check := range []string{"Finish report", "next small step"} {
+	for _, check := range []string{"report", "next small step"} {
 		if !strings.Contains(strings.ToLower(answer), strings.ToLower(check)) {
 			t.Fatalf("confirmation follow-up should contain %q, got %q", check, answer)
 		}
+	}
+
+	answer, ok = answerAssistantQuery(store, "that sounds right", recent, now)
+	if !ok {
+		t.Fatal("expected affirmation follow-up answer")
+	}
+	if !strings.Contains(strings.ToLower(answer), "report") {
+		t.Fatalf("affirmation follow-up should point to next step, got %q", answer)
+	}
+}
+
+func TestAnswerAssistantQueryHandlesReflectiveProcrastination(t *testing.T) {
+	store := assistant.NewStore(t.TempDir())
+	now := time.Date(2026, 3, 12, 10, 0, 0, 0, time.UTC)
+
+	first, ok := answerAssistantQuery(store, "I have been procrastinating on my report for days", "", now)
+	if !ok {
+		t.Fatal("expected procrastination reply")
+	}
+	for _, check := range []string{"report", "three rough bullet points"} {
+		if !strings.Contains(strings.ToLower(first), strings.ToLower(check)) {
+			t.Fatalf("procrastination reply should contain %q, got %q", check, first)
+		}
+	}
+
+	recent := "User: I have been procrastinating on my report for days\nAssistant: " + first
+	why, ok := answerAssistantQuery(store, "why do you think that keeps happening", recent, now)
+	if !ok {
+		t.Fatal("expected reflective follow-up reply")
+	}
+	for _, check := range []string{"report", "pressure task", "not mean you're lazy"} {
+		if !strings.Contains(strings.ToLower(why), strings.ToLower(check)) {
+			t.Fatalf("reflective reply should contain %q, got %q", check, why)
+		}
+	}
+
+	affirmRecent := recent + "\nUser: why do you think that keeps happening\nAssistant: " + why
+	affirm, ok := answerAssistantQuery(store, "that sounds right", affirmRecent, now)
+	if !ok {
+		t.Fatal("expected affirmation next-step reply")
+	}
+	if !strings.Contains(strings.ToLower(affirm), "report") {
+		t.Fatalf("affirmation reply should stay on the report topic, got %q", affirm)
 	}
 }
 
