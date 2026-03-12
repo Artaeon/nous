@@ -177,8 +177,8 @@ func TestBuildAssistantContextIncludesPreferencesTasksAndRoutines(t *testing.T) 
 	_, _ = store.AddTask("Call dentist", now.Add(2*time.Hour), "")
 	_, _ = store.AddRoutine("Morning review", "daily", "08:30")
 
-	out := buildAssistantContext(store, "What matters today?", now)
-	checks := []string{"[Assistant Memory]", "language=de", "Active reminders/tasks:", "Call dentist", "Morning review"}
+	out := buildAssistantContext(store, "What matters today?", "User: I want a calm day\nAssistant: We'll keep it simple.", now)
+	checks := []string{"[Assistant Memory]", "Current time:", "Recent conversation:", "language=de", "Active reminders/tasks:", "Call dentist", "Active routines today:", "Morning review"}
 	for _, check := range checks {
 		if !strings.Contains(out, check) {
 			t.Fatalf("buildAssistantContext() should contain %q", check)
@@ -189,7 +189,7 @@ func TestBuildAssistantContextIncludesPreferencesTasksAndRoutines(t *testing.T) 
 func TestBuildAssistantContextSkipsCodeQueries(t *testing.T) {
 	store := assistant.NewStore(t.TempDir())
 	_ = store.SetPreference("language", "de")
-	out := buildAssistantContext(store, "show me the main.go file", time.Now())
+	out := buildAssistantContext(store, "show me the main.go file", "", time.Now())
 	if out != "" {
 		t.Fatalf("expected no assistant context for code query, got %q", out)
 	}
@@ -201,7 +201,7 @@ func TestAnswerAssistantQueryUsesPreferencesAndReminders(t *testing.T) {
 	_ = store.SetPreference("language", "de")
 	_, _ = store.AddTask("Call dentist", now.Add(2*time.Hour), "")
 
-	answer, ok := answerAssistantQuery(store, "What reminder do I currently have?", now)
+	answer, ok := answerAssistantQuery(store, "What reminder do I currently have?", "", now)
 	if !ok {
 		t.Fatal("expected deterministic assistant answer")
 	}
@@ -212,9 +212,81 @@ func TestAnswerAssistantQueryUsesPreferencesAndReminders(t *testing.T) {
 		}
 	}
 
-	langAnswer, ok := answerAssistantQuery(store, "What language do I prefer?", now)
+	langAnswer, ok := answerAssistantQuery(store, "What language do I prefer?", "", now)
 	if !ok || (!strings.Contains(langAnswer, "de") && !strings.Contains(strings.ToLower(langAnswer), "deutsch")) {
 		t.Fatalf("expected language answer to mention de/Deutsch, got %q", langAnswer)
+	}
+}
+
+func TestAnswerAssistantQuerySupportsCompanionPlanningAndFocus(t *testing.T) {
+	store := assistant.NewStore(t.TempDir())
+	now := time.Date(2026, 3, 11, 10, 0, 0, 0, time.UTC)
+	_ = store.SetPreference("focus", "Deep work before meetings")
+	_, _ = store.AddTask("Finish report", now.Add(-30*time.Minute), "")
+	_, _ = store.AddRoutine("Review priorities", "daily", "08:00")
+
+	planAnswer, ok := answerAssistantQuery(store, "Help me plan my day", "", now)
+	if !ok {
+		t.Fatal("expected planning answer")
+	}
+	for _, check := range []string{"Finish report", "Deep work before meetings", "Review priorities"} {
+		if !strings.Contains(planAnswer, check) {
+			t.Fatalf("planning answer should contain %q, got %q", check, planAnswer)
+		}
+	}
+
+	focusAnswer, ok := answerAssistantQuery(store, "I feel overwhelmed", "", now)
+	if !ok {
+		t.Fatal("expected focus answer")
+	}
+	for _, check := range []string{"Finish report", "Deep work before meetings"} {
+		if !strings.Contains(focusAnswer, check) {
+			t.Fatalf("focus answer should contain %q, got %q", check, focusAnswer)
+		}
+	}
+}
+
+func TestAnswerAssistantQuerySupportsGreetingAndPreferenceSummary(t *testing.T) {
+	store := assistant.NewStore(t.TempDir())
+	now := time.Date(2026, 3, 11, 10, 0, 0, 0, time.UTC)
+	_ = store.SetPreference("language", "de")
+	_ = store.SetPreference("focus", "Deep work before meetings")
+	_, _ = store.AddTask("Send update", now.Add(90*time.Minute), "")
+
+	greeting, ok := answerAssistantQuery(store, "hello", "", now)
+	if !ok {
+		t.Fatal("expected greeting answer")
+	}
+	for _, check := range []string{"Send update", "11:30"} {
+		if !strings.Contains(greeting, check) {
+			t.Fatalf("greeting answer should contain %q, got %q", check, greeting)
+		}
+	}
+
+	prefAnswer, ok := answerAssistantQuery(store, "What do you know about my preferences?", "", now)
+	if !ok {
+		t.Fatal("expected preference summary answer")
+	}
+	for _, check := range []string{"language=de", "focus=Deep work before meetings", "Send update"} {
+		if !strings.Contains(prefAnswer, check) {
+			t.Fatalf("preference summary should contain %q, got %q", check, prefAnswer)
+		}
+	}
+}
+
+func TestAnswerAssistantQueryUsesRecentConversationForFollowUps(t *testing.T) {
+	store := assistant.NewStore(t.TempDir())
+	now := time.Date(2026, 3, 12, 10, 0, 0, 0, time.UTC)
+	recent := "User: I feel overwhelmed\nAssistant: Let's reduce today to one next step: finish the report before lunch."
+
+	answer, ok := answerAssistantQuery(store, "tell me more", recent, now)
+	if !ok {
+		t.Fatal("expected follow-up answer")
+	}
+	for _, check := range []string{"Picking up from our last point", "finish the report"} {
+		if !strings.Contains(answer, check) {
+			t.Fatalf("follow-up answer should contain %q, got %q", check, answer)
+		}
 	}
 }
 
@@ -235,5 +307,69 @@ func TestScoreInteractionQualityPenalizesFailures(t *testing.T) {
 	quality := scoreInteractionQuality("Error: reached maximum tool iterations and failed", 15*time.Second, board)
 	if quality >= 0.5 {
 		t.Fatalf("expected penalized quality score, got %.2f", quality)
+	}
+}
+
+func TestAssistantQueryDoesNotHijackCodeQuestions(t *testing.T) {
+	store := assistant.NewStore(t.TempDir())
+	now := time.Now()
+
+	codeQueries := []string{
+		"what does renderBriefing include",
+		"explain the correctArgNames function",
+		"how does semantic ranking work in working.go",
+		"read file internal/cognitive/reasoner.go",
+		"what is the function signature of SemanticSearch",
+		"show me the struct definition for Pipeline",
+		"where is the type WorkingMemory defined",
+		"how does the code in main.go work",
+	}
+
+	for _, query := range codeQueries {
+		_, ok := answerAssistantQuery(store, query, "", now)
+		if ok {
+			t.Errorf("answerAssistantQuery should NOT handle code query %q", query)
+		}
+	}
+}
+
+func TestAssistantContextNotInjectedForCodeQuestions(t *testing.T) {
+	codeQueries := []string{
+		"what does renderBriefing include",
+		"explain the function correctArgNames",
+		"how does semantic ranking work in working.go",
+		"read the file main.go",
+		"search for SemanticSearch in the codebase",
+	}
+
+	for _, query := range codeQueries {
+		if shouldInjectAssistantContext(query) {
+			t.Errorf("shouldInjectAssistantContext should return false for %q", query)
+		}
+	}
+}
+
+func TestAssistantQueryStillWorksForRealAssistantQuestions(t *testing.T) {
+	store := assistant.NewStore(t.TempDir())
+	now := time.Date(2026, 3, 11, 10, 0, 0, 0, time.UTC)
+	_, _ = store.AddTask("Buy groceries", now.Add(2*time.Hour), "")
+
+	assistantQueries := []struct {
+		input    string
+		wantOK   bool
+	}{
+		{"what reminder do I currently have?", true},
+		{"what's on my plate", true},
+		{"what should I do now", true},
+		{"good morning", true},
+		{"evening review", true},
+		{"overdue tasks", true},
+	}
+
+	for _, tt := range assistantQueries {
+		_, ok := answerAssistantQuery(store, tt.input, "", now)
+		if ok != tt.wantOK {
+			t.Errorf("answerAssistantQuery(%q) ok=%v, want %v", tt.input, ok, tt.wantOK)
+		}
 	}
 }

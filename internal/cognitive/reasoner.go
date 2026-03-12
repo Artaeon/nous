@@ -36,6 +36,7 @@ type Reasoner struct {
 	WorkingMem       *memory.WorkingMemory
 	LongTermMem      *memory.LongTermMemory
 	ProjectMem       *memory.ProjectMemory
+	EpisodicMem      *memory.EpisodicMemory
 	Compressor       *compress.Compressor
 	CodeIndex        *index.CodebaseIndex
 	Budget           *ContextBudget
@@ -43,11 +44,12 @@ type Reasoner struct {
 	Recipes          *RecipeBook
 	Predictor        *Predictor
 	Learner          *Learner
+	Router           *ModelRouter
 	OnToken          func(token string, done bool)
 	OnStatus         func(status string)
 	Confirm          ConfirmFunc
-	AssistantContext func(input string) string
-	AssistantAnswer  func(input string) (string, bool)
+	AssistantContext func(input string, recent string) string
+	AssistantAnswer  func(input string, recent string) (string, bool)
 
 	// Active tool subset for current reasoning cycle
 	activeTools []tools.Tool
@@ -61,7 +63,7 @@ func NewReasoner(board *blackboard.Blackboard, llm *ollama.Client, toolReg *tool
 	return &Reasoner{
 		Base:       Base{Board: board, LLM: llm},
 		Tools:      toolReg,
-		Conv:       NewConversation(20),
+		Conv:       NewConversation(40),
 		Budget:     DefaultBudget(),
 		Gate:       &ReflectionGate{},
 		activeCats: make(map[ToolCategory]bool),
@@ -92,9 +94,12 @@ func (r *Reasoner) Run(ctx context.Context) error {
 func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error {
 	// Reset reflection gate for this reasoning cycle
 	r.Gate.Reset()
+	recentConversation := recentConversationContext(r.Conv.Messages(), 6)
 
 	if r.AssistantAnswer != nil {
-		if answer, ok := r.AssistantAnswer(percept.Raw); ok {
+		if answer, ok := r.AssistantAnswer(percept.Raw, recentConversation); ok {
+			r.Conv.User(percept.Raw)
+			r.Conv.Assistant(answer)
 			r.publishAnswer(answer)
 			r.finishReasoning(percept, NewPipeline(percept.Raw), answer)
 			return nil
@@ -113,13 +118,26 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 	// Create pipeline for this reasoning cycle.
 	pipe := NewPipeline(percept.Raw)
 
+	// Configure thought distillation with the fast model (if multi-model routing available)
+	if r.Router != nil {
+		distiller := r.Router.ClientFor(TaskCompression)
+		if distiller != nil {
+			pipe.SetDistiller(distiller)
+		}
+	}
+
 	// Recall key facts from memory for system context (not user message).
 	// Only inject if truly relevant — avoid dumping memory into the prompt.
 	memoryFacts := r.recallKeyFacts(percept.Raw)
 	assistantFacts := ""
 	if r.AssistantContext != nil {
-		assistantFacts = r.AssistantContext(percept.Raw)
+		assistantFacts = r.AssistantContext(percept.Raw, recentConversation)
 	}
+
+	// Pre-ground code questions: if the query looks code-related and the codebase
+	// index has a matching file, auto-read it BEFORE the first LLM call. This ensures
+	// the model has real source code in context instead of hallucinating.
+	groundingHint := r.preGroundCodeQuery(percept.Raw, pipe)
 
 	// 2. Autonomous tool loop with fresh-context pipeline
 	// nativeConv tracks the accumulated conversation when using native tool calling.
@@ -150,10 +168,16 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 			if memoryFacts != "" {
 				sysPrompt += "\n" + memoryFacts
 			}
+			if recentConversation != "" {
+				sysPrompt += "\n[Recent conversation]\n" + recentConversation
+			}
 			conv.System(sysPrompt)
 
 			// User message: ONLY the raw query + pipeline context
 			userMsg := percept.Raw
+			if groundingHint != "" && i == 0 {
+				userMsg += "\n\n" + groundingHint
+			}
 			if pipeCtx := pipe.BuildContext(); pipeCtx != "" {
 				userMsg += "\n\nPrevious steps:\n" + pipeCtx
 			}
@@ -195,6 +219,17 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 			r.Conv.Assistant(fullResponse)
 			parsed := r.parseResponse(fullResponse)
 			toolCalls = parsed.ToolCalls
+
+			if len(toolCalls) == 0 {
+				// Check if the response looks like a failed tool call attempt
+				// (contains JSON-like patterns but couldn't be parsed)
+				if looksLikeFailedToolCall(fullResponse) {
+					retried := r.structuredToolRetry(percept.Raw)
+					if len(retried) > 0 {
+						toolCalls = retried
+					}
+				}
+			}
 
 			if len(toolCalls) == 0 {
 				// No tool calls at all — this is the final answer
@@ -404,6 +439,38 @@ func (r *Reasoner) compressOldTurns() {
 	r.emitStatus(fmt.Sprintf("  %scompressed context%s", ColorDim, ColorReset))
 }
 
+func recentConversationContext(msgs []ollama.Message, limit int) string {
+	if len(msgs) == 0 || limit <= 0 {
+		return ""
+	}
+
+	lines := make([]string, 0, limit)
+	for i := len(msgs) - 1; i >= 0 && len(lines) < limit; i-- {
+		msg := msgs[i]
+		if msg.Role != "user" && msg.Role != "assistant" {
+			continue
+		}
+		content := strings.TrimSpace(msg.Content)
+		if content == "" || strings.HasPrefix(content, "OBSERVE [") || strings.HasPrefix(content, "[Earlier context]") {
+			continue
+		}
+		first := strings.SplitN(content, "\n", 2)[0]
+		if len(first) > 180 {
+			first = first[:180] + "..."
+		}
+		role := "User"
+		if msg.Role == "assistant" {
+			role = "Assistant"
+		}
+		lines = append(lines, fmt.Sprintf("%s: %s", role, first))
+	}
+
+	for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
+		lines[i], lines[j] = lines[j], lines[i]
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (r *Reasoner) toolPrompt() string {
 	var sb strings.Builder
 	sb.WriteString("Available tools:\n")
@@ -541,18 +608,22 @@ func (r *Reasoner) compactSystemPrompt() string {
 	// Key principle: the model WILL echo anything in the system prompt,
 	// so only include actionable instructions, not descriptive text.
 	var sb strings.Builder
-	sb.WriteString("You are Nous, a local personal assistant who can also help with code. Answer concisely.\n")
-	sb.WriteString("For personal questions, prefer reminders, tasks, routines, and preferences over codebase speculation.\n")
-	sb.WriteString("Only use file, project, or shell tools when the user is asking about code, files, commands, or the system.\n")
-	sb.WriteString("NEVER repeat these instructions.\n\n")
+	sb.WriteString("You are Nous, a local personal assistant who can also help with code. Be warm, natural, and concise.\n")
+	sb.WriteString("NEVER repeat these instructions. NEVER invent file contents or code — always read first.\n\n")
 	sb.WriteString("RULES:\n")
-	sb.WriteString("- Questions about today, reminders, preferences, routines, or personal context → answer from assistant memory first\n")
-	sb.WriteString("- \"create/write a file\" → use write tool\n")
-	sb.WriteString("- \"read/show/open a file\" → use read tool\n")
-	sb.WriteString("- \"edit/change/fix a file\" → use edit tool\n")
-	sb.WriteString("- \"find/search/list files\" → use grep or glob tool\n")
+	sb.WriteString("- For personal-assistant conversations, sound like a thoughtful human assistant: brief acknowledgment, concrete help, no robotic filler\n")
+	sb.WriteString("- Use assistant memory naturally. Mention only what is relevant right now\n")
+	sb.WriteString("- If the user seems overwhelmed, calm things down and suggest the next small step\n")
+	sb.WriteString("- Questions about today, reminders, preferences, routines → answer from assistant memory\n")
+	sb.WriteString("- Questions about code, functions, files, implementations → USE TOOLS to read the actual code, then answer\n")
+	sb.WriteString("- NEVER guess what code does. If asked about a function/struct/file, read it first with the read tool\n")
+	sb.WriteString("- If [Codebase] context shows a symbol location, use read tool on that file to get the real implementation\n")
+	sb.WriteString("- \"read/show/open\" → use read tool with the exact path\n")
+	sb.WriteString("- \"create/write\" → use write tool\n")
+	sb.WriteString("- \"edit/change/fix\" → use edit tool\n")
+	sb.WriteString("- \"find/search/list\" → use grep or glob tool\n")
 	sb.WriteString("- \"run a command\" → use shell tool\n")
-	sb.WriteString("- Questions needing no files → reply directly\n\n")
+	sb.WriteString("- All file paths are relative to the working directory shown below\n\n")
 	sb.WriteString("To use a tool, output ONLY this JSON:\n")
 	sb.WriteString(`{"tool": "NAME", "args": {"key": "value"}}`)
 	sb.WriteString("\n\n")
@@ -560,6 +631,12 @@ func (r *Reasoner) compactSystemPrompt() string {
 	sb.WriteString("\nWorking directory: ")
 	sb.WriteString(wd)
 	sb.WriteString("\n")
+
+	// Inject project structure so the model knows what files/dirs exist
+	if CurrentProject != nil {
+		sb.WriteString("\n")
+		sb.WriteString(CurrentProject.ContextString())
+	}
 
 	return sb.String()
 }
@@ -711,6 +788,14 @@ func (r *Reasoner) executeTool(tc toolCall) (string, error) {
 
 	if tc.Args == nil {
 		tc.Args = make(map[string]string)
+	}
+
+	// Auto-correct common argument name mistakes from small models
+	tc.Args = correctArgNames(tc.Name, tc.Args)
+
+	// Validate required arguments are present
+	if missing := validateRequiredArgs(tc.Name, tc.Args); missing != "" {
+		return "", fmt.Errorf("missing required argument %q for tool %q", missing, tc.Name)
 	}
 
 	// Check predictive cache first (read-only tools only)
@@ -899,25 +984,65 @@ func (r *Reasoner) emitStatus(msg string) {
 	}
 }
 
-// recallKeyFacts retrieves only essential facts for the system prompt.
-// Unlike recallMemories, this is selective — it only returns facts the model
-// NEEDS to know (like user identity), not full conversation history.
+// recallKeyFacts retrieves essential facts for the system prompt using
+// semantic similarity when embeddings are available, falling back to
+// recency-based retrieval otherwise.
 func (r *Reasoner) recallKeyFacts(input string) string {
 	var facts []string
 
-	// Get user identity if stored
 	if r.WorkingMem != nil {
-		items := r.WorkingMem.MostRelevant(5)
+		// Try semantic retrieval first — find slots relevant to this query
+		var items []memory.Slot
+		if r.WorkingMem.Size() > 0 {
+			// Attempt semantic search via embedding
+			if r.LLM != nil {
+				vec, err := r.LLM.Embed(input)
+				if err == nil && len(vec) > 0 {
+					items = r.WorkingMem.SemanticSearch(vec, 5)
+				}
+			}
+			// Fallback to recency-based if semantic search didn't produce results
+			if len(items) == 0 {
+				items = r.WorkingMem.MostRelevant(5)
+			}
+		}
+
+		var memLines []string
 		for _, item := range items {
 			if strings.HasPrefix(item.Key, "user_identity") {
 				facts = append(facts, fmt.Sprintf("User info: %v", item.Value))
+			} else {
+				memLines = append(memLines, fmt.Sprintf("- %s: %v", item.Key, item.Value))
 			}
+		}
+		if len(memLines) > 0 {
+			facts = append(facts, "[Working memory]\n"+strings.Join(memLines, "\n"))
 		}
 	}
 
-	// Get relevant codebase context
+	// Recall from episodic memory (semantic search across past interactions)
+	if r.EpisodicMem != nil && r.EpisodicMem.Size() > 0 {
+		episodes := r.EpisodicMem.Search(input, 2)
+		if len(episodes) > 0 {
+			var epLines []string
+			for _, ep := range episodes {
+				summary := ep.Input
+				if len(summary) > 60 {
+					summary = summary[:60] + "..."
+				}
+				answer := ep.Output
+				if len(answer) > 80 {
+					answer = answer[:80] + "..."
+				}
+				epLines = append(epLines, fmt.Sprintf("- Q: %s → A: %s", summary, answer))
+			}
+			facts = append(facts, "[Past interactions]\n"+strings.Join(epLines, "\n"))
+		}
+	}
+
+	// Get relevant codebase context — provide 5 symbols so the model knows where to look
 	if r.CodeIndex != nil && r.CodeIndex.Size() > 0 {
-		indexCtx := r.CodeIndex.RelevantContext(input, 3)
+		indexCtx := r.CodeIndex.RelevantContext(input, 5)
 		if indexCtx != "" {
 			facts = append(facts, indexCtx)
 		}
@@ -1090,6 +1215,237 @@ func (r *Reasoner) availableToolNames() string {
 		names = append(names, t.Name)
 	}
 	return strings.Join(names, ", ")
+}
+
+// correctArgNames fixes common argument name mistakes from small models.
+// E.g., "file" → "path", "query" → "pattern", "text" → "content".
+func correctArgNames(toolName string, args map[string]string) map[string]string {
+	// Common arg name aliases that 1.5B models produce
+	argAliases := map[string]string{
+		"file":      "path",
+		"filename":  "path",
+		"filepath":  "path",
+		"file_path": "path",
+		"name":      "path",
+		"query":     "pattern",
+		"search":    "pattern",
+		"text":      "content",
+		"data":      "content",
+		"body":      "content",
+		"old_text":  "old",
+		"new_text":  "new",
+		"old_str":   "old",
+		"new_str":   "new",
+		"original":  "old",
+		"updated":   "new",
+		"cmd":       "command",
+		"dir":       "path",
+		"directory": "path",
+	}
+
+	// Known arg names per tool — don't correct if the arg name is already valid
+	knownArgs := map[string]map[string]bool{
+		"read":         {"path": true, "offset": true, "limit": true},
+		"write":        {"path": true, "content": true},
+		"edit":         {"path": true, "old": true, "new": true, "line": true},
+		"grep":         {"pattern": true, "path": true, "glob": true},
+		"glob":         {"pattern": true, "path": true},
+		"ls":           {"path": true},
+		"tree":         {"path": true},
+		"mkdir":        {"path": true},
+		"shell":        {"command": true},
+		"run":          {"command": true},
+		"git":          {"command": true},
+		"diff":         {"path": true},
+		"fetch":        {"url": true},
+		"find_replace": {"path": true, "old": true, "new": true},
+		"replace_all":  {"path": true, "old": true, "new": true},
+		"patch":        {"path": true, "patch": true},
+		"sysinfo":      {},
+		"clipboard":    {"action": true, "content": true},
+	}
+
+	known, hasSchema := knownArgs[toolName]
+	if !hasSchema {
+		return args
+	}
+
+	corrected := make(map[string]string, len(args))
+	for k, v := range args {
+		if known[k] {
+			// Already a valid arg name
+			corrected[k] = v
+			continue
+		}
+		// Try to correct
+		if replacement, ok := argAliases[strings.ToLower(k)]; ok && known[replacement] {
+			if _, exists := corrected[replacement]; !exists {
+				corrected[replacement] = v
+				continue
+			}
+		}
+		// Keep as-is if no correction found
+		corrected[k] = v
+	}
+	return corrected
+}
+
+// validateRequiredArgs checks that required arguments are present for a tool.
+// Returns the name of the first missing required arg, or "" if all present.
+func validateRequiredArgs(toolName string, args map[string]string) string {
+	required := map[string][]string{
+		"read":         {"path"},
+		"write":        {"path", "content"},
+		"edit":         {"path", "old", "new"},
+		"grep":         {"pattern"},
+		"glob":         {"pattern"},
+		"shell":        {"command"},
+		"run":          {"command"},
+		"git":          {"command"},
+		"fetch":        {"url"},
+		"find_replace": {"path", "old", "new"},
+		"replace_all":  {"path", "old", "new"},
+		"patch":        {"path", "patch"},
+	}
+
+	reqs, ok := required[toolName]
+	if !ok {
+		return ""
+	}
+
+	for _, req := range reqs {
+		if v, exists := args[req]; !exists || strings.TrimSpace(v) == "" {
+			return req
+		}
+	}
+	return ""
+}
+
+// isCodeQuery returns true if the input looks like a question about code,
+// files, functions, implementations, or the repository structure.
+func isCodeQuery(input string) bool {
+	lower := strings.ToLower(input)
+	codeSignals := []string{
+		"function", "func ", "method", "struct", "type ",
+		"implement", "definition", "defined", "signature",
+		"package", "import", "module",
+		".go", ".py", ".js", ".ts",
+		"read file", "show file", "open file",
+		"read the", "show me the", "show the",
+		"grep", "search for", "find in", "look for", "where is",
+		"what does", "how does", "what is the", "explain",
+		"code", "source", "codebase",
+		"semantic", "ranking", "memory", "decay",
+		"variable", "constant", "return", "parameter",
+	}
+	for _, sig := range codeSignals {
+		if strings.Contains(lower, sig) {
+			return true
+		}
+	}
+	return false
+}
+
+// preGroundCodeQuery auto-reads the most relevant symbol's definition before
+// the first LLM call. Reads a window centered on the symbol's line number so
+// even deep-in-file symbols (e.g., line 1180 of a 1400-line file) are captured.
+// Returns a grounding hint that should be injected into the user message.
+func (r *Reasoner) preGroundCodeQuery(query string, pipe *Pipeline) string {
+	if !isCodeQuery(query) {
+		return ""
+	}
+	if r.CodeIndex == nil || r.CodeIndex.Size() == 0 {
+		return ""
+	}
+
+	sym := r.CodeIndex.BestSymbolForQuery(query)
+	if sym == nil {
+		return ""
+	}
+
+	// Execute read tool with offset/limit centered on the symbol
+	readTool, err := r.Tools.Get("read")
+	if err != nil {
+		return ""
+	}
+
+	// Read a 60-line window centered on the symbol definition
+	const windowSize = 60
+	startLine := sym.Line - windowSize/2
+	if startLine < 0 {
+		startLine = 0
+	}
+
+	args := map[string]string{
+		"path":   sym.File,
+		"offset": fmt.Sprintf("%d", startLine),
+		"limit":  fmt.Sprintf("%d", windowSize),
+	}
+
+	result, err := readTool.Execute(args)
+	if err != nil {
+		return ""
+	}
+
+	label := fmt.Sprintf("%s %s [%s:%d]", sym.Kind, sym.Name, sym.File, sym.Line)
+	r.emitStatus(fmt.Sprintf("  %s↳ pre-read %s%s", ColorDim, label, ColorReset))
+	pipe.AddStep("read", result)
+
+	// Return a grounding constraint for the user message
+	return fmt.Sprintf("[System: I already read %s for you — lines %d-%d of %s. "+
+		"Answer ONLY from the code shown above. Do NOT make additional tool calls. "+
+		"If the answer is not in the code shown, say so.]",
+		label, startLine, startLine+windowSize, sym.File)
+}
+
+// looksLikeFailedToolCall checks if a response contains JSON-like patterns
+// that suggest the model tried to call a tool but produced malformed output.
+func looksLikeFailedToolCall(response string) bool {
+	r := strings.ToLower(response)
+	// Look for JSON-like fragments that suggest tool call intent
+	hasToolHint := strings.Contains(r, `"tool"`) || strings.Contains(r, `"name"`) ||
+		strings.Contains(r, `"action"`) || strings.Contains(r, `"function"`)
+	hasBrace := strings.Contains(response, "{") && strings.Contains(response, "}")
+	return hasToolHint && hasBrace
+}
+
+// structuredToolRetry uses format:"json" to force a clean tool call when
+// fallback parsing failed. Returns parsed tool calls or nil.
+func (r *Reasoner) structuredToolRetry(userQuery string) []toolCall {
+	if r.LLM == nil {
+		return nil
+	}
+
+	prompt := fmt.Sprintf(`You must respond with a JSON object. Choose one:
+
+To use a tool: {"tool": "TOOL_NAME", "args": {"key": "value"}}
+To give a final answer: {"answer": "your answer text"}
+
+Available tools: %s
+
+User request: %s`, r.availableToolNames(), userQuery)
+
+	resp, err := r.LLM.ChatJSON([]ollama.Message{
+		{Role: "user", Content: prompt},
+	}, &ollama.ModelOptions{
+		Temperature: 0.1,
+		NumPredict:  256,
+	})
+	if err != nil {
+		return nil
+	}
+
+	content := strings.TrimSpace(resp.Message.Content)
+	if content == "" {
+		return nil
+	}
+
+	var raw toolCallRaw
+	if err := json.Unmarshal([]byte(content), &raw); err == nil && raw.Name != "" {
+		return []toolCall{raw.normalize()}
+	}
+
+	return nil
 }
 
 // finishReasoning records recipes, emits goal completion for the Learner, and stores to memory.

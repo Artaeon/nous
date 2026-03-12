@@ -131,6 +131,7 @@ func main() {
 
 	// Memory systems
 	wm := memory.NewWorkingMemory(64)
+	wm.SetEmbedFunc(llm.Embed) // enable semantic retrieval
 	ltm := memory.NewLongTermMemory(*memoryPath)
 
 	// Project-level memory (stored in the project's .nous/ directory)
@@ -183,11 +184,13 @@ func main() {
 	reasoner.Recipes = recipeBook
 	reasoner.Predictor = predictor
 	reasoner.Learner = learner
-	reasoner.AssistantContext = func(input string) string {
-		return buildAssistantContext(assistantStore, input, time.Now())
+	reasoner.EpisodicMem = episodic
+	reasoner.Router = router
+	reasoner.AssistantContext = func(input string, recent string) string {
+		return buildAssistantContext(assistantStore, input, recent, time.Now())
 	}
-	reasoner.AssistantAnswer = func(input string) (string, bool) {
-		return answerAssistantQuery(assistantStore, input, time.Now())
+	reasoner.AssistantAnswer = func(input string, recent string) (string, bool) {
+		return answerAssistantQuery(assistantStore, input, recent, time.Now())
 	}
 	planner := cognitive.NewPlanner(board, llm)
 	executor := cognitive.NewExecutor(board, llm, toolReg)
@@ -360,8 +363,8 @@ func main() {
 	// --- REPL Mode ---
 	fmt.Print(cognitive.Panel("Quick start", []string{
 		cognitive.Styled(cognitive.ColorCyan, "/dashboard") + " overview of the local agent",
+		cognitive.Styled(cognitive.ColorCyan, "/briefing") + " morning briefing — what matters today",
 		cognitive.Styled(cognitive.ColorCyan, "/today") + " review reminders, tasks, and upcoming actions",
-		cognitive.Styled(cognitive.ColorCyan, "/routines") + " inspect recurring assistant routines",
 		cognitive.Styled(cognitive.ColorCyan, "/help") + " browse commands and workflows",
 		cognitive.Styled(cognitive.ColorCyan, "/plan <goal>") + " delegate a longer task",
 		cognitive.Styled(cognitive.ColorCyan, "/quit") + " save and exit",
@@ -453,6 +456,13 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 	case "/today":
 		fmt.Print(renderToday(assistantStore, time.Now()))
 		_ = assistantStore.MarkNotificationsRead()
+
+	case "/briefing":
+		fmt.Print(renderBriefing(assistantStore, time.Now()))
+		_ = assistantStore.MarkNotificationsRead()
+
+	case "/review":
+		fmt.Print(renderReview(assistantStore, time.Now()))
 
 	case "/tasks":
 		fmt.Print(renderTasks(assistantStore, time.Now()))
@@ -914,6 +924,8 @@ func renderHelp() string {
 		cognitive.Styled(cognitive.ColorCyan, "/tools") + " browse built-in tools by category",
 	}))
 	b.WriteString(cognitive.Panel("Assistant operations", []string{
+		cognitive.Styled(cognitive.ColorCyan, "/briefing") + " morning briefing — overdue, today's schedule, routines",
+		cognitive.Styled(cognitive.ColorCyan, "/review") + " evening review — completed, still pending, overdue",
 		"/remind <when> <task>, /tasks, /done <task-id>",
 		"/routine <daily|weekdays> <HH:MM> <task>, /routines",
 		"/pref <key> <value>, /prefs",
@@ -1039,22 +1051,448 @@ func renderRoutines(store *assistant.Store) string {
 	return cognitive.Panel("Routines", lines)
 }
 
-func buildAssistantContext(store *assistant.Store, input string, now time.Time) string {
+func renderBriefing(store *assistant.Store, now time.Time) string {
+	greeting := "Good morning"
+	hour := now.Hour()
+	switch {
+	case hour >= 17:
+		greeting = "Good evening"
+	case hour >= 12:
+		greeting = "Good afternoon"
+	}
+
+	var sections []string
+
+	// Overdue
+	overdue := store.Overdue(now)
+	if len(overdue) > 0 {
+		lines := make([]string, 0, len(overdue))
+		for _, task := range overdue {
+			ago := now.Sub(task.DueAt).Truncate(time.Minute)
+			lines = append(lines, fmt.Sprintf("  %s  %s (overdue %s)", task.DueAt.Format("15:04"), task.Title, ago))
+		}
+		sections = append(sections, cognitive.Styled(cognitive.ColorRed, fmt.Sprintf("Overdue (%d)", len(overdue)))+"\n"+strings.Join(lines, "\n"))
+	}
+
+	// Today's schedule
+	today := store.Today(now)
+	if len(today) > 0 {
+		lines := make([]string, 0, len(today))
+		for _, task := range today {
+			lines = append(lines, fmt.Sprintf("  %s  %s", task.DueAt.Format("15:04"), task.Title))
+		}
+		sections = append(sections, fmt.Sprintf("Today (%d)", len(today))+"\n"+strings.Join(lines, "\n"))
+	}
+
+	// Active routines for today
+	routines := store.ActiveRoutinesForDay(now)
+	if len(routines) > 0 {
+		lines := make([]string, 0, len(routines))
+		for _, routine := range routines {
+			lines = append(lines, fmt.Sprintf("  %s  %s", routine.TimeOfDay, routine.Title))
+		}
+		sections = append(sections, fmt.Sprintf("Routines (%d)", len(routines))+"\n"+strings.Join(lines, "\n"))
+	}
+
+	// Unread notifications
+	unread := store.UnreadNotifications()
+	if len(unread) > 0 {
+		lines := make([]string, 0, len(unread))
+		for _, note := range unread {
+			lines = append(lines, fmt.Sprintf("  %s", note.Message))
+		}
+		sections = append(sections, fmt.Sprintf("Unread (%d)", len(unread))+"\n"+strings.Join(lines, "\n"))
+	}
+
+	// Upcoming (next 3, not today)
+	upcoming := store.Upcoming(3, now)
+	var futureOnly []assistant.Task
+	y, m, d := now.Date()
+	for _, task := range upcoming {
+		ty, tm, td := task.DueAt.Date()
+		if !(y == ty && m == tm && d == td) {
+			futureOnly = append(futureOnly, task)
+		}
+	}
+	if len(futureOnly) > 0 {
+		lines := make([]string, 0, len(futureOnly))
+		for _, task := range futureOnly {
+			lines = append(lines, fmt.Sprintf("  %s  %s", task.DueAt.Format("Mon 15:04"), task.Title))
+		}
+		sections = append(sections, "Coming up\n"+strings.Join(lines, "\n"))
+	}
+
+	if len(sections) == 0 {
+		return cognitive.Panel(greeting, []string{"Your schedule is clear. No tasks, no overdue items."})
+	}
+
+	return cognitive.Panel(greeting, sections)
+}
+
+func renderReview(store *assistant.Store, now time.Time) string {
+	var sections []string
+
+	// Completed today
+	done := store.CompletedToday(now)
+	if len(done) > 0 {
+		lines := make([]string, 0, len(done))
+		for _, task := range done {
+			lines = append(lines, fmt.Sprintf("  %s  %s", task.CompletedAt.Format("15:04"), task.Title))
+		}
+		sections = append(sections, cognitive.Styled(cognitive.ColorGreen, fmt.Sprintf("Completed today (%d)", len(done)))+"\n"+strings.Join(lines, "\n"))
+	} else {
+		sections = append(sections, "No tasks completed today.")
+	}
+
+	// Still pending today
+	today := store.Today(now)
+	if len(today) > 0 {
+		lines := make([]string, 0, len(today))
+		for _, task := range today {
+			lines = append(lines, fmt.Sprintf("  %s  %s", task.DueAt.Format("15:04"), task.Title))
+		}
+		sections = append(sections, fmt.Sprintf("Still pending (%d)", len(today))+"\n"+strings.Join(lines, "\n"))
+	}
+
+	// Overdue
+	overdue := store.Overdue(now)
+	if len(overdue) > 0 {
+		lines := make([]string, 0, len(overdue))
+		for _, task := range overdue {
+			lines = append(lines, fmt.Sprintf("  %s  %s", task.DueAt.Format("15:04"), task.Title))
+		}
+		sections = append(sections, cognitive.Styled(cognitive.ColorRed, fmt.Sprintf("Overdue (%d)", len(overdue)))+"\n"+strings.Join(lines, "\n"))
+	}
+
+	// Tomorrow preview
+	tomorrow := now.Add(24 * time.Hour)
+	tomorrowTasks := store.Today(tomorrow)
+	tomorrowRoutines := store.ActiveRoutinesForDay(tomorrow)
+	if len(tomorrowTasks) > 0 || len(tomorrowRoutines) > 0 {
+		lines := make([]string, 0)
+		for _, task := range tomorrowTasks {
+			lines = append(lines, fmt.Sprintf("  %s  %s", task.DueAt.Format("15:04"), task.Title))
+		}
+		for _, routine := range tomorrowRoutines {
+			lines = append(lines, fmt.Sprintf("  %s  %s (routine)", routine.TimeOfDay, routine.Title))
+		}
+		sections = append(sections, "Tomorrow\n"+strings.Join(lines, "\n"))
+	}
+
+	return cognitive.Panel("Evening review", sections)
+}
+
+func whatShouldIDoNow(store *assistant.Store, now time.Time) string {
+	// 1. Overdue tasks — most urgent
+	overdue := store.Overdue(now)
+	if len(overdue) > 0 {
+		task := overdue[0]
+		ago := friendlyDuration(now.Sub(task.DueAt), false)
+		return fmt.Sprintf("You have an overdue task: \"%s\" (due %s ago, %s). Take care of that first.", task.Title, ago, task.DueAt.Format("15:04"))
+	}
+
+	// 2. Tasks due within the next hour
+	today := store.Today(now)
+	for _, task := range today {
+		if task.DueAt.After(now) && task.DueAt.Before(now.Add(time.Hour)) {
+			until := task.DueAt.Sub(now).Truncate(time.Minute)
+			return fmt.Sprintf("Coming up in %s: \"%s\" at %s.", until, task.Title, task.DueAt.Format("15:04"))
+		}
+	}
+
+	// 3. Next task on today's schedule
+	for _, task := range today {
+		if task.DueAt.After(now) {
+			return fmt.Sprintf("Next on your schedule: \"%s\" at %s.", task.Title, task.DueAt.Format("15:04"))
+		}
+	}
+
+	// 4. Any pending tasks at all
+	pending := store.PendingTasks()
+	if len(pending) > 0 {
+		task := pending[0]
+		return fmt.Sprintf("No tasks due right now. Next task: \"%s\" on %s.", task.Title, task.DueAt.Format("Mon 15:04"))
+	}
+
+	return "You're all clear — no pending tasks or reminders."
+}
+
+func nextScheduledTask(store *assistant.Store, now time.Time) (assistant.Task, bool) {
+	today := store.Today(now)
+	for _, task := range today {
+		if task.DueAt.After(now) {
+			return task, true
+		}
+	}
+	pending := store.PendingTasks()
+	if len(pending) == 0 {
+		return assistant.Task{}, false
+	}
+	return pending[0], true
+}
+
+func isPlainGreeting(input string) bool {
+	switch strings.TrimSpace(input) {
+	case "hi", "hello", "hey", "hi nous", "hello nous", "hey nous", "how are you", "how are you?", "you there", "you there?":
+		return true
+	default:
+		return false
+	}
+}
+
+func friendlyDuration(d time.Duration, de bool) string {
+	if d < 0 {
+		d = -d
+	}
+	d = d.Round(time.Minute)
+	days := d / (24 * time.Hour)
+	d -= days * 24 * time.Hour
+	hours := d / time.Hour
+	d -= hours * time.Hour
+	minutes := d / time.Minute
+
+	plural := func(n int64, one, many string) string {
+		if n == 1 {
+			return one
+		}
+		return many
+	}
+
+	if days > 0 {
+		if de {
+			return fmt.Sprintf("%d %s", days, plural(int64(days), "Tag", "Tage"))
+		}
+		return fmt.Sprintf("%d %s", days, plural(int64(days), "day", "days"))
+	}
+	if hours > 0 {
+		if minutes > 0 {
+			if de {
+				return fmt.Sprintf("%d Std. %d Min.", hours, minutes)
+			}
+			return fmt.Sprintf("%dh %dm", hours, minutes)
+		}
+		if de {
+			return fmt.Sprintf("%d Std.", hours)
+		}
+		return fmt.Sprintf("%dh", hours)
+	}
+	if de {
+		return fmt.Sprintf("%d Min.", minutes)
+	}
+	return fmt.Sprintf("%dm", minutes)
+}
+
+func lastAssistantLine(recent string) string {
+	lines := strings.Split(strings.TrimSpace(recent), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(line, "Assistant: ") {
+			return strings.TrimPrefix(line, "Assistant: ")
+		}
+	}
+	return strings.TrimSpace(recent)
+}
+
+func assistantGreeting(store *assistant.Store, now time.Time, de bool) string {
+	prefix := "Good morning"
+	if now.Hour() >= 12 && now.Hour() < 18 {
+		prefix = "Good afternoon"
+	} else if now.Hour() >= 18 {
+		prefix = "Good evening"
+	}
+	if de {
+		prefix = "Hallo"
+	}
+
+	overdue := store.Overdue(now)
+	if len(overdue) > 0 {
+		task := overdue[0]
+		ago := friendlyDuration(now.Sub(task.DueAt), de)
+		if de {
+			return fmt.Sprintf("%s — ich bin da. Das Wichtigste gerade ist \"%s\". Die Aufgabe ist seit %s überfällig.", prefix, task.Title, ago)
+		}
+		return fmt.Sprintf("%s — I'm here. The main thing right now is %q. It's overdue by %s.", prefix, task.Title, ago)
+	}
+
+	if task, ok := nextScheduledTask(store, now); ok {
+		if de {
+			return fmt.Sprintf("%s — ich bin da. Als Nächstes kommt \"%s\" um %s.", prefix, task.Title, task.DueAt.Format("15:04"))
+		}
+		return fmt.Sprintf("%s — I'm here. Next up is %q at %s.", prefix, task.Title, task.DueAt.Format("15:04"))
+	}
+
+	routines := store.ActiveRoutinesForDay(now)
+	if len(routines) > 0 {
+		routine := routines[0]
+		if de {
+			return fmt.Sprintf("%s — ich bin da. Dein erster Anker heute ist \"%s\" um %s.", prefix, routine.Title, routine.TimeOfDay)
+		}
+		return fmt.Sprintf("%s — I'm here. Your first anchor today is %q at %s.", prefix, routine.Title, routine.TimeOfDay)
+	}
+
+	if de {
+		return prefix + " — ich bin da. Heute ist im Moment nichts Dringendes offen."
+	}
+	return prefix + " — I'm here. Nothing urgent is on your plate right now."
+}
+
+func assistantPreferenceSummary(store *assistant.Store, now time.Time, de bool) string {
+	prefs := store.Preferences()
+	if len(prefs) == 0 {
+		if de {
+			return "Ich habe noch keine gespeicherten Präferenzen über dich. Wenn du möchtest, kannst du mir welche geben."
+		}
+		return "I do not have any saved preferences about you yet. If you want, you can teach me some."
+	}
+
+	parts := make([]string, 0, min(len(prefs), 3))
+	for i, pref := range prefs {
+		if i >= 3 {
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s", pref.Key, pref.Value))
+	}
+
+	if task, ok := nextScheduledTask(store, now); ok {
+		if de {
+			return fmt.Sprintf("Ich kenne bisher diese Präferenzen: %s. Im Moment ist besonders relevant, dass als Nächstes \"%s\" um %s ansteht.", strings.Join(parts, ", "), task.Title, task.DueAt.Format("15:04"))
+		}
+		return fmt.Sprintf("So far I know these preferences: %s. The most relevant one right now is that %q is coming up at %s.", strings.Join(parts, ", "), task.Title, task.DueAt.Format("15:04"))
+	}
+
+	if de {
+		return "Ich kenne bisher diese Präferenzen: " + strings.Join(parts, ", ") + "."
+	}
+	return "So far I know these preferences: " + strings.Join(parts, ", ") + "."
+}
+
+func assistantCheckIn(store *assistant.Store, now time.Time, de bool) string {
+	done := store.CompletedToday(now)
+	overdue := store.Overdue(now)
+	if len(overdue) > 0 {
+		task := overdue[0]
+		if de {
+			return fmt.Sprintf("Kurzer Check-in: %d Aufgaben heute erledigt. Das Wichtigste jetzt ist \"%s\" — diese Aufgabe ist überfällig.", len(done), task.Title)
+		}
+		return fmt.Sprintf("Quick check-in: you've finished %d task(s) today. The main thing now is %q — it's overdue.", len(done), task.Title)
+	}
+	if task, ok := nextScheduledTask(store, now); ok {
+		if de {
+			return fmt.Sprintf("Kurzer Check-in: %d Aufgaben heute erledigt. Als Nächstes kommt \"%s\" um %s.", len(done), task.Title, task.DueAt.Format("15:04"))
+		}
+		return fmt.Sprintf("Quick check-in: you've finished %d task(s) today. Next up is %q at %s.", len(done), task.Title, task.DueAt.Format("15:04"))
+	}
+	if de {
+		return fmt.Sprintf("Kurzer Check-in: %d Aufgaben heute erledigt und gerade nichts Dringendes offen.", len(done))
+	}
+	return fmt.Sprintf("Quick check-in: you've finished %d task(s) today and nothing urgent is open right now.", len(done))
+}
+
+func assistantPlanReply(store *assistant.Store, now time.Time, de bool) string {
+	overdue := store.Overdue(now)
+	routines := store.ActiveRoutinesForDay(now)
+	if de {
+		var parts []string
+		if len(overdue) > 0 {
+			parts = append(parts, fmt.Sprintf("zuerst \"%s\" erledigen", overdue[0].Title))
+		} else if task, ok := nextScheduledTask(store, now); ok {
+			parts = append(parts, fmt.Sprintf("mit \"%s\" um %s anfangen", task.Title, task.DueAt.Format("15:04")))
+		}
+		if focus := preferenceValue(store, "focus"); focus != "" {
+			parts = append(parts, fmt.Sprintf("deine Fokus-Präferenz beachten: %s", focus))
+		}
+		if len(routines) > 0 {
+			parts = append(parts, fmt.Sprintf("\"%s\" um %s als Anker nutzen", routines[0].Title, routines[0].TimeOfDay))
+		}
+		if len(parts) == 0 {
+			return "Lass uns es einfach halten: Heute ist nichts Dringendes offen. Wähle eine wichtige Sache und arbeite 25 Minuten fokussiert daran."
+		}
+		return "Lass uns deinen Tag einfach halten: " + strings.Join(parts, "; ") + "."
+	}
+
+	var parts []string
+	if len(overdue) > 0 {
+		parts = append(parts, fmt.Sprintf("first handle \"%s\"", overdue[0].Title))
+	} else if task, ok := nextScheduledTask(store, now); ok {
+		parts = append(parts, fmt.Sprintf("start with \"%s\" at %s", task.Title, task.DueAt.Format("15:04")))
+	}
+	if focus := preferenceValue(store, "focus"); focus != "" {
+		parts = append(parts, fmt.Sprintf("keep your focus preference in mind: %s", focus))
+	}
+	if len(routines) > 0 {
+		parts = append(parts, fmt.Sprintf("use \"%s\" at %s as your anchor", routines[0].Title, routines[0].TimeOfDay))
+	}
+	if len(parts) == 0 {
+		return "Let's keep it simple: nothing urgent is open today. Pick one meaningful thing and give it 25 focused minutes."
+	}
+	return "Let's keep your day simple: " + strings.Join(parts, "; ") + "."
+}
+
+func assistantFocusReply(store *assistant.Store, now time.Time, de bool) string {
+	focus := preferenceValue(store, "focus")
+	overdue := store.Overdue(now)
+	if len(overdue) > 0 {
+		if de {
+			if focus != "" {
+				return fmt.Sprintf("Lass uns es verkleinern: zuerst nur \"%s\". Danach kannst du dich an deine Präferenz halten: %s.", overdue[0].Title, focus)
+			}
+			return fmt.Sprintf("Lass uns es verkleinern: zuerst nur \"%s\". Mehr musst du gerade nicht lösen.", overdue[0].Title)
+		}
+		if focus != "" {
+			return fmt.Sprintf("Let's make it smaller: do %q first. After that, return to your preference: %s.", overdue[0].Title, focus)
+		}
+		return fmt.Sprintf("Let's make it smaller: do %q first. You do not need to solve everything at once.", overdue[0].Title)
+	}
+	if task, ok := nextScheduledTask(store, now); ok {
+		if de {
+			if focus != "" {
+				return fmt.Sprintf("Ein ruhiger Fokusplan: bis %s an \"%s\" arbeiten. Denk dabei an deine Präferenz: %s.", task.DueAt.Format("15:04"), task.Title, focus)
+			}
+			return fmt.Sprintf("Ein ruhiger Fokusplan: bis %s an \"%s\" arbeiten. Nur dieser eine nächste Schritt zählt gerade.", task.DueAt.Format("15:04"), task.Title)
+		}
+		if focus != "" {
+			return fmt.Sprintf("A calmer focus plan: work on %q until %s. Keep your preference in mind: %s.", task.Title, task.DueAt.Format("15:04"), focus)
+		}
+		return fmt.Sprintf("A calmer focus plan: work on %q until %s. Only the next step matters right now.", task.Title, task.DueAt.Format("15:04"))
+	}
+	if de {
+		return "Gerade ist nichts Dringendes offen. Nimm dir eine Aufgabe, stelle einen kurzen Fokusblock ein und beginne klein."
+	}
+	return "Nothing urgent is open right now. Pick one task, set a short focus block, and start small."
+}
+
+func buildAssistantContext(store *assistant.Store, input string, recent string, now time.Time) string {
 	if store == nil || !shouldInjectAssistantContext(input) {
 		return ""
 	}
 
 	var lines []string
+	lines = append(lines, "Current time: "+now.Format("2006-01-02 15:04 Mon"))
+	if recent != "" {
+		lines = append(lines, "Recent conversation: "+recent)
+	}
 	prefs := store.Preferences()
 	if len(prefs) > 0 {
-		prefLines := make([]string, 0, min(len(prefs), 3))
+		prefLines := make([]string, 0, min(len(prefs), 5))
 		for i, pref := range prefs {
-			if i >= 3 {
+			if i >= 5 {
 				break
 			}
 			prefLines = append(prefLines, fmt.Sprintf("%s=%s", pref.Key, pref.Value))
 		}
 		lines = append(lines, "Preferences: "+strings.Join(prefLines, ", "))
+	}
+
+	overdue := store.Overdue(now)
+	if len(overdue) > 0 {
+		overdueLines := make([]string, 0, min(len(overdue), 3))
+		for i, task := range overdue {
+			if i >= 3 {
+				break
+			}
+			overdueLines = append(overdueLines, fmt.Sprintf("%s %s", task.DueAt.Format("2006-01-02 15:04"), task.Title))
+		}
+		lines = append(lines, "Overdue: "+strings.Join(overdueLines, " | "))
 	}
 
 	unread := store.UnreadNotifications()
@@ -1090,33 +1528,117 @@ func buildAssistantContext(store *assistant.Store, input string, now time.Time) 
 		lines = append(lines, "Today: "+strings.Join(todayLines, " | "))
 	}
 
-	routines := store.Routines()
+	doneToday := store.CompletedToday(now)
+	if len(doneToday) > 0 {
+		doneLines := make([]string, 0, min(len(doneToday), 3))
+		for i, task := range doneToday {
+			if i >= 3 {
+				break
+			}
+			doneLines = append(doneLines, task.Title)
+		}
+		lines = append(lines, "Completed today: "+strings.Join(doneLines, " | "))
+	}
+
+	routines := store.ActiveRoutinesForDay(now)
 	if len(routines) > 0 {
-		routineLines := make([]string, 0, min(len(routines), 2))
+		routineLines := make([]string, 0, min(len(routines), 3))
 		for i, routine := range routines {
-			if i >= 2 {
+			if i >= 3 {
 				break
 			}
 			routineLines = append(routineLines, fmt.Sprintf("%s %s (%s)", routine.TimeOfDay, routine.Title, routine.Schedule))
 		}
-		lines = append(lines, "Routines: "+strings.Join(routineLines, " | "))
+		lines = append(lines, "Active routines today: "+strings.Join(routineLines, " | "))
 	}
 
 	if len(lines) == 0 {
 		return ""
 	}
 
-	return "[Assistant Memory]\nUse this for personal-assistant questions. Respect explicit preferences such as language. If reminders or tasks are listed below, do not say there are none.\n" + strings.Join(lines, "\n")
+	return "[Assistant Memory]\nUse this for personal-assistant questions. Sound warm, natural, and practical. Use memory selectively instead of dumping it. Respect explicit preferences such as language. If reminders or tasks are listed below, do not say there are none. If the user sounds overwhelmed, reduce things to the next small step.\n" + strings.Join(lines, "\n")
 }
 
-func answerAssistantQuery(store *assistant.Store, input string, now time.Time) (string, bool) {
+func answerAssistantQuery(store *assistant.Store, input string, recent string, now time.Time) (string, bool) {
 	if store == nil {
 		return "", false
 	}
 
 	lower := strings.ToLower(strings.TrimSpace(input))
+
+	// Code-intent signals — if any are present, NEVER hijack into assistant answers.
+	// This prevents "what does renderBriefing include" from triggering the briefing flow.
+	codeSignals := []string{
+		"function", "func ", "method", "struct", "type ", "variable", "constant",
+		"implement", "code", "source", "definition", "defined", "return", "parameter",
+		"argument", "signature", "package", "import", "module",
+		"file ", "file?", ".go", ".py", ".js", ".ts", ".md", ".json", ".yaml", ".yml",
+		"read file", "show file", "open file", "read the", "show me the", "show the",
+		"grep", "search for", "find in", "look for", "where is",
+		"class", "interface", "enum", "const ", "var ",
+		"compile", "build", "test", "debug", "fix", "bug", "error",
+		"repo", "repository", "codebase", "project structure",
+		"directory", "folder", "path",
+		"explain", "how does", "what does", "what is the",
+		"semantic", "ranking", "working memory", "decay",
+	}
+	for _, sig := range codeSignals {
+		if strings.Contains(lower, sig) {
+			return "", false
+		}
+	}
+
 	lang := preferenceValue(store, "language")
 	de := strings.HasPrefix(strings.ToLower(lang), "de")
+
+	if isPlainGreeting(lower) {
+		return assistantGreeting(store, now, de), true
+	}
+
+	if strings.Contains(lower, "thank you") || strings.HasPrefix(lower, "thanks") || strings.Contains(lower, "danke") {
+		if task, ok := nextScheduledTask(store, now); ok {
+			if de {
+				return fmt.Sprintf("Gern. Als Nächstes steht \"%s\" um %s an.", task.Title, task.DueAt.Format("15:04")), true
+			}
+			return fmt.Sprintf("Anytime. Next up is %q at %s.", task.Title, task.DueAt.Format("15:04")), true
+		}
+		if de {
+			return "Gern. Ich bin hier, wenn du den nächsten Schritt sortieren willst.", true
+		}
+		return "Anytime. I'm here if you want to sort out the next step.", true
+	}
+
+	if strings.Contains(lower, "what do you know about my preferences") || strings.Contains(lower, "what do you know about me") {
+		return assistantPreferenceSummary(store, now, de), true
+	}
+
+	if recent != "" {
+		if lower == "tell me more" || lower == "go on" || lower == "and then" || lower == "what do you mean" || lower == "why" {
+			last := lastAssistantLine(recent)
+			if de {
+				return "Klar. Ich knüpfe an unseren letzten Punkt an: " + last + "\n\nWenn du willst, vertiefe ich den wichtigsten Punkt oder formuliere direkt den nächsten Schritt.", true
+			}
+			return "Sure. Picking up from our last point: " + last + "\n\nIf you want, I can either deepen the main point or turn it into the next concrete step.", true
+		}
+		if lower == "yes" || lower == "yeah" || lower == "ok" || lower == "okay" {
+			if de {
+				return "Gut — wir bleiben bei diesem Faden. Ich kann jetzt den nächsten kleinen Schritt daraus machen.", true
+			}
+			return "Alright — we'll stay with this thread. I can turn it into the next small step now.", true
+		}
+	}
+
+	if strings.Contains(lower, "help me plan my day") || strings.Contains(lower, "plan my day") || strings.Contains(lower, "organize my day") || strings.Contains(lower, "prioritize my day") {
+		return assistantPlanReply(store, now, de), true
+	}
+
+	if strings.Contains(lower, "help me focus") || strings.Contains(lower, "i feel overwhelmed") || strings.Contains(lower, "i'm overwhelmed") || strings.Contains(lower, "i am overwhelmed") || strings.Contains(lower, "i feel stressed") || strings.Contains(lower, "i'm stressed") {
+		return assistantFocusReply(store, now, de), true
+	}
+
+	if strings.Contains(lower, "how am i doing") || strings.Contains(lower, "check in") || strings.Contains(lower, "how is my day going") {
+		return assistantCheckIn(store, now, de), true
+	}
 
 	if strings.Contains(lower, "answer in my preferred language") || strings.Contains(lower, "mention my current reminders") {
 		upcoming := store.Upcoming(3, now)
@@ -1171,7 +1693,7 @@ func answerAssistantQuery(store *assistant.Store, input string, now time.Time) (
 		return "Your current reminders are: " + strings.Join(parts, "; ") + ".", true
 	}
 
-	if strings.Contains(lower, "what matters today") || strings.Contains(lower, "what do i have today") {
+	if strings.Contains(lower, "what matters today") || strings.Contains(lower, "what do i have today") || strings.Contains(lower, "what's on my plate") {
 		today := store.Today(now)
 		if len(today) == 0 {
 			if de {
@@ -1189,6 +1711,115 @@ func answerAssistantQuery(store *assistant.Store, input string, now time.Time) (
 		return "What matters today: " + strings.Join(parts, "; ") + ".", true
 	}
 
+	// "what should I do" / "what now" / "what's next" — deterministic priority answer
+	if strings.Contains(lower, "what should i do") || strings.Contains(lower, "what now") ||
+		strings.Contains(lower, "what's next") || strings.Contains(lower, "what do i do next") ||
+		strings.Contains(lower, "what is next") {
+		answer := whatShouldIDoNow(store, now)
+		if de {
+			// Translate key phrases for German
+			answer = strings.ReplaceAll(answer, "You have an overdue task:", "Du hast eine überfällige Aufgabe:")
+			answer = strings.ReplaceAll(answer, "Take care of that first.", "Kümmere dich zuerst darum.")
+			answer = strings.ReplaceAll(answer, "Coming up in", "In Kürze in")
+			answer = strings.ReplaceAll(answer, "Next on your schedule:", "Als Nächstes auf deinem Plan:")
+			answer = strings.ReplaceAll(answer, "No tasks due right now. Next task:", "Gerade nichts fällig. Nächste Aufgabe:")
+			answer = strings.ReplaceAll(answer, "You're all clear — no pending tasks or reminders.", "Alles erledigt — keine offenen Aufgaben.")
+		}
+		return answer, true
+	}
+
+	// "morning briefing" / "good morning" — deterministic briefing
+	if strings.Contains(lower, "morning briefing") || strings.Contains(lower, "good morning") ||
+		strings.Contains(lower, "briefing") || strings.Contains(lower, "brief me") {
+		overdue := store.Overdue(now)
+		today := store.Today(now)
+		routines := store.ActiveRoutinesForDay(now)
+
+		var parts []string
+		if len(overdue) > 0 {
+			names := make([]string, 0, len(overdue))
+			for _, t := range overdue {
+				names = append(names, t.Title)
+			}
+			parts = append(parts, fmt.Sprintf("%d overdue: %s", len(overdue), strings.Join(names, ", ")))
+		}
+		if len(today) > 0 {
+			names := make([]string, 0, len(today))
+			for _, t := range today {
+				names = append(names, fmt.Sprintf("%s %s", t.DueAt.Format("15:04"), t.Title))
+			}
+			parts = append(parts, fmt.Sprintf("Today: %s", strings.Join(names, "; ")))
+		}
+		if len(routines) > 0 {
+			names := make([]string, 0, len(routines))
+			for _, r := range routines {
+				names = append(names, fmt.Sprintf("%s %s", r.TimeOfDay, r.Title))
+			}
+			parts = append(parts, fmt.Sprintf("Routines: %s", strings.Join(names, "; ")))
+		}
+		if len(parts) == 0 {
+			if de {
+				return "Guten Morgen. Dein Zeitplan ist frei — keine Aufgaben, keine Erinnerungen.", true
+			}
+			return "Good morning. Your schedule is clear — no tasks, no reminders.", true
+		}
+		prefix := "Good morning. "
+		if de {
+			prefix = "Guten Morgen. "
+		}
+		return prefix + strings.Join(parts, ". ") + ".", true
+	}
+
+	// "evening review" / "how did today go" — deterministic review
+	if strings.Contains(lower, "evening review") || strings.Contains(lower, "how did today go") ||
+		strings.Contains(lower, "daily review") || strings.Contains(lower, "end of day") {
+		done := store.CompletedToday(now)
+		overdue := store.Overdue(now)
+		pending := store.Today(now)
+
+		var parts []string
+		if len(done) > 0 {
+			names := make([]string, 0, len(done))
+			for _, t := range done {
+				names = append(names, t.Title)
+			}
+			parts = append(parts, fmt.Sprintf("Completed %d: %s", len(done), strings.Join(names, ", ")))
+		} else {
+			parts = append(parts, "No tasks completed today")
+		}
+		if len(overdue) > 0 {
+			parts = append(parts, fmt.Sprintf("%d overdue", len(overdue)))
+		}
+		if len(pending) > 0 {
+			parts = append(parts, fmt.Sprintf("%d still pending", len(pending)))
+		}
+		return strings.Join(parts, ". ") + ".", true
+	}
+
+	// "what's overdue" / "overdue tasks"
+	if strings.Contains(lower, "overdue") {
+		overdue := store.Overdue(now)
+		if len(overdue) == 0 {
+			if de {
+				return "Keine überfälligen Aufgaben.", true
+			}
+			return "No overdue tasks.", true
+		}
+		parts := make([]string, 0, len(overdue))
+		for _, task := range overdue {
+			ago := friendlyDuration(now.Sub(task.DueAt), de)
+			if de {
+				parts = append(parts, fmt.Sprintf("%s (%s überfällig)", task.Title, ago))
+			} else {
+				parts = append(parts, fmt.Sprintf("%s (%s overdue)", task.Title, ago))
+			}
+		}
+		if de {
+			return fmt.Sprintf("%d überfällige Aufgaben: %s.", len(overdue), strings.Join(parts, "; ")), true
+		}
+		return fmt.Sprintf("%d overdue: %s.", len(overdue), strings.Join(parts, "; ")), true
+	}
+
 	return "", false
 }
 
@@ -1198,24 +1829,38 @@ func shouldInjectAssistantContext(input string) bool {
 		return false
 	}
 
+	// Code signals — if ANY are present, do not inject assistant context.
+	// Must check these FIRST to prevent false positives.
+	codeSignals := []string{
+		"function", "func ", "method", "struct", "type ", "variable", "constant",
+		"implement", "code", "source", "definition", "defined", "return", "parameter",
+		"file ", "file?", ".go", ".py", ".js", ".ts", ".md", ".json",
+		"read file", "show file", "open file", "read the", "show me the", "show the",
+		"grep", "search for", "find in", "look for", "where is",
+		"class", "interface", "enum", "const ", "var ",
+		"compile", "build", "test", "debug", "fix", "bug", "error",
+		"repo", "repository", "codebase", "project structure",
+		"directory", "folder", "path",
+		"explain", "how does", "what does", "what is the",
+		"semantic", "ranking", "working memory", "decay",
+		"edit", "write ", "grep",
+	}
+	for _, sig := range codeSignals {
+		if strings.Contains(lower, sig) {
+			return false
+		}
+	}
+
 	assistantHints := []string{
 		"today", "reminder", "remind", "task", "tasks", "routine", "routines", "schedule", "calendar",
 		"appointment", "prefer", "preference", "language", "what matters", "my day", "plan my", "inbox",
-		"what do i", "do i have", "personal", "assistant",
+		"what do i", "do i have", "personal", "assistant", "briefing", "brief me", "good morning",
+		"what should i do", "what now", "what's next", "overdue", "evening review", "daily review",
+		"end of day", "how did today go", "what's on my plate",
 	}
 	for _, hint := range assistantHints {
 		if strings.Contains(lower, hint) {
 			return true
-		}
-	}
-
-	codeHints := []string{
-		"file", "code", "function", "struct", "method", "class", "repo", "repository", "project",
-		"build", "compile", "test", "bug", "fix", "edit", "read ", "write ", "grep", "directory", "folder",
-	}
-	for _, hint := range codeHints {
-		if strings.Contains(lower, hint) {
-			return false
 		}
 	}
 
