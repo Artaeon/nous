@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/artaeon/nous/internal/safefile"
 )
 
 // TrainingPair is a single (input, output) pair suitable for fine-tuning.
@@ -87,22 +89,19 @@ func (c *Collector) Size() int {
 // This is the standard format for fine-tuning tools like unsloth and axolotl.
 func (c *Collector) ExportJSONL(outputPath string) error {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
+	pairs := make([]TrainingPair, len(c.pairs))
+	copy(pairs, c.pairs)
+	c.mu.RUnlock()
 
-	f, err := os.Create(outputPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	encoder := json.NewEncoder(f)
-	for _, pair := range c.pairs {
-		if err := encoder.Encode(pair); err != nil {
-			return err
+	return safefile.WriteAtomicFunc(outputPath, 0644, func(f *os.File) error {
+		encoder := json.NewEncoder(f)
+		for _, pair := range pairs {
+			if err := encoder.Encode(pair); err != nil {
+				return err
+			}
 		}
-	}
-
-	return nil
+		return nil
+	})
 }
 
 // ExportAlpaca exports in Alpaca format for compatibility with most fine-tuning frameworks.
@@ -124,36 +123,33 @@ func (c *Collector) ExportAlpaca(outputPath string) error {
 		return err
 	}
 
-	return os.WriteFile(outputPath, data, 0644)
+	return safefile.WriteAtomic(outputPath, data, 0644)
 }
 
 // ExportChatML exports in ChatML format for models that use chat templates.
 func (c *Collector) ExportChatML(outputPath string) error {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
+	pairs := make([]TrainingPair, len(c.pairs))
+	copy(pairs, c.pairs)
+	c.mu.RUnlock()
 
-	f, err := os.Create(outputPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	for _, pair := range c.pairs {
-		entry := map[string]interface{}{
-			"messages": []map[string]string{
-				{"role": "system", "content": pair.System},
-				{"role": "user", "content": pair.Input},
-				{"role": "assistant", "content": pair.Output},
-			},
+	return safefile.WriteAtomicFunc(outputPath, 0644, func(f *os.File) error {
+		for _, pair := range pairs {
+			entry := map[string]interface{}{
+				"messages": []map[string]string{
+					{"role": "system", "content": pair.System},
+					{"role": "user", "content": pair.Input},
+					{"role": "assistant", "content": pair.Output},
+				},
+			}
+			data, err := json.Marshal(entry)
+			if err != nil {
+				continue
+			}
+			fmt.Fprintln(f, string(data))
 		}
-		data, err := json.Marshal(entry)
-		if err != nil {
-			continue
-		}
-		fmt.Fprintln(f, string(data))
-	}
-
-	return nil
+		return nil
+	})
 }
 
 // AverageQuality returns the mean quality score of all collected pairs.
@@ -236,11 +232,7 @@ func (c *Collector) Save() error {
 		return err
 	}
 
-	if err := os.MkdirAll(c.storePath, 0755); err != nil {
-		return err
-	}
-
-	return os.WriteFile(filepath.Join(c.storePath, "training_data.json"), data, 0644)
+	return safefile.WriteAtomic(filepath.Join(c.storePath, "training_data.json"), data, 0644)
 }
 
 func (c *Collector) load() {

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/artaeon/nous/internal/safefile"
 )
 
 // Episode is a single interaction stored with full context.
@@ -388,11 +390,7 @@ func (em *EpisodicMemory) Save() error {
 		return err
 	}
 
-	if err := os.MkdirAll(em.storePath, 0755); err != nil {
-		return err
-	}
-
-	return os.WriteFile(filepath.Join(em.storePath, "episodes.json"), data, 0644)
+	return safefile.WriteAtomic(filepath.Join(em.storePath, "episodes.json"), data, 0644)
 }
 
 func (em *EpisodicMemory) load() {

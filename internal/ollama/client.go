@@ -116,6 +116,7 @@ type GenerateRequest struct {
 	Stream   bool          `json:"stream"`
 	Options  *ModelOptions `json:"options,omitempty"`
 	Tools    []Tool        `json:"tools,omitempty"`
+	Format   string        `json:"format,omitempty"` // "json" constrains output to valid JSON
 }
 
 type ModelOptions struct {
@@ -147,6 +148,41 @@ type GenerateResponse struct {
 // Chat sends a message sequence and returns the full response (no tools).
 func (c *Client) Chat(messages []Message, opts *ModelOptions) (*GenerateResponse, error) {
 	return c.ChatWithTools(messages, nil, opts)
+}
+
+// ChatJSON sends a message sequence with format:"json" constraint.
+// The model is forced to output only valid JSON — no free-form text.
+func (c *Client) ChatJSON(messages []Message, opts *ModelOptions) (*GenerateResponse, error) {
+	req := GenerateRequest{
+		Model:    c.model,
+		Messages: messages,
+		Stream:   false,
+		Options:  opts,
+		Format:   "json",
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	resp, err := c.httpClient.Post(c.host+"/api/chat", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("ollama request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("ollama returned %d: %s", resp.StatusCode, string(b))
+	}
+
+	var result GenerateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	return &result, nil
 }
 
 // ChatWithTools sends a message sequence with tool definitions.

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/artaeon/nous/internal/ollama"
+	"github.com/artaeon/nous/internal/safefile"
 )
 
 // Session represents a persistable conversation session.
@@ -42,7 +43,7 @@ func (s *SessionStore) Save(session *Session) error {
 	}
 
 	path := filepath.Join(s.dir, session.ID+".json")
-	return os.WriteFile(path, data, 0644)
+	return safefile.WriteAtomic(path, data, 0644)
 }
 
 // Load retrieves a session by ID.

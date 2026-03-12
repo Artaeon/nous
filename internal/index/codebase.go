@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/artaeon/nous/internal/safefile"
 )
 
 // Symbol represents a code symbol (function, type, method, etc).
@@ -322,6 +324,58 @@ func (idx *CodebaseIndex) RelevantContext(query string, maxSymbols int) string {
 	return sb.String()
 }
 
+// BestFileForQuery returns the file path most relevant to the query,
+// based on symbol name and signature matching. Returns "" if no match.
+func (idx *CodebaseIndex) BestFileForQuery(query string) string {
+	sym := idx.BestSymbolForQuery(query)
+	if sym == nil {
+		return ""
+	}
+	return sym.File
+}
+
+// BestSymbolForQuery returns the single best-matching symbol for the query,
+// including its file path and line number. Returns nil if no match.
+func (idx *CodebaseIndex) BestSymbolForQuery(query string) *Symbol {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	words := strings.Fields(strings.ToLower(query))
+	if len(words) == 0 {
+		return nil
+	}
+
+	var bestSym *Symbol
+	bestScore := 0
+
+	for i := range idx.Symbols {
+		s := &idx.Symbols[i]
+		nameLower := strings.ToLower(s.Name)
+		sigLower := strings.ToLower(s.Signature)
+		score := 0
+		for _, w := range words {
+			if len(w) < 2 {
+				continue
+			}
+			// Exact name match is strongest signal
+			if nameLower == w {
+				score += 10
+			} else if strings.Contains(nameLower, w) {
+				score += 3
+			}
+			if strings.Contains(sigLower, w) {
+				score++
+			}
+		}
+		if score > bestScore {
+			bestScore = score
+			bestSym = s
+		}
+	}
+
+	return bestSym
+}
+
 // Save marshals the index to JSON and writes it to disk.
 func (idx *CodebaseIndex) Save() error {
 	idx.mu.RLock()
@@ -343,7 +397,7 @@ func (idx *CodebaseIndex) Save() error {
 		return err
 	}
 
-	return os.WriteFile(idx.path, data, 0644)
+	return safefile.WriteAtomic(idx.path, data, 0644)
 }
 
 // Load reads the index from disk.

@@ -208,6 +208,137 @@ func TestRelevanceDecayOverTime(t *testing.T) {
 	}
 }
 
+func TestSetEmbedFunc(t *testing.T) {
+	wm := NewWorkingMemory(10)
+
+	called := false
+	wm.SetEmbedFunc(func(text string) ([]float64, error) {
+		called = true
+		return []float64{1.0, 0.0, 0.0}, nil
+	})
+
+	wm.Store("test", "value", 0.8)
+
+	// Give async goroutine time to run
+	time.Sleep(50 * time.Millisecond)
+
+	if !called {
+		t.Error("expected embed function to be called on Store")
+	}
+
+	// Verify embedding was stored
+	wm.mu.RLock()
+	slot := wm.slots["test"]
+	wm.mu.RUnlock()
+
+	if len(slot.Embedding) != 3 {
+		t.Errorf("expected 3-dim embedding, got %d", len(slot.Embedding))
+	}
+}
+
+func TestSemanticSearchWithEmbeddings(t *testing.T) {
+	wm := NewWorkingMemory(10)
+
+	// Store items with pre-set embeddings (bypass async)
+	wm.mu.Lock()
+	wm.slots["go code"] = &Slot{
+		Key: "go code", Value: "wrote a Go function",
+		Relevance: 0.8, AccessedAt: time.Now(),
+		Embedding: []float64{1.0, 0.0, 0.0}, // "code" direction
+	}
+	wm.slots["dinner"] = &Slot{
+		Key: "dinner", Value: "had pasta for dinner",
+		Relevance: 0.8, AccessedAt: time.Now(),
+		Embedding: []float64{0.0, 1.0, 0.0}, // "food" direction
+	}
+	wm.slots["testing"] = &Slot{
+		Key: "testing", Value: "ran unit tests",
+		Relevance: 0.8, AccessedAt: time.Now(),
+		Embedding: []float64{0.9, 0.1, 0.0}, // similar to "code"
+	}
+	wm.mu.Unlock()
+
+	// Search for something similar to "code" direction
+	query := []float64{1.0, 0.0, 0.0}
+	results := wm.SemanticSearch(query, 2)
+
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+
+	// "go code" should be most similar (exact match)
+	if results[0].Key != "go code" {
+		t.Errorf("expected first result to be 'go code', got %q", results[0].Key)
+	}
+
+	// "testing" should be second (0.9 cosine similarity)
+	if results[1].Key != "testing" {
+		t.Errorf("expected second result to be 'testing', got %q", results[1].Key)
+	}
+}
+
+func TestSemanticSearchFallsBackWhenNoEmbeddings(t *testing.T) {
+	wm := NewWorkingMemory(10)
+
+	wm.Store("a", "val", 0.9)
+	wm.Store("b", "val", 0.5)
+
+	// Search with empty query vector — should fall back to decay-based
+	results := wm.SemanticSearch(nil, 2)
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	if results[0].Key != "a" {
+		t.Errorf("expected first result to be 'a' (highest relevance), got %q", results[0].Key)
+	}
+}
+
+func TestSemanticSearchFallsBackWhenFewEmbeddings(t *testing.T) {
+	wm := NewWorkingMemory(10)
+
+	// 3 items without embeddings, 1 with — should fall back
+	wm.Store("a", "val", 0.9)
+	wm.Store("b", "val", 0.8)
+	wm.Store("c", "val", 0.7)
+
+	wm.mu.Lock()
+	wm.slots["d"] = &Slot{
+		Key: "d", Value: "val",
+		Relevance: 0.6, AccessedAt: time.Now(),
+		Embedding: []float64{1.0, 0.0},
+	}
+	wm.mu.Unlock()
+
+	results := wm.SemanticSearch([]float64{1.0, 0.0}, 4)
+	if len(results) != 4 {
+		t.Fatalf("expected 4 results (fallback), got %d", len(results))
+	}
+	// Should be ordered by relevance (decay-based fallback)
+	if results[0].Key != "a" {
+		t.Errorf("expected first result to be 'a', got %q", results[0].Key)
+	}
+}
+
+func TestCosineSim(t *testing.T) {
+	// Identical vectors → 1.0
+	sim := cosineSim([]float64{1, 0, 0}, []float64{1, 0, 0})
+	if sim < 0.99 {
+		t.Errorf("expected ~1.0, got %f", sim)
+	}
+
+	// Orthogonal vectors → 0.0
+	sim = cosineSim([]float64{1, 0, 0}, []float64{0, 1, 0})
+	if sim > 0.01 {
+		t.Errorf("expected ~0.0, got %f", sim)
+	}
+
+	// Empty vectors → 0.0
+	sim = cosineSim(nil, nil)
+	if sim != 0 {
+		t.Errorf("expected 0.0 for nil, got %f", sim)
+	}
+}
+
 func TestMinHelper(t *testing.T) {
 	tests := []struct {
 		a, b, expected float64

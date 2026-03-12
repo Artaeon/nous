@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/artaeon/nous/internal/safefile"
 )
 
 // Entry represents a single piece of long-term knowledge.
@@ -120,7 +122,7 @@ func (ltm *LongTermMemory) Flush() error {
 	}
 
 	ltm.dirty = false
-	return os.WriteFile(ltm.path, data, 0644)
+	return safefile.WriteAtomic(ltm.path, data, 0644)
 }
 
 func (ltm *LongTermMemory) load() {

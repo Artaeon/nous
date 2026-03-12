@@ -12,6 +12,7 @@ import (
 
 	"github.com/artaeon/nous/internal/blackboard"
 	"github.com/artaeon/nous/internal/ollama"
+	"github.com/artaeon/nous/internal/safefile"
 )
 
 // Pattern represents a learned behavioral pattern extracted from experience.
@@ -262,9 +263,5 @@ func (l *Learner) savePatterns() error {
 		return err
 	}
 
-	if err := os.MkdirAll(l.storePath, 0755); err != nil {
-		return err
-	}
-
-	return os.WriteFile(filepath.Join(l.storePath, "patterns.json"), data, 0644)
+	return safefile.WriteAtomic(filepath.Join(l.storePath, "patterns.json"), data, 0644)
 }

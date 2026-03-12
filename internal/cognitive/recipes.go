@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/artaeon/nous/internal/safefile"
 )
 
 // RecipeStep is a single tool invocation within a recipe.
@@ -422,6 +424,5 @@ func (rb *RecipeBook) save() {
 	if err != nil {
 		return
 	}
-	os.MkdirAll(rb.storePath, 0755)
-	os.WriteFile(filepath.Join(rb.storePath, "recipes.json"), data, 0644)
+	_ = safefile.WriteAtomic(filepath.Join(rb.storePath, "recipes.json"), data, 0644)
 }

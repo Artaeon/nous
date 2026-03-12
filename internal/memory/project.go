@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/artaeon/nous/internal/safefile"
 )
 
 // ProjectFact represents a single piece of project-specific knowledge.
@@ -125,16 +127,12 @@ func (pm *ProjectMemory) Flush() error {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
 
-	if err := os.MkdirAll(filepath.Dir(pm.path), 0755); err != nil {
-		return err
-	}
-
 	data, err := json.MarshalIndent(pm.facts, "", "  ")
 	if err != nil {
 		return err
 	}
 
-	return os.WriteFile(pm.path, data, 0644)
+	return safefile.WriteAtomic(pm.path, data, 0644)
 }
 
 func (pm *ProjectMemory) load() {

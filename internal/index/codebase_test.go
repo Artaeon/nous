@@ -448,3 +448,93 @@ func GitHook() {}
 		t.Error("expected .git functions to be skipped")
 	}
 }
+
+func TestBestFileForQuery(t *testing.T) {
+	dir := setupTestDir(t)
+	idx := buildTestIndex(t, dir)
+
+	// Query about "Greeter" should return example.go
+	best := idx.BestFileForQuery("what does Greeter do")
+	if best != "example.go" {
+		t.Errorf("expected 'example.go', got %q", best)
+	}
+
+	// Query about "Helper" should also return example.go
+	best = idx.BestFileForQuery("explain Helper function")
+	if best != "example.go" {
+		t.Errorf("expected 'example.go', got %q", best)
+	}
+
+	// No match
+	best = idx.BestFileForQuery("something completely unrelated xyz")
+	if best != "" {
+		t.Errorf("expected empty for unrelated query, got %q", best)
+	}
+}
+
+func TestBestSymbolForQuery(t *testing.T) {
+	dir := setupTestDir(t)
+	idx := buildTestIndex(t, dir)
+
+	// Query about "Greeter" should return the Greeter symbol with line number
+	sym := idx.BestSymbolForQuery("what does Greeter do")
+	if sym == nil {
+		t.Fatal("expected non-nil symbol for 'Greeter'")
+	}
+	if sym.Name != "Greeter" {
+		t.Errorf("expected symbol name 'Greeter', got %q", sym.Name)
+	}
+	if sym.File != "example.go" {
+		t.Errorf("expected file 'example.go', got %q", sym.File)
+	}
+	if sym.Line == 0 {
+		t.Error("expected non-zero line number")
+	}
+
+	// Query about "Helper" should return the Helper symbol
+	sym = idx.BestSymbolForQuery("explain Helper function")
+	if sym == nil {
+		t.Fatal("expected non-nil symbol for 'Helper'")
+	}
+	if sym.Name != "Helper" {
+		t.Errorf("expected symbol name 'Helper', got %q", sym.Name)
+	}
+
+	// No match
+	sym = idx.BestSymbolForQuery("something completely unrelated xyz")
+	if sym != nil {
+		t.Errorf("expected nil for unrelated query, got %v", sym)
+	}
+}
+
+func TestBestFileForQueryExactNameBoost(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create two files with overlapping but different symbols
+	if err := os.WriteFile(filepath.Join(dir, "alpha.go"), []byte(`package test
+func Alpha() {}
+func AlphaHelper() {}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "beta.go"), []byte(`package test
+func Beta() {}
+func BetaRunner() {}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	idx := buildTestIndex(t, dir)
+
+	// Exact name "Alpha" should prefer alpha.go
+	best := idx.BestFileForQuery("Alpha")
+	if best != "alpha.go" {
+		t.Errorf("expected 'alpha.go' for exact name match, got %q", best)
+	}
+
+	// Exact name "Beta" should prefer beta.go
+	best = idx.BestFileForQuery("Beta")
+	if best != "beta.go" {
+		t.Errorf("expected 'beta.go' for exact name match, got %q", best)
+	}
+}

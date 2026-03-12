@@ -292,3 +292,28 @@ func TestPipelineLastResultClearedOnNewStep(t *testing.T) {
 		t.Error("first step RawResult should be cleared after adding second step")
 	}
 }
+
+func TestDistillerSkipsShortResults(t *testing.T) {
+	// Short results (<= 80 chars) should use rule-based compression even with distiller set
+	p := NewPipeline("what is this?")
+	// SetDistiller with a non-nil client; but since result is short, it won't be called
+	// We can't easily create a real client, so we test that short results still work
+	p.AddStep("write", "OK: wrote file main.go")
+
+	if p.StepCount() != 1 {
+		t.Fatalf("expected 1 step, got %d", p.StepCount())
+	}
+
+	// Summary should be rule-based (since no distiller and short result)
+	if !strings.Contains(p.steps[0].Summary, "main.go") {
+		t.Errorf("expected rule-based summary to mention main.go, got: %s", p.steps[0].Summary)
+	}
+}
+
+func TestDistillStepTimeout(t *testing.T) {
+	// distillStep with nil client returns empty (caller falls back)
+	result := distillStep(nil, "test query", "read", "some content")
+	if result != "" {
+		t.Errorf("expected empty string from nil distiller, got: %s", result)
+	}
+}

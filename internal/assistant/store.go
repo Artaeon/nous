@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/artaeon/nous/internal/safefile"
 )
 
 const (
@@ -186,6 +188,60 @@ func (s *Store) Today(now time.Time) []Task {
 	return out
 }
 
+// Overdue returns pending tasks whose due time has passed.
+func (s *Store) Overdue(now time.Time) []Task {
+	pending := s.PendingTasks()
+	out := make([]Task, 0)
+	for _, task := range pending {
+		if task.DueAt.Before(now) {
+			out = append(out, task)
+		}
+	}
+	return out
+}
+
+// CompletedToday returns tasks completed on the given calendar day.
+func (s *Store) CompletedToday(now time.Time) []Task {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	y, m, d := now.Date()
+	out := make([]Task, 0)
+	for _, task := range s.state.Tasks {
+		if task.Status != TaskDone || task.CompletedAt.IsZero() {
+			continue
+		}
+		cy, cm, cd := task.CompletedAt.Date()
+		if y == cy && m == cm && d == cd {
+			out = append(out, task)
+		}
+	}
+	return out
+}
+
+// ActiveRoutinesForDay returns enabled routines that fire on the given day.
+func (s *Store) ActiveRoutinesForDay(now time.Time) []Routine {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]Routine, 0)
+	for _, routine := range s.state.Routines {
+		if !routine.Enabled {
+			continue
+		}
+		if routine.Schedule == "weekdays" {
+			if now.Weekday() == time.Saturday || now.Weekday() == time.Sunday {
+				continue
+			}
+		}
+		out = append(out, routine)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].TimeOfDay < out[j].TimeOfDay
+	})
+	return out
+}
+
 func (s *Store) SetPreference(key, value string) error {
 	if key == "" {
 		return fmt.Errorf("preference key cannot be empty")
@@ -323,14 +379,11 @@ func (s *Store) Save() error {
 }
 
 func (s *Store) saveLocked() error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(s.state, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, data, 0o644)
+	return safefile.WriteAtomic(s.path, data, 0o644)
 }
 
 func (s *Store) load() {

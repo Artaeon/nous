@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/artaeon/nous/internal/ollama"
 )
 
 // StepResult holds the compressed outcome of one reasoning step.
@@ -24,6 +27,7 @@ type StepResult struct {
 type Pipeline struct {
 	steps     []StepResult
 	userQuery string
+	distiller *ollama.Client // optional: fast model for thought distillation
 }
 
 // NewPipeline creates a pipeline for managing fresh-context reasoning.
@@ -33,12 +37,36 @@ func NewPipeline(query string) *Pipeline {
 	}
 }
 
+// SetDistiller configures an LLM client (typically the fast model) for
+// thought distillation. When set, step summaries are produced by the LLM
+// instead of rule-based compression, yielding much richer context for the
+// reasoning model.
+func (p *Pipeline) SetDistiller(llm *ollama.Client) {
+	p.distiller = llm
+}
+
 // AddStep compresses and stores the result of a tool execution.
+// Uses thought distillation (LLM-based) when a distiller is configured,
+// falling back to rule-based compression otherwise.
 func (p *Pipeline) AddStep(toolName, rawResult string) {
+	summary := ""
+
+	// Try thought distillation first
+	if p.distiller != nil && len(rawResult) > 80 {
+		if distilled := distillStep(p.distiller, p.userQuery, toolName, rawResult); distilled != "" {
+			summary = distilled
+		}
+	}
+
+	// Fall back to rule-based compression
+	if summary == "" {
+		summary = CompressStep(toolName, rawResult)
+	}
+
 	step := StepResult{
 		StepNum:   len(p.steps) + 1,
 		ToolName:  toolName,
-		Summary:   CompressStep(toolName, rawResult),
+		Summary:   summary,
 		RawResult: rawResult,
 	}
 	// Clear RawResult from all previous steps to save memory
@@ -46,6 +74,69 @@ func (p *Pipeline) AddStep(toolName, rawResult string) {
 		p.steps[i].RawResult = ""
 	}
 	p.steps = append(p.steps, step)
+}
+
+// distillStep uses the fast model to produce a semantically rich summary
+// of a tool result. Returns empty string on failure (caller falls back to
+// rule-based compression). Timeout: 3 seconds to avoid blocking.
+func distillStep(llm *ollama.Client, userQuery, toolName, rawResult string) string {
+	if llm == nil {
+		return ""
+	}
+
+	// Truncate very large results before sending to distiller
+	result := rawResult
+	if len(result) > 1500 {
+		result = result[:1500] + "\n... (truncated)"
+	}
+
+	prompt := fmt.Sprintf(`Tool "%s" returned this result. Summarize what it means for the task in one sentence (max 40 words). Focus on key content and findings, not metadata.
+
+Task: %s
+
+Result:
+%s
+
+Summary:`, toolName, userQuery, result)
+
+	// Use a channel + goroutine for timeout control
+	type resp struct {
+		text string
+		err  error
+	}
+	ch := make(chan resp, 1)
+	go func() {
+		r, err := llm.Chat([]ollama.Message{
+			{Role: "user", Content: prompt},
+		}, &ollama.ModelOptions{
+			Temperature: 0.1,
+			NumPredict:  60,
+		})
+		if err != nil {
+			ch <- resp{err: err}
+			return
+		}
+		ch <- resp{text: r.Message.Content}
+	}()
+
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			return ""
+		}
+		// Clean up: take first line, trim whitespace
+		summary := strings.TrimSpace(r.text)
+		if idx := strings.IndexByte(summary, '\n'); idx > 0 {
+			summary = strings.TrimSpace(summary[:idx])
+		}
+		// Sanity: if distillation returned garbage or too long, reject
+		if len(summary) < 5 || len(summary) > 200 {
+			return ""
+		}
+		return fmt.Sprintf("[%s] %s", toolName, summary)
+	case <-time.After(3 * time.Second):
+		return "" // timeout — fall back to rule-based
+	}
 }
 
 // CompressStep applies rule-based compression to produce a one-line summary.

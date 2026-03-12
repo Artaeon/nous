@@ -157,6 +157,65 @@ func TestStoreTriggerRoutinesSkipsWeekdaysOnWeekend(t *testing.T) {
 	}
 }
 
+func TestOverdue(t *testing.T) {
+	store := NewStore(t.TempDir())
+	now := time.Date(2026, 3, 11, 14, 0, 0, 0, time.Local)
+
+	// Past task — overdue
+	store.AddTask("Overdue task", now.Add(-2*time.Hour), "")
+	// Future task — not overdue
+	store.AddTask("Future task", now.Add(2*time.Hour), "")
+
+	overdue := store.Overdue(now)
+	if len(overdue) != 1 {
+		t.Fatalf("Overdue() = %d, want 1", len(overdue))
+	}
+	if overdue[0].Title != "Overdue task" {
+		t.Fatalf("got %q, want %q", overdue[0].Title, "Overdue task")
+	}
+}
+
+func TestCompletedToday(t *testing.T) {
+	store := NewStore(t.TempDir())
+	now := time.Now()
+
+	store.AddTask("Task A", now.Add(-time.Hour), "")
+	tasks := store.PendingTasks()
+	store.MarkDone(tasks[0].ID)
+
+	done := store.CompletedToday(now)
+	if len(done) != 1 {
+		t.Fatalf("CompletedToday() = %d, want 1", len(done))
+	}
+	if done[0].Title != "Task A" {
+		t.Fatalf("got %q, want %q", done[0].Title, "Task A")
+	}
+}
+
+func TestActiveRoutinesForDay(t *testing.T) {
+	store := NewStore(t.TempDir())
+
+	store.AddRoutine("Daily standup", "daily", "09:00")
+	store.AddRoutine("Weekday review", "weekdays", "17:00")
+
+	// Wednesday — both should fire
+	wed := time.Date(2026, 3, 11, 10, 0, 0, 0, time.Local) // Wednesday
+	routines := store.ActiveRoutinesForDay(wed)
+	if len(routines) != 2 {
+		t.Fatalf("ActiveRoutinesForDay(Wed) = %d, want 2", len(routines))
+	}
+
+	// Saturday — only daily should fire
+	sat := time.Date(2026, 3, 14, 10, 0, 0, 0, time.Local) // Saturday
+	routines = store.ActiveRoutinesForDay(sat)
+	if len(routines) != 1 {
+		t.Fatalf("ActiveRoutinesForDay(Sat) = %d, want 1", len(routines))
+	}
+	if routines[0].Title != "Daily standup" {
+		t.Fatalf("got %q, want %q", routines[0].Title, "Daily standup")
+	}
+}
+
 func TestSchedulerPublishesNotificationsToBlackboard(t *testing.T) {
 	store := NewStore(t.TempDir())
 	_, err := store.AddTask("Call family", time.Now().Add(-time.Second), "")
