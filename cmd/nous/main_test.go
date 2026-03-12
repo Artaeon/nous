@@ -123,6 +123,36 @@ func TestRenderRoutinesIncludesConfiguredRoutines(t *testing.T) {
 	}
 }
 
+func TestRenderBriefingRespectsGermanPreference(t *testing.T) {
+	store := assistant.NewStore(t.TempDir())
+	now := time.Date(2026, 3, 12, 10, 0, 0, 0, time.UTC)
+	_ = store.SetPreference("language", "de")
+	_, _ = store.AddTask("Bericht fertigstellen", now.Add(30*time.Minute), "")
+
+	out := renderBriefing(store, now)
+	checks := []string{"Guten Morgen", "Heute (1)", "Bericht fertigstellen"}
+	for _, check := range checks {
+		if !strings.Contains(out, check) {
+			t.Fatalf("renderBriefing() should contain %q, got %q", check, out)
+		}
+	}
+}
+
+func TestWhatShouldIDoNowRespectsGermanPreference(t *testing.T) {
+	store := assistant.NewStore(t.TempDir())
+	now := time.Date(2026, 3, 12, 10, 0, 0, 0, time.UTC)
+	_ = store.SetPreference("language", "de")
+	_, _ = store.AddTask("Design Review", now.Add(45*time.Minute), "")
+
+	out := whatShouldIDoNow(store, now)
+	checks := []string{"In 45 Min. steht", "Design Review"}
+	for _, check := range checks {
+		if !strings.Contains(out, check) {
+			t.Fatalf("whatShouldIDoNow() should contain %q, got %q", check, out)
+		}
+	}
+}
+
 func TestParseReminderInputSupportsRelativeDailyAndCalendarFormats(t *testing.T) {
 	now := time.Date(2026, 3, 11, 8, 0, 0, 0, time.UTC)
 

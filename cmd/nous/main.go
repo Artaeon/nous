@@ -1051,7 +1051,15 @@ func renderRoutines(store *assistant.Store) string {
 	return cognitive.Panel("Routines", lines)
 }
 
+func prefersGerman(store *assistant.Store) bool {
+	if store == nil {
+		return false
+	}
+	return strings.HasPrefix(strings.ToLower(preferenceValue(store, "language")), "de")
+}
+
 func renderBriefing(store *assistant.Store, now time.Time) string {
+	de := prefersGerman(store)
 	greeting := "Good morning"
 	hour := now.Hour()
 	switch {
@@ -1059,6 +1067,16 @@ func renderBriefing(store *assistant.Store, now time.Time) string {
 		greeting = "Good evening"
 	case hour >= 12:
 		greeting = "Good afternoon"
+	}
+	if de {
+		switch {
+		case hour >= 17:
+			greeting = "Guten Abend"
+		case hour >= 12:
+			greeting = "Guten Tag"
+		default:
+			greeting = "Guten Morgen"
+		}
 	}
 
 	var sections []string
@@ -1068,10 +1086,18 @@ func renderBriefing(store *assistant.Store, now time.Time) string {
 	if len(overdue) > 0 {
 		lines := make([]string, 0, len(overdue))
 		for _, task := range overdue {
-			ago := now.Sub(task.DueAt).Truncate(time.Minute)
-			lines = append(lines, fmt.Sprintf("  %s  %s (overdue %s)", task.DueAt.Format("15:04"), task.Title, ago))
+			ago := friendlyDuration(now.Sub(task.DueAt), de)
+			if de {
+				lines = append(lines, fmt.Sprintf("  %s  %s (%s überfällig)", task.DueAt.Format("15:04"), task.Title, ago))
+			} else {
+				lines = append(lines, fmt.Sprintf("  %s  %s (overdue %s)", task.DueAt.Format("15:04"), task.Title, ago))
+			}
 		}
-		sections = append(sections, cognitive.Styled(cognitive.ColorRed, fmt.Sprintf("Overdue (%d)", len(overdue)))+"\n"+strings.Join(lines, "\n"))
+		title := fmt.Sprintf("Overdue (%d)", len(overdue))
+		if de {
+			title = fmt.Sprintf("Überfällig (%d)", len(overdue))
+		}
+		sections = append(sections, cognitive.Styled(cognitive.ColorRed, title)+"\n"+strings.Join(lines, "\n"))
 	}
 
 	// Today's schedule
@@ -1081,7 +1107,11 @@ func renderBriefing(store *assistant.Store, now time.Time) string {
 		for _, task := range today {
 			lines = append(lines, fmt.Sprintf("  %s  %s", task.DueAt.Format("15:04"), task.Title))
 		}
-		sections = append(sections, fmt.Sprintf("Today (%d)", len(today))+"\n"+strings.Join(lines, "\n"))
+		title := fmt.Sprintf("Today (%d)", len(today))
+		if de {
+			title = fmt.Sprintf("Heute (%d)", len(today))
+		}
+		sections = append(sections, title+"\n"+strings.Join(lines, "\n"))
 	}
 
 	// Active routines for today
@@ -1091,7 +1121,11 @@ func renderBriefing(store *assistant.Store, now time.Time) string {
 		for _, routine := range routines {
 			lines = append(lines, fmt.Sprintf("  %s  %s", routine.TimeOfDay, routine.Title))
 		}
-		sections = append(sections, fmt.Sprintf("Routines (%d)", len(routines))+"\n"+strings.Join(lines, "\n"))
+		title := fmt.Sprintf("Routines (%d)", len(routines))
+		if de {
+			title = fmt.Sprintf("Routinen (%d)", len(routines))
+		}
+		sections = append(sections, title+"\n"+strings.Join(lines, "\n"))
 	}
 
 	// Unread notifications
@@ -1101,7 +1135,11 @@ func renderBriefing(store *assistant.Store, now time.Time) string {
 		for _, note := range unread {
 			lines = append(lines, fmt.Sprintf("  %s", note.Message))
 		}
-		sections = append(sections, fmt.Sprintf("Unread (%d)", len(unread))+"\n"+strings.Join(lines, "\n"))
+		title := fmt.Sprintf("Unread (%d)", len(unread))
+		if de {
+			title = fmt.Sprintf("Ungelesen (%d)", len(unread))
+		}
+		sections = append(sections, title+"\n"+strings.Join(lines, "\n"))
 	}
 
 	// Upcoming (next 3, not today)
@@ -1119,10 +1157,17 @@ func renderBriefing(store *assistant.Store, now time.Time) string {
 		for _, task := range futureOnly {
 			lines = append(lines, fmt.Sprintf("  %s  %s", task.DueAt.Format("Mon 15:04"), task.Title))
 		}
-		sections = append(sections, "Coming up\n"+strings.Join(lines, "\n"))
+		title := "Coming up"
+		if de {
+			title = "Später"
+		}
+		sections = append(sections, title+"\n"+strings.Join(lines, "\n"))
 	}
 
 	if len(sections) == 0 {
+		if de {
+			return cognitive.Panel(greeting, []string{"Dein Zeitplan ist frei. Keine Aufgaben, nichts überfällig."})
+		}
 		return cognitive.Panel(greeting, []string{"Your schedule is clear. No tasks, no overdue items."})
 	}
 
@@ -1130,6 +1175,7 @@ func renderBriefing(store *assistant.Store, now time.Time) string {
 }
 
 func renderReview(store *assistant.Store, now time.Time) string {
+	de := prefersGerman(store)
 	var sections []string
 
 	// Completed today
@@ -1139,9 +1185,17 @@ func renderReview(store *assistant.Store, now time.Time) string {
 		for _, task := range done {
 			lines = append(lines, fmt.Sprintf("  %s  %s", task.CompletedAt.Format("15:04"), task.Title))
 		}
-		sections = append(sections, cognitive.Styled(cognitive.ColorGreen, fmt.Sprintf("Completed today (%d)", len(done)))+"\n"+strings.Join(lines, "\n"))
+		title := fmt.Sprintf("Completed today (%d)", len(done))
+		if de {
+			title = fmt.Sprintf("Heute erledigt (%d)", len(done))
+		}
+		sections = append(sections, cognitive.Styled(cognitive.ColorGreen, title)+"\n"+strings.Join(lines, "\n"))
 	} else {
-		sections = append(sections, "No tasks completed today.")
+		if de {
+			sections = append(sections, "Heute wurde noch nichts erledigt.")
+		} else {
+			sections = append(sections, "No tasks completed today.")
+		}
 	}
 
 	// Still pending today
@@ -1151,7 +1205,11 @@ func renderReview(store *assistant.Store, now time.Time) string {
 		for _, task := range today {
 			lines = append(lines, fmt.Sprintf("  %s  %s", task.DueAt.Format("15:04"), task.Title))
 		}
-		sections = append(sections, fmt.Sprintf("Still pending (%d)", len(today))+"\n"+strings.Join(lines, "\n"))
+		title := fmt.Sprintf("Still pending (%d)", len(today))
+		if de {
+			title = fmt.Sprintf("Noch offen (%d)", len(today))
+		}
+		sections = append(sections, title+"\n"+strings.Join(lines, "\n"))
 	}
 
 	// Overdue
@@ -1161,7 +1219,11 @@ func renderReview(store *assistant.Store, now time.Time) string {
 		for _, task := range overdue {
 			lines = append(lines, fmt.Sprintf("  %s  %s", task.DueAt.Format("15:04"), task.Title))
 		}
-		sections = append(sections, cognitive.Styled(cognitive.ColorRed, fmt.Sprintf("Overdue (%d)", len(overdue)))+"\n"+strings.Join(lines, "\n"))
+		title := fmt.Sprintf("Overdue (%d)", len(overdue))
+		if de {
+			title = fmt.Sprintf("Überfällig (%d)", len(overdue))
+		}
+		sections = append(sections, cognitive.Styled(cognitive.ColorRed, title)+"\n"+strings.Join(lines, "\n"))
 	}
 
 	// Tomorrow preview
@@ -1174,20 +1236,36 @@ func renderReview(store *assistant.Store, now time.Time) string {
 			lines = append(lines, fmt.Sprintf("  %s  %s", task.DueAt.Format("15:04"), task.Title))
 		}
 		for _, routine := range tomorrowRoutines {
-			lines = append(lines, fmt.Sprintf("  %s  %s (routine)", routine.TimeOfDay, routine.Title))
+			if de {
+				lines = append(lines, fmt.Sprintf("  %s  %s (Routine)", routine.TimeOfDay, routine.Title))
+			} else {
+				lines = append(lines, fmt.Sprintf("  %s  %s (routine)", routine.TimeOfDay, routine.Title))
+			}
 		}
-		sections = append(sections, "Tomorrow\n"+strings.Join(lines, "\n"))
+		title := "Tomorrow"
+		if de {
+			title = "Morgen"
+		}
+		sections = append(sections, title+"\n"+strings.Join(lines, "\n"))
 	}
 
-	return cognitive.Panel("Evening review", sections)
+	panelTitle := "Evening review"
+	if de {
+		panelTitle = "Abendlicher Rückblick"
+	}
+	return cognitive.Panel(panelTitle, sections)
 }
 
 func whatShouldIDoNow(store *assistant.Store, now time.Time) string {
+	de := prefersGerman(store)
 	// 1. Overdue tasks — most urgent
 	overdue := store.Overdue(now)
 	if len(overdue) > 0 {
 		task := overdue[0]
-		ago := friendlyDuration(now.Sub(task.DueAt), false)
+		ago := friendlyDuration(now.Sub(task.DueAt), de)
+		if de {
+			return fmt.Sprintf("Du hast eine überfällige Aufgabe: \"%s\" (seit %s überfällig, %s). Kümmere dich zuerst darum.", task.Title, ago, task.DueAt.Format("15:04"))
+		}
 		return fmt.Sprintf("You have an overdue task: \"%s\" (due %s ago, %s). Take care of that first.", task.Title, ago, task.DueAt.Format("15:04"))
 	}
 
@@ -1195,7 +1273,10 @@ func whatShouldIDoNow(store *assistant.Store, now time.Time) string {
 	today := store.Today(now)
 	for _, task := range today {
 		if task.DueAt.After(now) && task.DueAt.Before(now.Add(time.Hour)) {
-			until := task.DueAt.Sub(now).Truncate(time.Minute)
+			until := friendlyDuration(task.DueAt.Sub(now), de)
+			if de {
+				return fmt.Sprintf("In %s steht \"%s\" um %s an.", until, task.Title, task.DueAt.Format("15:04"))
+			}
 			return fmt.Sprintf("Coming up in %s: \"%s\" at %s.", until, task.Title, task.DueAt.Format("15:04"))
 		}
 	}
@@ -1203,6 +1284,9 @@ func whatShouldIDoNow(store *assistant.Store, now time.Time) string {
 	// 3. Next task on today's schedule
 	for _, task := range today {
 		if task.DueAt.After(now) {
+			if de {
+				return fmt.Sprintf("Als Nächstes auf deinem Plan: \"%s\" um %s.", task.Title, task.DueAt.Format("15:04"))
+			}
 			return fmt.Sprintf("Next on your schedule: \"%s\" at %s.", task.Title, task.DueAt.Format("15:04"))
 		}
 	}
@@ -1211,9 +1295,15 @@ func whatShouldIDoNow(store *assistant.Store, now time.Time) string {
 	pending := store.PendingTasks()
 	if len(pending) > 0 {
 		task := pending[0]
+		if de {
+			return fmt.Sprintf("Gerade ist nichts fällig. Nächste Aufgabe: \"%s\" am %s.", task.Title, task.DueAt.Format("Mon 15:04"))
+		}
 		return fmt.Sprintf("No tasks due right now. Next task: \"%s\" on %s.", task.Title, task.DueAt.Format("Mon 15:04"))
 	}
 
+	if de {
+		return "Alles frei — keine offenen Aufgaben oder Erinnerungen."
+	}
 	return "You're all clear — no pending tasks or reminders."
 }
 
