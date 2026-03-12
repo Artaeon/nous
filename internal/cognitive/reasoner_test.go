@@ -181,6 +181,85 @@ func TestValidateRequiredArgs(t *testing.T) {
 	}
 }
 
+func TestInferRequestedPath(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		content string
+		want    string
+	}{
+		{"explicit filename", "create a file named bitcoin.md in this folder", "", "bitcoin.md"},
+		{"markdown about topic", "create a markdown file about bitcoin in this folder", "", "bitcoin.md"},
+		{"from heading", "create a markdown file in this folder", "# Bitcoin\n\nSummary", "bitcoin.md"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := inferRequestedPath(tt.input, tt.content); got != tt.want {
+				t.Fatalf("inferRequestedPath() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInferMissingToolArgsForWrite(t *testing.T) {
+	args := map[string]string{"content": "# Bitcoin\nSummary"}
+	inferMissingToolArgs("write", args, "Research Bitcoin online and create a file named bitcoin.md in the current folder")
+	if args["path"] != "bitcoin.md" {
+		t.Fatalf("expected inferred path bitcoin.md, got %v", args)
+	}
+}
+
+func TestNormalizeRequestedPathForCurrentFolder(t *testing.T) {
+	args := map[string]string{"path": "/bitcoin.md"}
+	inferMissingToolArgs("write", args, "Create bitcoin.md in the current folder")
+	if args["path"] != "bitcoin.md" {
+		t.Fatalf("expected normalized relative path, got %v", args)
+	}
+}
+
+func TestTryResearchAndWrite(t *testing.T) {
+	board := blackboard.New()
+	reg := tools.NewRegistry()
+
+	wrote := map[string]string{}
+	reg.Register(tools.Tool{
+		Name: "fetch",
+		Execute: func(args map[string]string) (string, error) {
+			return "Bitcoin is a decentralized digital currency. It runs on a blockchain. It is used as a peer-to-peer payment system.", nil
+		},
+	})
+	reg.Register(tools.Tool{
+		Name: "write",
+		Execute: func(args map[string]string) (string, error) {
+			wrote["path"] = args["path"]
+			wrote["content"] = args["content"]
+			return "ok", nil
+		},
+	})
+
+	r := NewReasoner(board, nil, reg)
+	r.Confirm = AutoApprove
+	r.currentInput = "Research Bitcoin online and create a file named bitcoin.md in the current folder"
+
+	answer, ok, err := r.tryResearchAndWrite(r.currentInput)
+	if err != nil {
+		t.Fatalf("tryResearchAndWrite() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("expected helper to handle request")
+	}
+	if !strings.Contains(answer, "bitcoin.md") {
+		t.Fatalf("expected answer to mention created file, got %q", answer)
+	}
+	if wrote["path"] != "bitcoin.md" {
+		t.Fatalf("expected file path bitcoin.md, got %v", wrote)
+	}
+	if !strings.Contains(wrote["content"], "# Bitcoin") || !strings.Contains(wrote["content"], "## Sources") {
+		t.Fatalf("expected markdown content, got %q", wrote["content"])
+	}
+}
+
 func TestIsCodeQuery(t *testing.T) {
 	codeQueries := []string{
 		"what does correctArgNames do",

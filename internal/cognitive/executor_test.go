@@ -193,3 +193,167 @@ func TestExecutorMapsRawArgsToToolParams(t *testing.T) {
 		t.Errorf("raw arg should be mapped to 'path' for read tool, got args: %v", receivedArgs)
 	}
 }
+
+func TestExecutorParsesNamedRawArgsForWrite(t *testing.T) {
+	board := blackboard.New()
+	reg := tools.NewRegistry()
+
+	var receivedArgs map[string]string
+	reg.Register(tools.Tool{
+		Name: "write",
+		Execute: func(args map[string]string) (string, error) {
+			receivedArgs = args
+			return "ok", nil
+		},
+	})
+	exec := NewExecutor(board, nil, reg)
+
+	plan := blackboard.Plan{
+		GoalID: "goal-write",
+		Steps: []blackboard.Step{{
+			ID:   "s1",
+			Tool: "write",
+			Args: map[string]string{"raw": `path=bitcoin.md, content="# Bitcoin\nSummary"`},
+		}},
+		Status: "draft",
+	}
+	board.PushGoal(blackboard.Goal{ID: "goal-write", Status: "pending"})
+
+	exec.executePlan(context.Background(), plan)
+
+	if receivedArgs["path"] != "bitcoin.md" {
+		t.Fatalf("expected parsed path, got args: %v", receivedArgs)
+	}
+	if receivedArgs["content"] != "# Bitcoin\nSummary" {
+		t.Fatalf("expected parsed content, got args: %v", receivedArgs)
+	}
+}
+
+func TestExecutorNormalizesWriteAliases(t *testing.T) {
+	board := blackboard.New()
+	reg := tools.NewRegistry()
+
+	var receivedArgs map[string]string
+	reg.Register(tools.Tool{
+		Name: "write",
+		Execute: func(args map[string]string) (string, error) {
+			receivedArgs = args
+			return "ok", nil
+		},
+	})
+	exec := NewExecutor(board, nil, reg)
+
+	plan := blackboard.Plan{
+		GoalID: "goal-write-alias",
+		Steps: []blackboard.Step{{
+			ID:   "s1",
+			Tool: "write",
+			Args: map[string]string{"file": "bitcoin.md", "text": "hello"},
+		}},
+		Status: "draft",
+	}
+	board.PushGoal(blackboard.Goal{ID: "goal-write-alias", Status: "pending"})
+
+	exec.executePlan(context.Background(), plan)
+
+	if receivedArgs["path"] != "bitcoin.md" || receivedArgs["content"] != "hello" {
+		t.Fatalf("expected aliases normalized, got args: %v", receivedArgs)
+	}
+}
+
+func TestExecutorCorrectsPlannerArgAliases(t *testing.T) {
+	board := blackboard.New()
+	reg := tools.NewRegistry()
+
+	var receivedArgs map[string]string
+	reg.Register(tools.Tool{
+		Name: "grep",
+		Execute: func(args map[string]string) (string, error) {
+			receivedArgs = args
+			return "ok", nil
+		},
+	})
+	exec := NewExecutor(board, nil, reg)
+
+	plan := blackboard.Plan{
+		GoalID: "goal-grep-alias",
+		Steps: []blackboard.Step{{
+			ID:   "s1",
+			Tool: "grep",
+			Args: map[string]string{"raw": "query=Bitcoin"},
+		}},
+		Status: "draft",
+	}
+	board.PushGoal(blackboard.Goal{ID: "goal-grep-alias", Status: "pending"})
+
+	exec.executePlan(context.Background(), plan)
+
+	if receivedArgs["pattern"] != "Bitcoin" {
+		t.Fatalf("expected query alias to become pattern, got args: %v", receivedArgs)
+	}
+}
+
+func TestExecutorNormalizesSearchToolToFetch(t *testing.T) {
+	board := blackboard.New()
+	reg := tools.NewRegistry()
+
+	var receivedArgs map[string]string
+	reg.Register(tools.Tool{
+		Name: "fetch",
+		Execute: func(args map[string]string) (string, error) {
+			receivedArgs = args
+			return "ok", nil
+		},
+	})
+	exec := NewExecutor(board, nil, reg)
+
+	plan := blackboard.Plan{
+		GoalID: "goal-search-fetch",
+		Steps: []blackboard.Step{{
+			ID:   "s1",
+			Tool: "search",
+			Args: map[string]string{"raw": "query=Bitcoin"},
+		}},
+		Status: "draft",
+	}
+	board.PushGoal(blackboard.Goal{ID: "goal-search-fetch", Status: "pending"})
+
+	exec.executePlan(context.Background(), plan)
+
+	if receivedArgs["url"] != "https://en.wikipedia.org/api/rest_v1/page/summary/bitcoin" {
+		t.Fatalf("expected inferred wikipedia url, got args: %v", receivedArgs)
+	}
+}
+
+func TestExecutorInfersPatternFromDescription(t *testing.T) {
+	board := blackboard.New()
+	reg := tools.NewRegistry()
+
+	var receivedArgs map[string]string
+	reg.Register(tools.Tool{
+		Name: "grep",
+		Execute: func(args map[string]string) (string, error) {
+			receivedArgs = args
+			return "ok", nil
+		},
+	})
+	exec := NewExecutor(board, nil, reg)
+
+	plan := blackboard.Plan{
+		GoalID: "goal-grep-desc",
+		Steps: []blackboard.Step{{
+			ID:          "s1",
+			Tool:        "grep",
+			Description: "Search for Bitcoin references",
+			Args:        map[string]string{},
+		}},
+		Status: "draft",
+	}
+	board.PushGoal(blackboard.Goal{ID: "goal-grep-desc", Status: "pending"})
+
+	exec.executePlan(context.Background(), plan)
+
+	if receivedArgs["pattern"] != "Bitcoin references" && receivedArgs["pattern"] != "references" {
+		t.Fatalf("expected inferred pattern from description, got args: %v", receivedArgs)
+	}
+}

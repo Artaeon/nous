@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/artaeon/nous/internal/blackboard"
 	"github.com/artaeon/nous/internal/ollama"
@@ -48,6 +49,18 @@ func (p *Planner) plan(goal blackboard.Goal) error {
 Each step should be a single action. Use this format:
 
 STEP: <description> | TOOL: <tool_name> | ARGS: <arguments>
+
+Write ARGS as named key=value pairs when possible.
+Examples:
+- STEP: Fetch the Bitcoin page | TOOL: fetch | ARGS: url=https://en.wikipedia.org/wiki/Bitcoin
+- STEP: Create the report file | TOOL: write | ARGS: path=bitcoin.md, content="# Bitcoin\n\nSummary text here"
+- STEP: Update an existing file | TOOL: edit | ARGS: path=README.md, old="old text", new="new text"
+
+Important rules:
+- If the goal says to create a new file, use write, not edit.
+- Use edit only when modifying an existing file.
+- For fetch, always provide url=...
+- For write, always provide path=... and content=...
 
 Available tools:
 - read (read a file), write (create/overwrite a file), edit (modify part of a file)
@@ -104,7 +117,11 @@ func (p *Planner) parsePlan(goalID, response string) blackboard.Plan {
 			} else if strings.HasPrefix(upper, "TOOL:") {
 				step.Tool = strings.TrimSpace(part[5:])
 			} else if strings.HasPrefix(upper, "ARGS:") {
-				step.Args["raw"] = strings.TrimSpace(part[5:])
+				rawArgs := strings.TrimSpace(part[5:])
+				step.Args["raw"] = rawArgs
+				for key, value := range parseStepArgs(rawArgs) {
+					step.Args[key] = value
+				}
 			}
 		}
 
@@ -116,4 +133,82 @@ func (p *Planner) parsePlan(goalID, response string) blackboard.Plan {
 		Steps:  steps,
 		Status: "draft",
 	}
+}
+
+func parseStepArgs(raw string) map[string]string {
+	args := make(map[string]string)
+	remaining := strings.TrimSpace(raw)
+	for remaining != "" {
+		remaining = strings.TrimLeftFunc(remaining, func(r rune) bool {
+			return unicode.IsSpace(r) || r == ',' || r == ';'
+		})
+		if remaining == "" {
+			break
+		}
+
+		eq := strings.IndexRune(remaining, '=')
+		if eq <= 0 {
+			break
+		}
+		key := strings.TrimSpace(remaining[:eq])
+		remaining = strings.TrimSpace(remaining[eq+1:])
+		if key == "" {
+			break
+		}
+
+		value := ""
+		if strings.HasPrefix(remaining, `"`) {
+			remaining = remaining[1:]
+			var b strings.Builder
+			escaped := false
+			consumed := 0
+			for i, r := range remaining {
+				consumed = i + 1
+				if escaped {
+					switch r {
+					case 'n':
+						b.WriteRune('\n')
+					case 't':
+						b.WriteRune('\t')
+					case '"':
+						b.WriteRune('"')
+					case '\\':
+						b.WriteRune('\\')
+					default:
+						b.WriteRune(r)
+					}
+					escaped = false
+					continue
+				}
+				if r == '\\' {
+					escaped = true
+					continue
+				}
+				if r == '"' {
+					break
+				}
+				b.WriteRune(r)
+			}
+			value = b.String()
+			if consumed > len(remaining) {
+				consumed = len(remaining)
+			}
+			remaining = strings.TrimSpace(remaining[consumed:])
+		} else {
+			end := len(remaining)
+			for i, r := range remaining {
+				if r == ',' || r == ';' {
+					end = i
+					break
+				}
+			}
+			value = strings.TrimSpace(remaining[:end])
+			remaining = strings.TrimSpace(remaining[end:])
+		}
+
+		if key != "" {
+			args[key] = value
+		}
+	}
+	return args
 }

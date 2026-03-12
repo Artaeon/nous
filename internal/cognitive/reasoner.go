@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/artaeon/nous/internal/blackboard"
 	"github.com/artaeon/nous/internal/compress"
@@ -54,6 +56,7 @@ type Reasoner struct {
 	// Active tool subset for current reasoning cycle
 	activeTools []tools.Tool
 	activeCats  map[ToolCategory]bool
+	currentInput string
 }
 
 // CurrentProject holds the scanned project info for the system prompt.
@@ -94,6 +97,8 @@ func (r *Reasoner) Run(ctx context.Context) error {
 func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error {
 	// Reset reflection gate for this reasoning cycle
 	r.Gate.Reset()
+	r.currentInput = percept.Raw
+	defer func() { r.currentInput = "" }()
 	recentConversation := recentConversationContext(r.Conv.Messages(), 6)
 
 	if r.AssistantAnswer != nil {
@@ -104,6 +109,17 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 			r.finishReasoning(percept, NewPipeline(percept.Raw), answer)
 			return nil
 		}
+	}
+
+	if answer, ok, err := r.tryResearchAndWrite(percept.Raw); ok {
+		if err != nil {
+			return err
+		}
+		r.Conv.User(percept.Raw)
+		r.Conv.Assistant(answer)
+		r.publishAnswer(answer)
+		r.finishReasoning(percept, NewPipeline(percept.Raw), answer)
+		return nil
 	}
 
 	// 1. Progressive Tool Disclosure — select relevant tools based on intent
@@ -356,6 +372,119 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 
 	r.publishAnswer("(reached maximum tool iterations)")
 	return nil
+}
+
+func (r *Reasoner) tryResearchAndWrite(input string) (string, bool, error) {
+	lower := strings.ToLower(strings.TrimSpace(input))
+	if !strings.Contains(lower, "research") || !strings.Contains(lower, "create") || !strings.Contains(lower, "file") {
+		return "", false, nil
+	}
+	if !strings.Contains(lower, "online") && !strings.Contains(lower, "web") {
+		return "", false, nil
+	}
+	path := inferRequestedPath(input, "")
+	if path == "" {
+		return "", false, nil
+	}
+	topic := inferResearchTopic(input, path)
+	if topic == "" {
+		return "", false, nil
+	}
+	url := inferURL(input)
+	if url == "" {
+		url = wikipediaSummaryURL(topic)
+	}
+
+	fetchRes, err := r.executeTool(toolCall{Name: "fetch", Args: map[string]string{"url": url}})
+	if err != nil {
+		return "", true, err
+	}
+	content := buildResearchMarkdown(topic, url, fetchRes)
+	if _, err := r.executeTool(toolCall{Name: "write", Args: map[string]string{"path": path, "content": content}}); err != nil {
+		return "", true, err
+	}
+	return fmt.Sprintf("Done — I researched %s online and created %q.", topic, path), true, nil
+}
+
+func inferResearchTopic(input, path string) string {
+	lower := strings.ToLower(input)
+	for _, marker := range []string{"about ", "on ", "research "} {
+		if idx := strings.Index(lower, marker); idx >= 0 {
+			rest := input[idx+len(marker):]
+			for _, stopper := range []string{" online", " and create", " and write", " into ", " in the current folder", ",", "."} {
+				if end := strings.Index(strings.ToLower(rest), stopper); end >= 0 {
+					rest = rest[:end]
+					break
+				}
+			}
+			rest = strings.TrimSpace(rest)
+			if rest != "" && !strings.Contains(rest, ".md") {
+				words := strings.Fields(rest)
+				if len(words) > 5 {
+					words = words[:5]
+				}
+				return strings.Join(words, " ")
+			}
+		}
+	}
+	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	base = strings.ReplaceAll(base, "-", " ")
+	base = strings.ReplaceAll(base, "_", " ")
+	return strings.TrimSpace(base)
+}
+
+func buildResearchMarkdown(topic, url, fetched string) string {
+	trimmed := strings.TrimSpace(fetched)
+	if strings.HasPrefix(trimmed, "{") {
+		var payload struct {
+			Title   string `json:"title"`
+			Extract string `json:"extract"`
+		}
+		if err := json.Unmarshal([]byte(trimmed), &payload); err == nil && strings.TrimSpace(payload.Extract) != "" {
+			bullets := make([]string, 0, 3)
+			for _, part := range strings.Split(payload.Extract, ". ") {
+				part = strings.TrimSpace(part)
+				if part == "" {
+					continue
+				}
+				bullets = append(bullets, "- "+strings.TrimSuffix(part, ".")+".")
+				if len(bullets) >= 3 {
+					break
+				}
+			}
+			heading := strings.Title(topic)
+			if strings.TrimSpace(payload.Title) != "" {
+				heading = payload.Title
+			}
+			return fmt.Sprintf("# %s\n\n## Summary\n%s\n\n## Sources\n- %s\n", heading, strings.Join(bullets, "\n"), url)
+		}
+	}
+
+	lines := strings.FieldsFunc(strings.TrimSpace(fetched), func(r rune) bool {
+		return r == '\n' || r == '\r'
+	})
+	text := strings.Join(lines, " ")
+	text = strings.Join(strings.Fields(text), " ")
+	parts := strings.Split(text, ". ")
+	bullets := make([]string, 0, 3)
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		bullets = append(bullets, "- "+strings.TrimSuffix(part, ".")+".")
+		if len(bullets) >= 3 {
+			break
+		}
+	}
+	if len(bullets) == 0 {
+		bullets = []string{"- " + topic + " is a topic researched from online sources."}
+	}
+	return fmt.Sprintf("# %s\n\n## Summary\n%s\n\n## Sources\n- %s\n", strings.Title(topic), strings.Join(bullets, "\n"), url)
+}
+
+func wikipediaSummaryURL(topic string) string {
+	return "https://en.wikipedia.org/api/rest_v1/page/summary/" + strings.ReplaceAll(slugifyWords(topic), "-", "_")
 }
 
 // llmResult holds the response from an LLM call, including any native tool calls.
@@ -792,6 +921,7 @@ func (r *Reasoner) executeTool(tc toolCall) (string, error) {
 
 	// Auto-correct common argument name mistakes from small models
 	tc.Args = correctArgNames(tc.Name, tc.Args)
+	inferMissingToolArgs(tc.Name, tc.Args, r.currentInput)
 
 	// Validate required arguments are present
 	if missing := validateRequiredArgs(tc.Name, tc.Args); missing != "" {
@@ -826,6 +956,109 @@ func (r *Reasoner) executeTool(tc toolCall) (string, error) {
 	}
 
 	return result, execErr
+}
+
+func inferMissingToolArgs(toolName string, args map[string]string, input string) {
+	switch toolName {
+	case "write":
+		if strings.TrimSpace(args["path"]) == "" {
+			if inferred := inferRequestedPath(input, args["content"]); inferred != "" {
+				args["path"] = inferred
+			}
+		}
+		normalizeRequestedPath(args, input)
+	case "fetch":
+		if strings.TrimSpace(args["url"]) == "" {
+			if inferred := inferURL(input); inferred != "" {
+				args["url"] = inferred
+			}
+		}
+	}
+}
+
+func normalizeRequestedPath(args map[string]string, input string) {
+	path := strings.TrimSpace(args["path"])
+	if path == "" {
+		return
+	}
+	if strings.HasPrefix(path, "/") && strings.Count(path, "/") == 1 {
+		lower := strings.ToLower(input)
+		if strings.Contains(lower, "current folder") || strings.Contains(lower, "this folder") {
+			args["path"] = strings.TrimPrefix(path, "/")
+		}
+	}
+}
+
+var explicitFilePattern = regexp.MustCompile(`(?i)(?:named|called)\s+["']?([a-z0-9_./-]+\.[a-z0-9]+)["']?`)
+var quotedFilePattern = regexp.MustCompile(`["']([a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+)["']`)
+var urlPattern = regexp.MustCompile(`https?://[^\s"']+`)
+
+func inferRequestedPath(input string, content string) string {
+	if match := explicitFilePattern.FindStringSubmatch(input); len(match) == 2 {
+		return match[1]
+	}
+	if match := quotedFilePattern.FindStringSubmatch(input); len(match) == 2 {
+		return match[1]
+	}
+	lower := strings.ToLower(input)
+	ext := ".txt"
+	if strings.Contains(lower, "markdown") || strings.Contains(lower, ".md") {
+		ext = ".md"
+	}
+	if strings.Contains(lower, "file about ") {
+		topic := afterPhrase(lower, "file about ")
+		if slug := slugifyWords(topic); slug != "" {
+			return slug + ext
+		}
+	}
+	if strings.Contains(lower, "about ") {
+		topic := afterPhrase(lower, "about ")
+		if slug := slugifyWords(topic); slug != "" {
+			return slug + ext
+		}
+	}
+	if strings.HasPrefix(strings.TrimSpace(content), "#") {
+		heading := strings.TrimSpace(strings.TrimLeft(strings.SplitN(content, "\n", 2)[0], "#"))
+		if slug := slugifyWords(strings.ToLower(heading)); slug != "" {
+			return slug + ext
+		}
+	}
+	return ""
+}
+
+func inferURL(input string) string {
+	if match := urlPattern.FindString(input); match != "" {
+		return match
+	}
+	return ""
+}
+
+func afterPhrase(text string, phrase string) string {
+	idx := strings.Index(text, phrase)
+	if idx < 0 {
+		return ""
+	}
+	rest := text[idx+len(phrase):]
+	for _, stopper := range []string{" in ", " with ", " containing ", " and ", ".", ","} {
+		if end := strings.Index(rest, stopper); end >= 0 {
+			rest = rest[:end]
+			break
+		}
+	}
+	return strings.TrimSpace(rest)
+}
+
+func slugifyWords(text string) string {
+	words := strings.FieldsFunc(strings.ToLower(strings.TrimSpace(text)), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	})
+	if len(words) == 0 {
+		return ""
+	}
+	if len(words) > 4 {
+		words = words[:4]
+	}
+	return strings.Join(words, "-")
 }
 
 // buildDiffPreview generates a colored diff preview for file-modifying tools.
