@@ -401,6 +401,54 @@ func TestAnswerAssistantQueryHandlesReflectiveProcrastination(t *testing.T) {
 	}
 }
 
+func TestAnswerAssistantQueryHandlesGermanReflectivePrompts(t *testing.T) {
+	store := assistant.NewStore(t.TempDir())
+	now := time.Date(2026, 3, 12, 10, 0, 0, 0, time.UTC)
+	_ = store.SetPreference("language", "de")
+	_ = store.SetPreference("focus", "Tiefe Arbeit vor Meetings")
+	_ = store.SetPreference("profile.meetings", "ich werde vor meetings nervös")
+
+	summary, ok := answerAssistantQuery(store, "was weißt du über mich", "", now)
+	if !ok {
+		t.Fatal("expected German self-summary")
+	}
+	for _, check := range []string{"Tiefe Arbeit vor Meetings", "ich werde vor meetings nervös"} {
+		if !strings.Contains(summary, check) {
+			t.Fatalf("German summary should contain %q, got %q", check, summary)
+		}
+	}
+
+	first, ok := answerAssistantQuery(store, "ich prokrastiniere seit tagen bei meinem bericht", "", now)
+	if !ok {
+		t.Fatal("expected German procrastination reply")
+	}
+	for _, check := range []string{"bericht", "drei grobe stichpunkte"} {
+		if !strings.Contains(strings.ToLower(first), check) {
+			t.Fatalf("German procrastination reply should contain %q, got %q", check, first)
+		}
+	}
+
+	recent := "User: ich prokrastiniere seit tagen bei meinem bericht\nAssistant: " + first
+	why, ok := answerAssistantQuery(store, "warum passiert das immer wieder", recent, now)
+	if !ok {
+		t.Fatal("expected German reflection reply")
+	}
+	for _, check := range []string{"bericht", "druck-aufgabe", "nicht, dass du faul bist"} {
+		if !strings.Contains(strings.ToLower(why), check) {
+			t.Fatalf("German reflection reply should contain %q, got %q", check, why)
+		}
+	}
+
+	affirmRecent := recent + "\nUser: warum passiert das immer wieder\nAssistant: " + why
+	affirm, ok := answerAssistantQuery(store, "das klingt richtig", affirmRecent, now)
+	if !ok {
+		t.Fatal("expected German affirmation reply")
+	}
+	if !strings.Contains(strings.ToLower(affirm), "bericht") {
+		t.Fatalf("German affirmation reply should stay on the report topic, got %q", affirm)
+	}
+}
+
 func TestScoreInteractionQualityRewardsFastSuccessfulAnswers(t *testing.T) {
 	board := blackboard.New()
 	board.RecordAction(blackboard.ActionRecord{StepID: "1", Tool: "read", Success: true, Timestamp: time.Now()})

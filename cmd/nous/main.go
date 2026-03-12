@@ -1407,14 +1407,16 @@ func topicFromText(text string) string {
 	}
 
 	lower := strings.ToLower(trimmed)
-	markers := []string{" on my ", " on the ", " my ", " the "}
+	markers := []string{" on my ", " on the ", " my ", " the ", " bei meinem ", " bei meinem ", " bei meiner ", " bei meinen ", " mit meinem ", " mit meiner ", " mit meinen ", " an meinem ", " an meiner ", " an meinen "}
 	stopWords := map[string]bool{
 		"a": true, "an": true, "and": true, "because": true, "before": true,
 		"but": true, "day": true, "days": true, "feels": true, "for": true,
 		"from": true, "has": true, "have": true, "if": true, "is": true,
 		"it": true, "of": true, "right": true, "since": true, "that": true,
 		"the": true, "this": true, "today": true, "tomorrow": true, "week": true,
-		"weeks": true, "with": true,
+		"weeks": true, "with": true, "dem": true, "den": true, "der": true,
+		"die": true, "das": true, "einem": true, "einer": true, "einen": true,
+		"meinem": true, "meiner": true, "meinen": true,
 	}
 	for _, marker := range markers {
 		idx := strings.Index(lower, marker)
@@ -1784,6 +1786,15 @@ func assistantReflectionReply(recent string, de bool) string {
 	return fmt.Sprintf("My guess is that %q has turned into a pressure task. When something feels important but still vague, people often avoid it for a while to get relief from tension or self-judgment. That does not mean you're lazy — %q just needs a smaller, safer starting point.", topic, topic)
 }
 
+func isGermanAffirmation(lower string) bool {
+	switch lower {
+	case "das klingt richtig", "das klingt gut", "genau", "macht sinn", "ja das passt", "okay", "ok", "ja":
+		return true
+	default:
+		return false
+	}
+}
+
 func assistantSmallStepReply(store *assistant.Store, recent string, now time.Time, de bool) string {
 	if topic := conversationFocusTopic(recent); topic != "" {
 		if de {
@@ -1981,6 +1992,9 @@ func answerAssistantQuery(store *assistant.Store, input string, recent string, n
 	if strings.Contains(lower, "what do you know about my preferences") || strings.Contains(lower, "what do you know about me") {
 		return assistantPreferenceSummary(store, now, de), true
 	}
+	if strings.Contains(lower, "was weißt du über mich") || strings.Contains(lower, "was weisst du über mich") || strings.Contains(lower, "was weißt du über meine präferenzen") || strings.Contains(lower, "was weisst du ueber mich") {
+		return assistantPreferenceSummary(store, now, true), true
+	}
 
 	if recent != "" {
 		if lower == "tell me more" || lower == "go on" || lower == "and then" || lower == "what do you mean" || lower == "why" {
@@ -1999,6 +2013,9 @@ func answerAssistantQuery(store *assistant.Store, input string, recent string, n
 		if lower == "that sounds right" || lower == "exactly" || lower == "makes sense" || lower == "yes that fits" {
 			return assistantSmallStepReply(store, recent, now, de), true
 		}
+		if isGermanAffirmation(lower) {
+			return assistantSmallStepReply(store, recent, now, true), true
+		}
 	}
 
 	if strings.Contains(lower, "help me plan my day") || strings.Contains(lower, "plan my day") || strings.Contains(lower, "organize my day") || strings.Contains(lower, "prioritize my day") {
@@ -2008,9 +2025,15 @@ func answerAssistantQuery(store *assistant.Store, input string, recent string, n
 	if strings.Contains(lower, "procrastinating") {
 		return assistantProcrastinationReply(input, recent, de), true
 	}
+	if strings.Contains(lower, "ich prokrastiniere") || strings.Contains(lower, "ich schiebe") || strings.Contains(lower, "ich vermeide") {
+		return assistantProcrastinationReply(input, recent, true), true
+	}
 
 	if strings.Contains(lower, "why do you think that keeps happening") || strings.Contains(lower, "why does that keep happening") || strings.Contains(lower, "why is that keeping happening") {
 		return assistantReflectionReply(recent, de), true
+	}
+	if strings.Contains(lower, "warum passiert das immer wieder") || strings.Contains(lower, "warum passiert das dauernd") || strings.Contains(lower, "warum passiert mir das immer wieder") {
+		return assistantReflectionReply(recent, true), true
 	}
 
 	if strings.Contains(lower, "help me focus") || strings.Contains(lower, "i feel overwhelmed") || strings.Contains(lower, "i'm overwhelmed") || strings.Contains(lower, "i am overwhelmed") || strings.Contains(lower, "i feel stressed") || strings.Contains(lower, "i'm stressed") {
