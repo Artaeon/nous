@@ -1274,6 +1274,12 @@ func whatShouldIDoNow(store *assistant.Store, now time.Time) string {
 	today := store.Today(now)
 	for _, task := range today {
 		if task.DueAt.After(now) && task.DueAt.Before(now.Add(time.Hour)) {
+			if looksLikeMeetingTask(task.Title) && meetingAnxietyNote(store) {
+				if de {
+					return fmt.Sprintf("Dein nächster wichtiger Punkt ist \"%s\" in %s. Nimm dir jetzt 10 ruhige Minuten für Notizen, den wichtigsten Punkt und eine erste Frage.", task.Title, friendlyDuration(task.DueAt.Sub(now), true))
+				}
+				return fmt.Sprintf("Your next important thing is %q in %s. Take 10 calm minutes now for notes, the main point you want to land, and one opening question.", task.Title, friendlyDuration(task.DueAt.Sub(now), false))
+			}
 			until := friendlyDuration(task.DueAt.Sub(now), de)
 			if de {
 				return fmt.Sprintf("In %s steht \"%s\" um %s an.", until, task.Title, task.DueAt.Format("15:04"))
@@ -1320,6 +1326,62 @@ func nextScheduledTask(store *assistant.Store, now time.Time) (assistant.Task, b
 		return assistant.Task{}, false
 	}
 	return pending[0], true
+}
+
+func looksLikeMeetingTask(title string) bool {
+	lower := strings.ToLower(strings.TrimSpace(title))
+	keywords := []string{"meeting", "1:1", "1on1", "standup", "review", "sync", "call", "interview", "retro", "planung", "besprechung", "termin"}
+	for _, keyword := range keywords {
+		if strings.Contains(lower, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func nextMeetingTask(store *assistant.Store, now time.Time) (assistant.Task, bool) {
+	pending := store.PendingTasks()
+	for _, task := range pending {
+		if task.DueAt.Before(now) {
+			continue
+		}
+		if looksLikeMeetingTask(task.Title) {
+			return task, true
+		}
+	}
+	return assistant.Task{}, false
+}
+
+func meetingAnxietyNote(store *assistant.Store) bool {
+	for _, note := range profileNotes(store) {
+		lower := strings.ToLower(note)
+		if (strings.Contains(lower, "meeting") || strings.Contains(lower, "meetings") || strings.Contains(lower, "besprech") || strings.Contains(lower, "termin")) &&
+			(strings.Contains(lower, "anxious") || strings.Contains(lower, "nervous") || strings.Contains(lower, "stress") || strings.Contains(lower, "nervös") || strings.Contains(lower, "nervoes") || strings.Contains(lower, "angst")) {
+			return true
+		}
+	}
+	return false
+}
+
+func meetingPrepReply(store *assistant.Store, now time.Time, de bool) string {
+	task, ok := nextMeetingTask(store, now)
+	if !ok {
+		if de {
+			return "Lass uns die Vorbereitung ruhig halten: nimm dir 10 Minuten für Notizen, den wichtigsten Punkt und eine erste Frage."
+		}
+		return "Let's keep the preparation calm: take 10 minutes for notes, the main point you want to land, and one first question."
+	}
+	until := friendlyDuration(task.DueAt.Sub(now), de)
+	if de {
+		if meetingAnxietyNote(store) {
+			return fmt.Sprintf("Für \"%s\" in %s würde ich es bewusst klein halten: notiere jetzt den wichtigsten Punkt, zwei Stichworte und eine erste Frage. So gehst du ruhiger hinein.", task.Title, until)
+		}
+		return fmt.Sprintf("Für \"%s\" in %s: notiere jetzt den wichtigsten Punkt, zwei Stichworte und eine erste Frage. Dann bist du mit einem klaren Einstieg vorbereitet.", task.Title, until)
+	}
+	if meetingAnxietyNote(store) {
+		return fmt.Sprintf("For %q in %s, I would keep it deliberately small: write the main point you want to land, two bullet notes, and one opening question. That should help you go in a bit calmer.", task.Title, until)
+	}
+	return fmt.Sprintf("For %q in %s: write the main point you want to land, two bullet notes, and one opening question. That gives you a clear starting point.", task.Title, until)
 }
 
 func isPlainGreeting(input string) bool {
@@ -1727,6 +1789,12 @@ func assistantPlanReply(store *assistant.Store, now time.Time, de bool) string {
 
 func assistantFocusReply(store *assistant.Store, now time.Time, de bool) string {
 	focus := preferenceValue(store, "focus")
+	if task, ok := nextMeetingTask(store, now); ok && task.DueAt.Before(now.Add(4*time.Hour)) && meetingAnxietyNote(store) {
+		if de {
+			return fmt.Sprintf("Lass es uns für \"%s\" leicht machen: schreibe jetzt nur den wichtigsten Punkt, zwei Stichworte und eine erste Frage auf. Mehr musst du gerade nicht vorbereiten.", task.Title)
+		}
+		return fmt.Sprintf("Let's make %q feel lighter: write down the main point you want to land, two short notes, and one opening question. You do not need to prepare more than that right now.", task.Title)
+	}
 	overdue := store.Overdue(now)
 	if len(overdue) > 0 {
 		if de {
@@ -2049,6 +2117,9 @@ func answerAssistantQuery(store *assistant.Store, input string, recent string, n
 
 	if strings.Contains(lower, "help me plan my day") || strings.Contains(lower, "plan my day") || strings.Contains(lower, "organize my day") || strings.Contains(lower, "prioritize my day") {
 		return assistantPlanReply(store, now, de), true
+	}
+	if strings.Contains(lower, "prepare for my meeting") || strings.Contains(lower, "prepare for the meeting") || strings.Contains(lower, "help me prepare for my meeting") || strings.Contains(lower, "wie bereite ich mich auf mein meeting vor") || strings.Contains(lower, "hilf mir bei meinem meeting") || strings.Contains(lower, "bereite mich auf mein meeting vor") {
+		return meetingPrepReply(store, now, de), true
 	}
 
 	if strings.Contains(lower, "procrastinating") {

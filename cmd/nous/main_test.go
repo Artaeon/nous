@@ -153,6 +153,20 @@ func TestWhatShouldIDoNowRespectsGermanPreference(t *testing.T) {
 	}
 }
 
+func TestWhatShouldIDoNowSuggestsMeetingPrepFromPersonalNotes(t *testing.T) {
+	store := assistant.NewStore(t.TempDir())
+	now := time.Date(2026, 3, 12, 10, 0, 0, 0, time.UTC)
+	_ = store.SetPreference("profile.meetings", "you get anxious before meetings")
+	_, _ = store.AddTask("Team meeting", now.Add(30*time.Minute), "")
+
+	out := whatShouldIDoNow(store, now)
+	for _, check := range []string{"Team meeting", "10 calm minutes", "opening question"} {
+		if !strings.Contains(out, check) {
+			t.Fatalf("whatShouldIDoNow() should contain %q, got %q", check, out)
+		}
+	}
+}
+
 func TestParseReminderInputSupportsRelativeDailyAndCalendarFormats(t *testing.T) {
 	now := time.Date(2026, 3, 11, 8, 0, 0, 0, time.UTC)
 
@@ -272,6 +286,33 @@ func TestAnswerAssistantQuerySupportsCompanionPlanningAndFocus(t *testing.T) {
 	for _, check := range []string{"Finish report", "Deep work before meetings"} {
 		if !strings.Contains(focusAnswer, check) {
 			t.Fatalf("focus answer should contain %q, got %q", check, focusAnswer)
+		}
+	}
+}
+
+func TestAnswerAssistantQuerySupportsMeetingPreparation(t *testing.T) {
+	store := assistant.NewStore(t.TempDir())
+	now := time.Date(2026, 3, 12, 10, 0, 0, 0, time.UTC)
+	_ = store.SetPreference("profile.meetings", "you get anxious before meetings")
+	_, _ = store.AddTask("Project meeting", now.Add(90*time.Minute), "")
+
+	prep, ok := answerAssistantQuery(store, "help me prepare for my meeting", "", now)
+	if !ok {
+		t.Fatal("expected meeting-prep answer")
+	}
+	for _, check := range []string{"Project meeting", "two bullet notes", "opening question"} {
+		if !strings.Contains(prep, check) {
+			t.Fatalf("meeting prep answer should contain %q, got %q", check, prep)
+		}
+	}
+
+	focus, ok := answerAssistantQuery(store, "I feel overwhelmed", "", now)
+	if !ok {
+		t.Fatal("expected focus answer")
+	}
+	for _, check := range []string{"Project meeting", "opening question"} {
+		if !strings.Contains(focus, check) {
+			t.Fatalf("meeting-aware focus answer should contain %q, got %q", check, focus)
 		}
 	}
 }
