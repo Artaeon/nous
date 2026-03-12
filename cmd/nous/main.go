@@ -426,7 +426,7 @@ func main() {
 		go collector.Collect(sysPrompt, input, answer, nil, quality)
 
 		// Check if auto-tuning should trigger (non-blocking)
-		go autoTuner.Check()
+		go autoTuner.CheckQuiet()
 
 		// Auto-save session after each exchange
 		currentSession.Messages = reasoner.Conv.Messages()
@@ -1551,6 +1551,26 @@ func assistantFocusReply(store *assistant.Store, now time.Time, de bool) string 
 	return "Nothing urgent is open right now. Pick one task, set a short focus block, and start small."
 }
 
+func assistantSmallStepReply(store *assistant.Store, now time.Time, de bool) string {
+	overdue := store.Overdue(now)
+	if len(overdue) > 0 {
+		if de {
+			return fmt.Sprintf("Gut. Dein nächster kleiner Schritt ist ganz konkret: öffne \"%s\" jetzt und arbeite nur 10 Minuten daran.", overdue[0].Title)
+		}
+		return fmt.Sprintf("Good. Your next small step is concrete: open %q now and work on it for just 10 minutes.", overdue[0].Title)
+	}
+	if task, ok := nextScheduledTask(store, now); ok {
+		if de {
+			return fmt.Sprintf("Gut. Der nächste kleine Schritt ist: bereite \"%s\" jetzt vor, damit du bis %s einen klaren Einstieg hast.", task.Title, task.DueAt.Format("15:04"))
+		}
+		return fmt.Sprintf("Good. The next small step is: set up %q now so you have a clean starting point before %s.", task.Title, task.DueAt.Format("15:04"))
+	}
+	if de {
+		return "Gut. Der nächste kleine Schritt ist: wähle eine Sache und gib ihr jetzt 10 ruhige Minuten."
+	}
+	return "Good. The next small step is: pick one thing and give it 10 calm minutes right now."
+}
+
 func buildAssistantContext(store *assistant.Store, input string, recent string, now time.Time) string {
 	if store == nil || !shouldInjectAssistantContext(input) {
 		return ""
@@ -1712,9 +1732,9 @@ func answerAssistantQuery(store *assistant.Store, input string, recent string, n
 		}
 		if lower == "yes" || lower == "yeah" || lower == "ok" || lower == "okay" {
 			if de {
-				return "Gut — wir bleiben bei diesem Faden. Ich kann jetzt den nächsten kleinen Schritt daraus machen.", true
+				return assistantSmallStepReply(store, now, de), true
 			}
-			return "Alright — we'll stay with this thread. I can turn it into the next small step now.", true
+			return assistantSmallStepReply(store, now, de), true
 		}
 	}
 

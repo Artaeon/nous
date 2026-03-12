@@ -90,6 +90,17 @@ func (a *AutoTuner) WithCreator(c ModelCreator) *AutoTuner {
 // Returns true if tuning was triggered.
 // Call this after each interaction (from main.go's REPL loop).
 func (a *AutoTuner) Check() bool {
+	return a.check(false)
+}
+
+// CheckQuiet evaluates whether auto-tuning should trigger, but suppresses
+// routine status chatter. This is intended for background checks during normal
+// conversations so the assistant UI stays clean.
+func (a *AutoTuner) CheckQuiet() bool {
+	return a.check(true)
+}
+
+func (a *AutoTuner) check(quiet bool) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -99,12 +110,16 @@ func (a *AutoTuner) Check() bool {
 
 	if a.creator == nil {
 		a.lastAttemptAt = time.Now()
-		a.onTune("auto-tune skipped: no Ollama client configured")
+		if !quiet {
+			a.onTune("auto-tune skipped: no Ollama client configured")
+		}
 		return false
 	}
 
 	a.lastAttemptAt = time.Now()
-	a.onTune("Starting auto fine-tune...")
+	if !quiet {
+		a.onTune("Starting auto fine-tune...")
+	}
 
 	// Build a system prompt that embeds learned patterns from training data
 	systemPrompt := a.buildEnhancedSystemPrompt()
@@ -117,7 +132,9 @@ func (a *AutoTuner) Check() bool {
 
 	// Create the model via Ollama API
 	if err := a.creator.CreateModel(a.tunedName, modelfile); err != nil {
-		a.onTune(fmt.Sprintf("auto-tune failed: %v", err))
+		if !quiet {
+			a.onTune(fmt.Sprintf("auto-tune failed: %v", err))
+		}
 		return false
 	}
 

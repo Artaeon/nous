@@ -298,3 +298,20 @@ func TestWithCallbackSetter(t *testing.T) {
 		t.Error("callback should receive completion message")
 	}
 }
+
+func TestCheckQuietSuppressesFailureNoise(t *testing.T) {
+	c := newTestCollector(60, 0.9)
+	mock := &mockCreator{err: errMock}
+
+	var messages []string
+	at := NewAutoTuner(c, "qwen2.5:1.5b").
+		WithCreator(mock).
+		WithCallback(func(msg string) { messages = append(messages, msg) })
+
+	if at.CheckQuiet() {
+		t.Fatal("CheckQuiet should still return false when creator errors")
+	}
+	if len(messages) != 0 {
+		t.Fatalf("CheckQuiet should suppress failure chatter, got %v", messages)
+	}
+}
