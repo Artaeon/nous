@@ -15,10 +15,26 @@ import (
 
 func TestRenderHelpIncludesKeyCommands(t *testing.T) {
 	help := renderHelp()
-	checks := []string{"/dashboard", "/today", "/remind", "/routine", "/status", "/plan <goal>", "/tools", "/quit"}
+	checks := []string{"/compass", "/dashboard", "/trace [n]", "/today", "/now", "/focus", "/remind", "/routine", "/status", "/plan <goal>", "/tools", "/quit"}
 	for _, check := range checks {
 		if !strings.Contains(help, check) {
 			t.Fatalf("renderHelp() should contain %q", check)
+		}
+	}
+}
+
+func TestRenderCompassIncludesTriageSignals(t *testing.T) {
+	store := assistant.NewStore(t.TempDir())
+	now := time.Date(2026, 3, 12, 10, 0, 0, 0, time.UTC)
+	_, _ = store.AddTask("Design review", now.Add(30*time.Minute), "")
+	_, _ = store.AddTask("Pay rent", now.Add(-30*time.Minute), "")
+	_, _ = store.TriggerDue(now)
+
+	out := renderCompass(store, now)
+	checks := []string{"Compass", "Design review", "Pay rent", "Risks:"}
+	for _, check := range checks {
+		if !strings.Contains(out, check) {
+			t.Fatalf("renderCompass() should contain %q, got %q", check, out)
 		}
 	}
 }
@@ -59,6 +75,34 @@ func TestRenderDashboardIncludesRuntimeMemoryAndTraining(t *testing.T) {
 	for _, check := range checks {
 		if !strings.Contains(dashboard, check) {
 			t.Fatalf("renderDashboard() should contain %q", check)
+		}
+	}
+}
+
+func TestRenderTraceIncludesRecentActions(t *testing.T) {
+	board := blackboard.New()
+	board.RecordAction(blackboard.ActionRecord{
+		StepID:    "s1",
+		Tool:      "read",
+		Input:     "cmd/nous/main.go",
+		Output:    "package main\nfunc main() {}",
+		Success:   true,
+		Timestamp: time.Date(2026, 3, 12, 10, 0, 0, 0, time.UTC),
+	})
+	board.RecordAction(blackboard.ActionRecord{
+		StepID:    "s2",
+		Tool:      "grep",
+		Input:     "pattern=func main",
+		Output:    "cmd/nous/main.go:20:func main() {",
+		Success:   true,
+		Timestamp: time.Date(2026, 3, 12, 10, 0, 5, 0, time.UTC),
+	})
+
+	out := renderTrace(board, 5)
+	checks := []string{"Operator trace", "grep", "read", "cmd/nous/main.go", "func main()"}
+	for _, check := range checks {
+		if !strings.Contains(out, check) {
+			t.Fatalf("renderTrace() should contain %q, got %q", check, out)
 		}
 	}
 }
@@ -164,6 +208,15 @@ func TestWhatShouldIDoNowSuggestsMeetingPrepFromPersonalNotes(t *testing.T) {
 		if !strings.Contains(out, check) {
 			t.Fatalf("whatShouldIDoNow() should contain %q, got %q", check, out)
 		}
+	}
+}
+
+func TestLooksLikeMeetingTaskSkipsAppointments(t *testing.T) {
+	if looksLikeMeetingTask("Call dentist") {
+		t.Fatal("Call dentist should not be classified as a meeting task")
+	}
+	if !looksLikeMeetingTask("Team meeting") {
+		t.Fatal("Team meeting should be classified as a meeting task")
 	}
 }
 

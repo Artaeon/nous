@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"sort"
 	"strings"
 	"syscall"
@@ -38,6 +39,8 @@ func main() {
 	trustMode := flag.Bool("trust", false, "Skip confirmation prompts for file operations")
 	sessionID := flag.String("resume", "", "Resume a previous session by ID")
 	serveMode := flag.Bool("serve", false, "Run as HTTP server instead of REPL")
+	listenHost := flag.String("listen", "127.0.0.1", "HTTP listen host (with --serve)")
+	publicMode := flag.Bool("public", false, "Bind the HTTP server to 0.0.0.0 (with --serve)")
 	servePort := flag.String("port", "3333", "HTTP server port (with --serve)")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 	flag.Parse()
@@ -351,8 +354,15 @@ func main() {
 
 	// --- Server Mode ---
 	if *serveMode {
-		addr := ":" + *servePort
-		fmt.Printf("  serving on http://0.0.0.0%s\n\n", addr)
+		serveHost := strings.TrimSpace(*listenHost)
+		if serveHost == "" {
+			serveHost = "127.0.0.1"
+		}
+		if *publicMode {
+			serveHost = "0.0.0.0"
+		}
+		addr := serveHost + ":" + *servePort
+		fmt.Printf("  serving on http://%s\n\n", addr)
 		srv := server.New(addr, board, perceiver, assistantStore)
 		if err := srv.Start(version, *model, len(toolList)); err != nil {
 			fmt.Fprintf(os.Stderr, "server error: %v\n", err)
@@ -363,8 +373,10 @@ func main() {
 
 	// --- REPL Mode ---
 	fmt.Print(cognitive.Panel("Quick start", []string{
+		cognitive.Styled(cognitive.ColorCyan, "/compass") + " triage view — do now, focus, next anchor, risks",
 		cognitive.Styled(cognitive.ColorCyan, "/dashboard") + " overview of the local agent",
 		cognitive.Styled(cognitive.ColorCyan, "/briefing") + " morning briefing — what matters today",
+		cognitive.Styled(cognitive.ColorCyan, "/now") + " one-line answer for the next best action",
 		cognitive.Styled(cognitive.ColorCyan, "/today") + " review reminders, tasks, and upcoming actions",
 		cognitive.Styled(cognitive.ColorCyan, "/help") + " browse commands and workflows",
 		cognitive.Styled(cognitive.ColorCyan, "/plan <goal>") + " delegate a longer task",
@@ -451,8 +463,29 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 	case "/help", "/h":
 		fmt.Print(renderHelp())
 
+	case "/compass":
+		fmt.Print(renderCompass(assistantStore, time.Now()))
+
 	case "/dashboard":
 		fmt.Print(renderDashboard(board, wm, ltm, projMem, undoStack, current, episodic, collector, autoTuner, assistantStore))
+
+	case "/trace":
+		limit := 8
+		if len(parts) > 1 {
+			parsed, err := strconv.Atoi(parts[1])
+			if err != nil || parsed <= 0 {
+				fmt.Println("  usage: /trace [count]")
+				break
+			}
+			if parsed > 25 {
+				parsed = 25
+			}
+			limit = parsed
+		}
+		fmt.Print(renderTrace(board, limit))
+
+	case "/now":
+		fmt.Println("  " + whatShouldIDoNow(assistantStore, time.Now()))
 
 	case "/today":
 		fmt.Print(renderToday(assistantStore, time.Now()))
@@ -464,6 +497,15 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 
 	case "/review":
 		fmt.Print(renderReview(assistantStore, time.Now()))
+
+	case "/checkin":
+		fmt.Println("  " + assistantCheckIn(assistantStore, time.Now(), prefersGerman(assistantStore)))
+
+	case "/focus":
+		fmt.Println("  " + assistantFocusReply(assistantStore, time.Now(), prefersGerman(assistantStore)))
+
+	case "/prep":
+		fmt.Println("  " + meetingPrepReply(assistantStore, time.Now(), prefersGerman(assistantStore)))
 
 	case "/tasks":
 		fmt.Print(renderTasks(assistantStore, time.Now()))
@@ -532,6 +574,22 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 			break
 		}
 		fmt.Printf("  preference saved: %s = %s\n", key, value)
+
+	case "/capture":
+		if len(parts) < 2 {
+			fmt.Println("  usage: /capture <personal note>")
+			break
+		}
+		key, value, ok := rememberedProfileNote("remember that " + strings.Join(parts[1:], " "))
+		if !ok {
+			fmt.Println("  could not capture note")
+			break
+		}
+		if err := assistantStore.SetPreference(key, value); err != nil {
+			fmt.Printf("  could not capture note: %v\n", err)
+			break
+		}
+		fmt.Printf("  captured: %s\n", value)
 
 	case "/status":
 		fmt.Print(cognitive.Section("System status"))
@@ -918,7 +976,11 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 func renderHelp() string {
 	var b strings.Builder
 	b.WriteString(cognitive.Panel("Core workflows", []string{
+		cognitive.Styled(cognitive.ColorCyan, "/compass") + " triage panel for the next action, focus cue, and risk signals",
 		cognitive.Styled(cognitive.ColorCyan, "/dashboard") + " snapshot of memory, sessions, training, and uptime signals",
+		cognitive.Styled(cognitive.ColorCyan, "/trace [n]") + " inspect the latest tool actions and outcomes",
+		cognitive.Styled(cognitive.ColorCyan, "/now") + " deterministic answer for what to do next",
+		cognitive.Styled(cognitive.ColorCyan, "/focus") + " calm, personalized focus guidance when the day feels noisy",
 		cognitive.Styled(cognitive.ColorCyan, "/today") + " open your assistant inbox with due reminders and upcoming tasks",
 		cognitive.Styled(cognitive.ColorCyan, "/status") + " low-level runtime counters and current session state",
 		cognitive.Styled(cognitive.ColorCyan, "/plan <goal>") + " hand a longer task to the planner/executor pipeline",
@@ -926,10 +988,12 @@ func renderHelp() string {
 	}))
 	b.WriteString(cognitive.Panel("Assistant operations", []string{
 		cognitive.Styled(cognitive.ColorCyan, "/briefing") + " morning briefing — overdue, today's schedule, routines",
+		cognitive.Styled(cognitive.ColorCyan, "/checkin") + " quick pulse: done today, overdue, and what comes next",
+		cognitive.Styled(cognitive.ColorCyan, "/prep") + " prepare for your next meeting or time-boxed task",
 		cognitive.Styled(cognitive.ColorCyan, "/review") + " evening review — completed, still pending, overdue",
 		"/remind <when> <task>, /tasks, /done <task-id>",
 		"/routine <daily|weekdays> <HH:MM> <task>, /routines",
-		"/pref <key> <value>, /prefs",
+		"/pref <key> <value>, /prefs, /capture <note>",
 		"Examples: /remind in 2h stretch · /remind tomorrow 09:00 dentist",
 	}))
 	b.WriteString(cognitive.Panel("Memory and recall", []string{
@@ -980,6 +1044,76 @@ func renderDashboard(board *blackboard.Blackboard, wm *memory.WorkingMemory, ltm
 	})
 
 	return left + right + assistantPanel + train + session
+}
+
+func renderTrace(board *blackboard.Blackboard, limit int) string {
+	if limit <= 0 {
+		limit = 8
+	}
+	actions := board.RecentActions(limit)
+	if len(actions) == 0 {
+		return cognitive.Panel("Operator trace", []string{"No actions recorded yet."})
+	}
+
+	lines := make([]string, 0, len(actions))
+	for i := len(actions) - 1; i >= 0; i-- {
+		action := actions[i]
+		status := "OK"
+		if !action.Success {
+			status = "FAIL"
+		}
+		input := strings.TrimSpace(action.Input)
+		if input == "" {
+			input = "(no input)"
+		}
+		if len(input) > 36 {
+			input = input[:36] + "..."
+		}
+		output := strings.TrimSpace(action.Output)
+		if idx := strings.IndexByte(output, '\n'); idx >= 0 {
+			output = output[:idx]
+		}
+		if output == "" {
+			output = "(no output)"
+		}
+		if len(output) > 48 {
+			output = output[:48] + "..."
+		}
+		lines = append(lines, fmt.Sprintf("%s  %s  %s  %s  -> %s", action.Timestamp.Format("15:04:05"), status, action.Tool, input, output))
+	}
+
+	return cognitive.Panel("Operator trace", lines)
+}
+
+func renderCompass(store *assistant.Store, now time.Time) string {
+	de := prefersGerman(store)
+	title := "Compass"
+	if de {
+		title = "Kompass"
+	}
+
+	lines := []string{
+		whatShouldIDoNow(store, now),
+		assistantFocusReply(store, now, de),
+	}
+
+	if task, ok := nextScheduledTask(store, now); ok {
+		if de {
+			lines = append(lines, fmt.Sprintf("Nächster Anker: %s um %s", task.Title, task.DueAt.Format("15:04")))
+		} else {
+			lines = append(lines, fmt.Sprintf("Next anchor: %s at %s", task.Title, task.DueAt.Format("15:04")))
+		}
+	}
+
+	overdue := len(store.Overdue(now))
+	unread := len(store.UnreadNotifications())
+	if de {
+		lines = append(lines, fmt.Sprintf("Risiken: %d überfällig · %d ungelesen", overdue, unread))
+	} else {
+		lines = append(lines, fmt.Sprintf("Risks: %d overdue · %d unread", overdue, unread))
+	}
+
+	return cognitive.Panel(title, lines)
 }
 
 func renderToday(store *assistant.Store, now time.Time) string {
@@ -1330,6 +1464,11 @@ func nextScheduledTask(store *assistant.Store, now time.Time) (assistant.Task, b
 
 func looksLikeMeetingTask(title string) bool {
 	lower := strings.ToLower(strings.TrimSpace(title))
+	for _, nonMeeting := range []string{"dentist", "doctor", "arzt", "therapy", "therapist", "appointment", "termin beim", "zahnarzt"} {
+		if strings.Contains(lower, nonMeeting) {
+			return false
+		}
+	}
 	keywords := []string{"meeting", "1:1", "1on1", "standup", "review", "sync", "call", "interview", "retro", "planung", "besprechung", "termin"}
 	for _, keyword := range keywords {
 		if strings.Contains(lower, keyword) {
