@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -211,9 +212,9 @@ func TestRelevanceDecayOverTime(t *testing.T) {
 func TestSetEmbedFunc(t *testing.T) {
 	wm := NewWorkingMemory(10)
 
-	called := false
+	var called atomic.Bool
 	wm.SetEmbedFunc(func(text string) ([]float64, error) {
-		called = true
+		called.Store(true)
 		return []float64{1.0, 0.0, 0.0}, nil
 	})
 
@@ -222,7 +223,7 @@ func TestSetEmbedFunc(t *testing.T) {
 	// Give async goroutine time to run
 	time.Sleep(50 * time.Millisecond)
 
-	if !called {
+	if !called.Load() {
 		t.Error("expected embed function to be called on Store")
 	}
 
