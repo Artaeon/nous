@@ -103,6 +103,9 @@ docker compose up -d
 ```bash
 # Run as HTTP API with web UI
 ./nous --serve --port 3333
+
+# Expose on your LAN only when you mean to
+./nous --serve --public --port 3333
 ```
 
 ---
@@ -146,6 +149,8 @@ $ ./nous --allow-shell
 | `--allow-shell` | Enable shell command execution | `false` |
 | `--trust` | Skip confirmation prompts | `false` |
 | `--serve` | Run as HTTP server | `false` |
+| `--listen` | HTTP listen host (with `--serve`) | `127.0.0.1` |
+| `--public` | Bind server to `0.0.0.0` | `false` |
 | `--port` | HTTP server port | `3333` |
 | `--resume` | Resume a previous session by ID | |
 | `--memory` | Path for persistent memory | `~/.nous` |
@@ -155,6 +160,11 @@ $ ./nous --allow-shell
 | Command | Description |
 |---------|-------------|
 | `/help` | Show all commands |
+| `/compass` | Compact triage panel for next action, focus, and risks |
+| `/now` | Deterministic answer for what to do next |
+| `/focus` | Personalized focus guidance |
+| `/checkin` | Quick pulse on your day |
+| `/prep` | Prepare for the next meeting or time-boxed task |
 | `/today` | Show unread reminders and upcoming assistant tasks |
 | `/tasks` | List pending assistant tasks |
 | `/routines` | List recurring assistant routines |
@@ -162,6 +172,7 @@ $ ./nous --allow-shell
 | `/routine <daily\|weekdays> <HH:MM> <task>` | Create a recurring assistant routine |
 | `/done <task-id>` | Mark a task as completed |
 | `/pref <k> <v>` | Store a personal preference |
+| `/capture <note>` | Save a personal note for future assistant context |
 | `/prefs` | List saved preferences |
 | `/status` | Cognitive system status |
 | `/memory` | Working memory contents |
