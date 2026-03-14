@@ -21,6 +21,9 @@ type Server struct {
 	board     *blackboard.Blackboard
 	perceiver *cognitive.Perceiver
 	assistant *assistant.Store
+	fastPath  *cognitive.FastPathResponder
+	conv      *cognitive.Conversation
+	classifier *cognitive.FastPathClassifier
 	jobs      *JobManager
 	addr      string
 	server    *http.Server
@@ -99,12 +102,20 @@ type CreateRoutineRequest struct {
 // New creates a Nous HTTP server.
 func New(addr string, board *blackboard.Blackboard, perceiver *cognitive.Perceiver, assistantStore *assistant.Store) *Server {
 	return &Server{
-		board:     board,
-		perceiver: perceiver,
-		assistant: assistantStore,
-		jobs:      NewJobManager(),
-		addr:      addr,
+		board:      board,
+		perceiver:  perceiver,
+		assistant:  assistantStore,
+		classifier: &cognitive.FastPathClassifier{},
+		jobs:       NewJobManager(),
+		addr:       addr,
 	}
+}
+
+// SetFastPath configures the fast/medium path responder and conversation
+// so simple queries can skip the full cognitive pipeline.
+func (s *Server) SetFastPath(responder *cognitive.FastPathResponder, conv *cognitive.Conversation) {
+	s.fastPath = responder
+	s.conv = conv
 }
 
 // Start begins listening for HTTP requests.
@@ -155,11 +166,24 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 		chatMu.Lock()
 		defer chatMu.Unlock()
 
+		start := time.Now()
+
+		// Fast/medium path: skip perceiver entirely for simple queries.
+		if s.fastPath != nil && s.conv != nil {
+			path := s.classifier.ClassifyQuery(message)
+			if path == cognitive.PathFast || path == cognitive.PathMedium {
+				answer, err := s.fastPath.RespondWithPath(s.conv, message, path)
+				if err == nil {
+					return answer, time.Since(start).Milliseconds()
+				}
+				// Fall through to full pipeline on error.
+			}
+		}
+
 		reqCounter++
 		answerKey := fmt.Sprintf("last_answer_%d", reqCounter)
 		s.board.Set("answer_key", answerKey)
 
-		start := time.Now()
 		s.perceiver.Submit(message)
 		answer := waitForAnswer(s.board, 300*time.Second, answerKey)
 		return answer, time.Since(start).Milliseconds()

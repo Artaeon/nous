@@ -364,6 +364,11 @@ func main() {
 		addr := serveHost + ":" + *servePort
 		fmt.Printf("  serving on http://%s\n\n", addr)
 		srv := server.New(addr, board, perceiver, assistantStore)
+		srv.SetFastPath(&cognitive.FastPathResponder{
+			LLM:         llm,
+			WorkingMem:  wm,
+			LongTermMem: ltm,
+		}, reasoner.Conv)
 		if err := srv.Start(version, *model, len(toolList)); err != nil {
 			fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 			os.Exit(1)

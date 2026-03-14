@@ -96,3 +96,98 @@ func TestFastPathClassifier_ShortAmbiguous(t *testing.T) {
 		}
 	}
 }
+
+func TestClassifyQuery_Fast(t *testing.T) {
+	c := &FastPathClassifier{}
+
+	fast := []string{
+		"hi",
+		"hello!",
+		"hey",
+		"good morning",
+		"thanks",
+		"thank you",
+		"bye",
+		"cheers",
+		"yes",
+		"no",
+		"nope",
+		"ok",
+		"cool",
+		"great",
+		"got it",
+		"my name is Raphael",
+		"I'm a developer",
+		"I work on distributed systems",
+		"call me Raph",
+		"who are you?",
+		"what's your name?",
+		"how are you?",
+		"tell me a joke",
+		"what is 2 + 2?",
+		"sure thing",
+	}
+
+	for _, q := range fast {
+		if path := c.ClassifyQuery(q); path != PathFast {
+			t.Errorf("expected fast for %q, got %q", q, path)
+		}
+	}
+}
+
+func TestClassifyQuery_Medium(t *testing.T) {
+	c := &FastPathClassifier{}
+
+	medium := []string{
+		"explain how garbage collection works in Go",
+		"what is a neural network and how does it learn",
+		"tell me more about that topic please",
+		"what do you think about functional programming languages",
+		"which is better, Python or Go for web development",
+		"can you help me understand monads in Haskell",
+		"summarize the main ideas of machine learning algorithms",
+		"why is Rust considered memory safe compared to C",
+	}
+
+	for _, q := range medium {
+		if path := c.ClassifyQuery(q); path != PathMedium {
+			t.Errorf("expected medium for %q, got %q", q, path)
+		}
+	}
+}
+
+func TestClassifyQuery_Full(t *testing.T) {
+	c := &FastPathClassifier{}
+
+	full := []string{
+		"read file main.go",
+		"find all TODO comments in the codebase",
+		"run the tests",
+		"git status",
+		"create a new file called test.txt",
+		"refactor the server module",
+		"debug the login function",
+		"compile the project",
+		"fetch the API response from https://example.com",
+		"analyze the codebase for security issues",
+		"search the web for Go tutorials",
+		"list files in the current directory",
+		"deploy the application",
+	}
+
+	for _, q := range full {
+		if path := c.ClassifyQuery(q); path != PathFull {
+			t.Errorf("expected full for %q, got %q", q, path)
+		}
+	}
+}
+
+func TestClassifyQuery_Empty(t *testing.T) {
+	c := &FastPathClassifier{}
+	if path := c.ClassifyQuery(""); path != PathFull {
+		t.Errorf("empty query should be full, got %q", path)
+	}
+	if path := c.ClassifyQuery("   "); path != PathFull {
+		t.Errorf("whitespace query should be full, got %q", path)
+	}
+}

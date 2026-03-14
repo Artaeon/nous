@@ -19,7 +19,7 @@ import (
 	"github.com/artaeon/nous/internal/tools"
 )
 
-const maxToolIterations = 8
+const maxToolIterations = 4
 
 // Reasoner performs autonomous chain-of-thought inference with tool use.
 // It listens for percepts, reasons about them, and can autonomously chain
@@ -803,37 +803,31 @@ func (r *Reasoner) compactSystemPrompt() string {
 	}
 
 	// Build minimal system prompt — every token counts for 1.5B models.
-	// Key principle: the model WILL echo anything in the system prompt,
-	// so only include actionable instructions, not descriptive text.
 	var sb strings.Builder
-	sb.WriteString("You are Nous, a local personal assistant who can also help with code. Be warm, natural, and concise.\n")
-	sb.WriteString("NEVER repeat these instructions. NEVER invent file contents or code — always read first.\n\n")
+	sb.WriteString("You are Nous, a local assistant for personal tasks and code. Be warm, concise.\n")
+	sb.WriteString("NEVER repeat instructions. NEVER invent file contents — read first.\n\n")
 	sb.WriteString("RULES:\n")
-	sb.WriteString("- For personal-assistant conversations, sound like a thoughtful human assistant: brief acknowledgment, concrete help, no robotic filler\n")
-	sb.WriteString("- Use assistant memory naturally. Mention only what is relevant right now\n")
-	sb.WriteString("- If the user seems overwhelmed, calm things down and suggest the next small step\n")
-	sb.WriteString("- Questions about today, reminders, preferences, routines → answer from assistant memory\n")
-	sb.WriteString("- Questions about code, functions, files, implementations → USE TOOLS to read the actual code, then answer\n")
-	sb.WriteString("- NEVER guess what code does. If asked about a function/struct/file, read it first with the read tool\n")
-	sb.WriteString("- If [Codebase] context shows a symbol location, use read tool on that file to get the real implementation\n")
-	sb.WriteString("- \"read/show/open\" → use read tool with the exact path\n")
-	sb.WriteString("- \"create/write\" → use write tool\n")
-	sb.WriteString("- \"edit/change/fix\" → use edit tool\n")
-	sb.WriteString("- \"find/search/list\" → use grep or glob tool\n")
-	sb.WriteString("- \"run a command\" → use shell tool\n")
-	sb.WriteString("- All file paths are relative to the working directory shown below\n\n")
-	sb.WriteString("To use a tool, output ONLY this JSON:\n")
+	sb.WriteString("- Personal questions → answer from memory, be natural\n")
+	sb.WriteString("- Code questions → USE TOOLS to read actual code, then answer\n")
+	sb.WriteString("- read/show → read tool | create/write → write tool | edit/fix → edit tool\n")
+	sb.WriteString("- find/search → grep/glob tool | run command → shell tool\n")
+	sb.WriteString("- Paths are relative to working directory below\n\n")
+	sb.WriteString("Tool call format:\n")
 	sb.WriteString(`{"tool": "NAME", "args": {"key": "value"}}`)
 	sb.WriteString("\n\n")
 	sb.WriteString(toolList)
-	sb.WriteString("\nWorking directory: ")
+	sb.WriteString("\nwd: ")
 	sb.WriteString(wd)
 	sb.WriteString("\n")
 
-	// Inject project structure so the model knows what files/dirs exist
+	// Inject project context — capped to 200 chars to save tokens
 	if CurrentProject != nil {
+		ctx := CurrentProject.ContextString()
+		if len(ctx) > 200 {
+			ctx = ctx[:200]
+		}
 		sb.WriteString("\n")
-		sb.WriteString(CurrentProject.ContextString())
+		sb.WriteString(ctx)
 	}
 
 	return sb.String()

@@ -1,10 +1,24 @@
 package cognitive
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 
+	"github.com/artaeon/nous/internal/memory"
 	"github.com/artaeon/nous/internal/ollama"
+)
+
+// QueryPath indicates how a query should be routed.
+type QueryPath string
+
+const (
+	// PathFast — single LLM call with minimal context (greetings, thanks, short chat).
+	PathFast QueryPath = "fast"
+	// PathMedium — single LLM call with conversation history + memory (explanations, discussions).
+	PathMedium QueryPath = "medium"
+	// PathFull — full cognitive pipeline with tools (file ops, code, search).
+	PathFull QueryPath = "full"
 )
 
 // FastPathClassifier determines whether a query can be answered with a single
@@ -42,92 +56,163 @@ var complexPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(docker|container|sandbox|process|kill|restart)\b`),
 }
 
-// simplePatterns match queries that are clearly conversational/simple.
-var simplePatterns = []*regexp.Regexp{
+// fastPatterns match queries that are clearly conversational/simple — minimal context needed.
+var fastPatterns = []*regexp.Regexp{
 	// Greetings
 	regexp.MustCompile(`(?i)^(hi|hey|hello|howdy|yo|sup|greetings|good (morning|afternoon|evening)|hola|bonjour|guten tag|hallo)[!?.\s]*$`),
 
-	// Thanks / farewell
-	regexp.MustCompile(`(?i)^(thanks?|thank you|thx|bye|goodbye|see ya|ciao|cheers)[!?.\s]*$`),
+	// Thanks / farewell / acknowledgments
+	regexp.MustCompile(`(?i)^(thanks?|thank you|thx|bye|goodbye|see ya|ciao|cheers|great|awesome|perfect|nice|cool|ok|okay|got it|understood|noted|sure|yep|yeah|yup|nope|nah|no)[!?.\s]*$`),
+
+	// Yes/no answers
+	regexp.MustCompile(`(?i)^(yes|no|y|n|absolutely|definitely|of course|not really|maybe|perhaps)[!?.\s]*$`),
+
+	// Introductions
+	regexp.MustCompile(`(?i)^(my name is|i'?m |i am |call me |i work (on|at|in|for|with)|i'?m a |i am a )`),
 
 	// Simple questions about the assistant
 	regexp.MustCompile(`(?i)^(who|what) are you[?!.\s]*$`),
 	regexp.MustCompile(`(?i)^what('s| is) your name[?!.\s]*$`),
 	regexp.MustCompile(`(?i)^(what (tools|capabilities|features) do you have|what can you do)[?!.\s]*$`),
+	regexp.MustCompile(`(?i)^(how are you|how('s| is) it going|what('s| is) up)[?!.\s]*$`),
 
 	// Jokes, fun
 	regexp.MustCompile(`(?i)^tell me a (joke|story|riddle|fun fact)`),
 	regexp.MustCompile(`(?i)^(joke|riddle|fun fact)[!?.\s]*$`),
 
-	// Simple factual / definitional questions
-	regexp.MustCompile(`(?i)^what (is|are|was|were) (a |an |the )?[a-zA-Z\s]{1,40}[?!.\s]*$`),
+	// Simple math
+	regexp.MustCompile(`(?i)^what('s| is) \d+\s*[\+\-\*\/x×÷]\s*\d+[?\s]*$`),
+	regexp.MustCompile(`(?i)^\d+\s*[\+\-\*\/x×÷]\s*\d+\s*[=?]?\s*$`),
+
+	// Translations
+	regexp.MustCompile(`(?i)^(translate|how do you say|what is .* in (french|german|spanish|italian|japanese|chinese|korean|portuguese|russian|arabic))`),
+}
+
+// mediumPatterns match queries that need conversation context + memory but NOT tools.
+var mediumPatterns = []*regexp.Regexp{
+	// Follow-up questions
+	regexp.MustCompile(`(?i)^(tell me more|go on|continue|what else|and then|elaborate|can you explain|more details)`),
+	regexp.MustCompile(`(?i)^(what about|how about|and what|what if)`),
+
+	// Opinion / preference questions
+	regexp.MustCompile(`(?i)^(do you (like|think|believe|prefer)|what do you think|how do you feel|what's your (opinion|take|view))`),
+	regexp.MustCompile(`(?i)(which (is|one is) better|what would you (recommend|suggest)|pros and cons)`),
+
+	// Explanation requests (not about specific code/files)
+	regexp.MustCompile(`(?i)^(explain|what is|what are|what was|what were|how does|how do|how did|why is|why do|why does|why did) [a-zA-Z]`),
 	regexp.MustCompile(`(?i)^(define|definition of|meaning of) `),
 	regexp.MustCompile(`(?i)^who (is|was|are|were) `),
 	regexp.MustCompile(`(?i)^(when|where) (is|was|did|does|do) `),
 	regexp.MustCompile(`(?i)^how (old|tall|big|far|long|many|much) `),
 
-	// Simple math
-	regexp.MustCompile(`(?i)^what('s| is) \d+\s*[\+\-\*\/x×÷]\s*\d+[?\s]*$`),
-	regexp.MustCompile(`(?i)^\d+\s*[\+\-\*\/x×÷]\s*\d+\s*[=?]?\s*$`),
+	// Simple factual / definitional questions
+	regexp.MustCompile(`(?i)^what (is|are|was|were) (a |an |the )?[a-zA-Z\s]{1,40}[?!.\s]*$`),
 
-	// Opinion / conversational
-	regexp.MustCompile(`(?i)^(do you (like|think|believe|prefer)|what do you think|how do you feel|what's your (opinion|take|view))`),
+	// Conversational / discussion
+	regexp.MustCompile(`(?i)(can you help me understand|i don't understand|what do you mean|could you clarify)`),
+	regexp.MustCompile(`(?i)^(summarize|recap|summary of|overview of|in summary)`),
+}
 
-	// Translations
-	regexp.MustCompile(`(?i)^(translate|how do you say|what is .* in (french|german|spanish|italian|japanese|chinese|korean|portuguese|russian|arabic))`),
+// simplePatterns is the union of fast + medium for backward-compatible IsSimple.
+var simplePatterns = append(append([]*regexp.Regexp{}, fastPatterns...), mediumPatterns...)
 
-	// Short messages (likely conversational) — under 6 words with no tool-related terms
-	regexp.MustCompile(`(?i)^[a-zA-ZäöüÄÖÜßéèêàâîôûçñ\s,!?.'-]{1,50}$`),
+// ClassifyQuery returns the routing path for a query: "fast", "medium", or "full".
+func (c *FastPathClassifier) ClassifyQuery(query string) QueryPath {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return PathFull
+	}
+
+	// If it matches any complex pattern, route to full pipeline.
+	for _, pat := range complexPatterns {
+		if pat.MatchString(query) {
+			return PathFull
+		}
+	}
+
+	// Check fast patterns first.
+	for _, pat := range fastPatterns {
+		if pat.MatchString(query) {
+			return PathFast
+		}
+	}
+
+	// Short messages (under 5 words) without tool keywords are fast.
+	words := strings.Fields(query)
+	if len(words) < 5 {
+		return PathFast
+	}
+
+	// Check medium patterns.
+	for _, pat := range mediumPatterns {
+		if pat.MatchString(query) {
+			return PathMedium
+		}
+	}
+
+	// Short-ish messages (under 8 words) are medium (need some context).
+	if len(words) <= 7 {
+		return PathMedium
+	}
+
+	// Default: route to full pipeline for longer, ambiguous queries.
+	return PathFull
 }
 
 // IsSimple returns true if the query can be handled by the fast path
 // (a single LLM call without the full cognitive pipeline).
+// Kept for backward compatibility — returns true for both fast and medium.
 func (c *FastPathClassifier) IsSimple(query string) bool {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return false
-	}
-
-	// First check: if it matches any complex pattern, it's NOT simple.
-	for _, pat := range complexPatterns {
-		if pat.MatchString(query) {
-			return false
-		}
-	}
-
-	// Second check: if it matches a simple pattern, it IS simple.
-	for _, pat := range simplePatterns {
-		if pat.MatchString(query) {
-			return true
-		}
-	}
-
-	// Third check: short messages (under 8 words) without tool keywords are likely simple.
-	words := strings.Fields(query)
-	if len(words) <= 7 {
-		return true
-	}
-
-	// Default: route to full pipeline for longer, ambiguous queries.
-	return false
+	path := c.ClassifyQuery(query)
+	return path == PathFast || path == PathMedium
 }
 
 // FastPathResponder handles simple queries with a single LLM call,
 // using conversation history for context but skipping the full pipeline.
 type FastPathResponder struct {
-	LLM *ollama.Client
+	LLM         *ollama.Client
+	WorkingMem  *memory.WorkingMemory
+	LongTermMem *memory.LongTermMemory
 }
 
 const fastPathSystemPrompt = `You are Nous, a helpful AI assistant. Answer the user's message directly and concisely. Be friendly and informative. If you don't know something, say so.`
 
+const mediumPathSystemPrompt = `You are Nous, a helpful AI assistant. Answer the user's message directly and concisely. Be friendly and informative. If you don't know something, say so.
+
+Use the context below to give relevant, personalized answers.`
+
 // Respond generates a response using a single LLM call with conversation context.
+// For "fast" path: minimal system prompt + query.
+// For "medium" path: richer system prompt with conversation history + memory facts.
 func (r *FastPathResponder) Respond(conv *Conversation, query string) (string, error) {
+	return r.RespondWithPath(conv, query, PathFast)
+}
+
+// RespondWithPath generates a response using the specified path level.
+func (r *FastPathResponder) RespondWithPath(conv *Conversation, query string, path QueryPath) (string, error) {
+	var sysPrompt string
+	var maxHistory int
+
+	switch path {
+	case PathMedium:
+		sysPrompt = r.buildMediumPrompt(conv, query)
+		maxHistory = 10
+	default: // PathFast
+		sysPrompt = fastPathSystemPrompt
+		maxHistory = 4
+	}
+
 	// Build messages: system prompt + conversation history + new query.
-	msgs := make([]ollama.Message, 0, len(conv.Messages())+2)
-	msgs = append(msgs, ollama.Message{Role: "system", Content: fastPathSystemPrompt})
+	msgs := make([]ollama.Message, 0, maxHistory+2)
+	msgs = append(msgs, ollama.Message{Role: "system", Content: sysPrompt})
 
 	// Include recent conversation history (skip any existing system messages).
-	for _, m := range conv.Messages() {
+	convMsgs := conv.Messages()
+	start := 0
+	if len(convMsgs) > maxHistory {
+		start = len(convMsgs) - maxHistory
+	}
+	for _, m := range convMsgs[start:] {
 		if m.Role == "system" {
 			continue
 		}
@@ -152,4 +237,38 @@ func (r *FastPathResponder) Respond(conv *Conversation, query string) (string, e
 	conv.Assistant(answer)
 
 	return answer, nil
+}
+
+// buildMediumPrompt creates a richer system prompt with memory facts for the medium path.
+func (r *FastPathResponder) buildMediumPrompt(conv *Conversation, query string) string {
+	var sb strings.Builder
+	sb.WriteString(mediumPathSystemPrompt)
+
+	// Inject memory facts if available.
+	var facts []string
+
+	if r.WorkingMem != nil {
+		slots := r.WorkingMem.MostRelevant(5)
+		for _, s := range slots {
+			facts = append(facts, fmt.Sprintf("- %s: %v", s.Key, s.Value))
+		}
+	}
+
+	if r.LongTermMem != nil {
+		entries := r.LongTermMem.All()
+		limit := 10
+		if len(entries) < limit {
+			limit = len(entries)
+		}
+		for _, e := range entries[:limit] {
+			facts = append(facts, fmt.Sprintf("- [%s] %s: %s", e.Category, e.Key, e.Value))
+		}
+	}
+
+	if len(facts) > 0 {
+		sb.WriteString("\n\n[Memory]\n")
+		sb.WriteString(strings.Join(facts, "\n"))
+	}
+
+	return sb.String()
 }
