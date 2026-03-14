@@ -527,6 +527,9 @@ func toolShell(workDir string, args map[string]string) (string, error) {
 	if command == "" {
 		return "", fmt.Errorf("shell requires 'command' argument")
 	}
+	if err := validateSafeCommand(command); err != nil {
+		return "", err
+	}
 
 	cmd := exec.Command("sh", "-c", command)
 	cmd.Dir = workDir
@@ -674,6 +677,9 @@ func toolRun(workDir string, args map[string]string) (string, error) {
 	if command == "" {
 		return "", fmt.Errorf("run requires 'command' argument")
 	}
+	if err := validateSafeCommand(command); err != nil {
+		return "", err
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -792,6 +798,9 @@ func toolGit(workDir string, args map[string]string) (string, error) {
 	command := args["command"]
 	if command == "" {
 		return "", fmt.Errorf("git requires 'command' argument")
+	}
+	if err := validateSafeGitCommand(command); err != nil {
+		return "", err
 	}
 
 	// Shell-aware argument splitting that respects quotes
@@ -1024,6 +1033,58 @@ func splitShellArgs(s string) []string {
 		args = append(args, current.String())
 	}
 	return args
+}
+
+func allowUnsafeCommands() bool {
+	return strings.TrimSpace(os.Getenv("NOUS_ALLOW_UNSAFE")) == "1"
+}
+
+func validateSafeCommand(command string) error {
+	if allowUnsafeCommands() {
+		return nil
+	}
+	lower := strings.ToLower(strings.TrimSpace(command))
+	blocked := []string{
+		"rm -rf /",
+		"rm -rf --no-preserve-root /",
+		"mkfs",
+		"shutdown",
+		"reboot",
+		"poweroff",
+		"halt",
+		":(){",
+		"dd if=",
+		"> /dev/sd",
+		"chmod -r 777 /",
+		"chmod -r 777",
+		"chown -r /",
+	}
+	for _, fragment := range blocked {
+		if strings.Contains(lower, fragment) {
+			return fmt.Errorf("refusing risky command fragment %q (set NOUS_ALLOW_UNSAFE=1 to override)", fragment)
+		}
+	}
+	return nil
+}
+
+func validateSafeGitCommand(command string) error {
+	if allowUnsafeCommands() {
+		return nil
+	}
+	lower := strings.ToLower(strings.TrimSpace(command))
+	blocked := []string{
+		"reset --hard",
+		"clean -fd",
+		"clean -xdf",
+		"push --force",
+		"push -f",
+	}
+	for _, fragment := range blocked {
+		if strings.Contains(lower, fragment) {
+			return fmt.Errorf("refusing risky git command fragment %q (set NOUS_ALLOW_UNSAFE=1 to override)", fragment)
+		}
+	}
+	return nil
 }
 
 // --- clipboard tool ---

@@ -594,6 +594,21 @@ func TestToolShellEnabled(t *testing.T) {
 	}
 }
 
+func TestToolShellBlocksRiskyCommand(t *testing.T) {
+	dir := setupTempDir(t)
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, true)
+
+	tool, _ := r.Get("shell")
+	_, err := tool.Execute(map[string]string{"command": "rm -rf /tmp/demo && echo nope"})
+	if err == nil {
+		t.Fatal("expected risky shell command to be blocked")
+	}
+	if !strings.Contains(err.Error(), "refusing risky command") {
+		t.Fatalf("expected risky-command error, got %q", err.Error())
+	}
+}
+
 // --- RegisterBuiltins completeness ---
 
 func TestRegisterBuiltinsRegistersAllTools(t *testing.T) {
@@ -710,6 +725,21 @@ func TestToolRunDisabled(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "disabled") {
 		t.Errorf("expected 'disabled' in error, got %q", err.Error())
+	}
+}
+
+func TestToolRunBlocksRiskyCommand(t *testing.T) {
+	dir := setupTempDir(t)
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, true)
+
+	tool, _ := r.Get("run")
+	_, err := tool.Execute(map[string]string{"command": "shutdown now"})
+	if err == nil {
+		t.Fatal("expected risky run command to be blocked")
+	}
+	if !strings.Contains(err.Error(), "refusing risky command") {
+		t.Fatalf("expected risky-command error, got %q", err.Error())
 	}
 }
 
@@ -1064,6 +1094,23 @@ func TestToolGitMissingCommand(t *testing.T) {
 	_, err := tool.Execute(map[string]string{})
 	if err == nil {
 		t.Fatal("expected error for missing command")
+	}
+}
+
+func TestToolGitBlocksRiskyCommand(t *testing.T) {
+	dir := setupTempDir(t)
+	initGitRepo(t, dir)
+
+	r := NewRegistry()
+	RegisterBuiltins(r, dir, false)
+
+	tool, _ := r.Get("git")
+	_, err := tool.Execute(map[string]string{"command": "reset --hard HEAD~1"})
+	if err == nil {
+		t.Fatal("expected risky git command to be blocked")
+	}
+	if !strings.Contains(err.Error(), "refusing risky git command") {
+		t.Fatalf("expected risky git command error, got %q", err.Error())
 	}
 }
 
