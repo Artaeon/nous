@@ -154,6 +154,24 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 	// index has a matching file, auto-read it BEFORE the first LLM call. This ensures
 	// the model has real source code in context instead of hallucinating.
 	groundingHint := r.preGroundCodeQuery(percept.Raw, pipe)
+	if answer, ok := deterministicCodeAnswer(percept.Raw, pipe); ok {
+		r.Conv.User(percept.Raw)
+		r.Conv.Assistant(answer)
+		r.publishAnswer(answer)
+		r.finishReasoning(percept, pipe, answer)
+		return nil
+	}
+	if groundingHint != "" {
+		if answer, ok, err := r.finalAnswerFromEvidence(percept.Raw, assistantFacts, memoryFacts, pipe,
+			"[System: You already have the relevant grounded code excerpt. Answer directly from that evidence. Do not call tools. If the excerpt is insufficient, say what is missing.]",
+		); err != nil {
+			return err
+		} else if ok {
+			r.publishAnswer(answer)
+			r.finishReasoning(percept, pipe, answer)
+			return nil
+		}
+	}
 
 	// 2. Autonomous tool loop with fresh-context pipeline
 	// nativeConv tracks the accumulated conversation when using native tool calling.
@@ -337,28 +355,19 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 			// Force stop if gate says so
 			if gateCheck.ForceStop {
 				r.emitStatus(fmt.Sprintf("  %s⚠ forcing final answer%s", ColorYellow, ColorReset))
-				finalConv := NewConversation(10)
-				finalSysPrompt := r.compactSystemPrompt()
-				if assistantFacts != "" {
-					finalSysPrompt += "\n" + assistantFacts
+				answer, ok, err := r.finalAnswerFromEvidence(percept.Raw, assistantFacts, memoryFacts, pipe,
+					"[System: You MUST give your final answer now. No more tool calls. Use the evidence you already collected and state any remaining uncertainty plainly.]",
+				)
+				if err != nil {
+					return err
 				}
-				if memoryFacts != "" {
-					finalSysPrompt += "\n" + memoryFacts
+				if ok {
+					r.publishAnswer(answer)
+					r.finishReasoning(percept, pipe, answer)
+					return nil
 				}
-				finalConv.System(finalSysPrompt)
-				forceMsg := percept.Raw
-				if pipeCtx := pipe.BuildContext(); pipeCtx != "" {
-					forceMsg += "\n\n" + pipeCtx
-				}
-				forceMsg += "\n\n[System: You MUST give your final answer now. No more tool calls.]"
-				finalConv.User(forceMsg)
-				r.Conv = finalConv
-				resp, err := r.callLLM()
-				if err == nil {
-					r.publishAnswer(resp)
-					r.storeToMemory(percept.Raw, resp)
-				}
-				return err
+				r.publishAnswer("(unable to finalize from collected evidence)")
+				return nil
 			}
 		}
 
@@ -370,8 +379,68 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 		}
 	}
 
+	r.emitStatus(fmt.Sprintf("  %s⚠ reached maximum tool iterations; finalizing from evidence%s", ColorYellow, ColorReset))
+	if answer, ok, err := r.finalAnswerFromEvidence(percept.Raw, assistantFacts, memoryFacts, pipe,
+		"[System: You have reached the tool limit. Give the best final answer you can from the evidence collected so far. Do not call tools.]",
+	); err == nil && ok {
+		r.publishAnswer(answer)
+		r.finishReasoning(percept, pipe, answer)
+		return nil
+	} else if err != nil {
+		return err
+	}
 	r.publishAnswer("(reached maximum tool iterations)")
 	return nil
+}
+
+func (r *Reasoner) finalAnswerFromEvidence(userQuery, assistantFacts, memoryFacts string, pipe *Pipeline, instruction string) (string, bool, error) {
+	finalConv := NewConversation(10)
+	var sys strings.Builder
+	sys.WriteString("You are Nous in final-answer mode. Give a direct plain-text answer using only the evidence already collected. Do not call tools. Do not emit JSON. If evidence is incomplete, say so clearly.\n")
+	if assistantFacts != "" {
+		sys.WriteString("\n")
+		sys.WriteString(assistantFacts)
+	}
+	if memoryFacts != "" {
+		sys.WriteString("\n")
+		sys.WriteString(memoryFacts)
+	}
+	finalConv.System(strings.TrimSpace(sys.String()))
+
+	userMsg := userQuery
+	if pipeCtx := pipe.BuildContext(); pipeCtx != "" {
+		userMsg += "\n\nEvidence summary:\n" + pipeCtx
+	}
+	if instruction != "" {
+		userMsg += "\n\n" + instruction
+	}
+	finalConv.User(userMsg)
+	if pipe.StepCount() > 0 && pipe.LastResult() != "" {
+		lastStep := pipe.steps[len(pipe.steps)-1]
+		finalConv.ToolResult(lastStep.ToolName, SmartTruncate(lastStep.ToolName, lastStep.RawResult))
+	}
+
+	r.Conv = finalConv
+	resp, err := r.callLLM()
+	if err != nil {
+		return "", false, err
+	}
+
+	parsed := r.parseResponse(resp)
+	if len(parsed.ToolCalls) > 0 {
+		return "", false, nil
+	}
+
+	answer := strings.TrimSpace(parsed.Answer)
+	if answer == "" {
+		answer = strings.TrimSpace(resp)
+	}
+	if answer == "" || looksLikeFailedToolCall(answer) {
+		return "", false, nil
+	}
+
+	finalConv.Assistant(answer)
+	return answer, true, nil
 }
 
 func (r *Reasoner) tryResearchAndWrite(input string) (string, bool, error) {
@@ -991,6 +1060,7 @@ func normalizeRequestedPath(args map[string]string, input string) {
 
 var explicitFilePattern = regexp.MustCompile(`(?i)(?:named|called)\s+["']?([a-z0-9_./-]+\.[a-z0-9]+)["']?`)
 var quotedFilePattern = regexp.MustCompile(`["']([a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+)["']`)
+var fileReferencePattern = regexp.MustCompile(`[a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+`)
 var urlPattern = regexp.MustCompile(`https?://[^\s"']+`)
 
 func inferRequestedPath(input string, content string) string {
@@ -1587,6 +1657,26 @@ func (r *Reasoner) preGroundCodeQuery(query string, pipe *Pipeline) string {
 	if !isCodeQuery(query) {
 		return ""
 	}
+	readTool, err := r.Tools.Get("read")
+	if err != nil {
+		return ""
+	}
+
+	if path := explicitCodePathFromQuery(query); path != "" {
+		const fileWindow = 120
+		result, readErr := readTool.Execute(map[string]string{
+			"path":   path,
+			"offset": "0",
+			"limit":  fmt.Sprintf("%d", fileWindow),
+		})
+		if readErr == nil {
+			label := fmt.Sprintf("file %s", path)
+			r.emitStatus(fmt.Sprintf("  %s↳ pre-read %s%s", ColorDim, label, ColorReset))
+			pipe.AddStep("read", result)
+			return fmt.Sprintf("[System: I already read %s for you — lines 1-%d. Answer ONLY from the code shown above. Do NOT make additional tool calls. If the answer is not in the code shown, say so.]", path, fileWindow)
+		}
+	}
+
 	if r.CodeIndex == nil || r.CodeIndex.Size() == 0 {
 		return ""
 	}
@@ -1597,10 +1687,6 @@ func (r *Reasoner) preGroundCodeQuery(query string, pipe *Pipeline) string {
 	}
 
 	// Execute read tool with offset/limit centered on the symbol
-	readTool, err := r.Tools.Get("read")
-	if err != nil {
-		return ""
-	}
 
 	// Read a 60-line window centered on the symbol definition
 	const windowSize = 60
@@ -1629,6 +1715,79 @@ func (r *Reasoner) preGroundCodeQuery(query string, pipe *Pipeline) string {
 		"Answer ONLY from the code shown above. Do NOT make additional tool calls. "+
 		"If the answer is not in the code shown, say so.]",
 		label, startLine, startLine+windowSize, sym.File)
+}
+
+func explicitCodePathFromQuery(query string) string {
+	if match := quotedFilePattern.FindStringSubmatch(query); len(match) == 2 {
+		return match[1]
+	}
+	if match := fileReferencePattern.FindString(query); match != "" {
+		path := strings.TrimSpace(match)
+		path = strings.Trim(path, `"'()[]{}.,:`)
+		if strings.Contains(path, "/") || strings.HasPrefix(path, ".") {
+			return path
+		}
+	}
+	return ""
+}
+
+var packagePattern = regexp.MustCompile(`(?m)^package\s+([A-Za-z_][A-Za-z0-9_]*)`)
+var queryFuncPattern = regexp.MustCompile(`(?i)(?:func(?:tion)?\s+)([A-Za-z_][A-Za-z0-9_]*)`)
+var readLinePrefixPattern = regexp.MustCompile(`(?m)^\s*\d+\s+\|\s*`)
+
+func deterministicCodeAnswer(query string, pipe *Pipeline) (string, bool) {
+	if pipe.StepCount() == 0 || pipe.LastResult() == "" {
+		return "", false
+	}
+	path := explicitCodePathFromQuery(query)
+	if path == "" {
+		return "", false
+	}
+
+	code := stripReadLinePrefixes(pipe.LastResult())
+	lower := strings.ToLower(query)
+	packageName := ""
+	if match := packagePattern.FindStringSubmatch(code); len(match) == 2 {
+		packageName = match[1]
+	}
+
+	funcMention := ""
+	if match := queryFuncPattern.FindStringSubmatch(query); len(match) == 2 {
+		funcMention = match[1]
+	}
+	if funcMention == "" && strings.Contains(lower, "func main") {
+		funcMention = "main"
+	}
+
+	hasFunc := false
+	if funcMention != "" {
+		hasFunc = regexp.MustCompile(`\bfunc\s+` + regexp.QuoteMeta(funcMention) + `\s*\(`).MatchString(code)
+	}
+
+	if strings.Contains(lower, "package name") && funcMention != "" {
+		if packageName == "" {
+			return "", false
+		}
+		if hasFunc {
+			return fmt.Sprintf("%s is in package %s, and it defines func %s().", path, packageName, funcMention), true
+		}
+		return fmt.Sprintf("%s is in package %s, and it does not define func %s() in the code shown.", path, packageName, funcMention), true
+	}
+	if strings.Contains(lower, "package name") && packageName != "" {
+		return fmt.Sprintf("%s is in package %s.", path, packageName), true
+	}
+	if funcMention != "" {
+		if hasFunc {
+			return fmt.Sprintf("%s defines func %s().", path, funcMention), true
+		}
+		return fmt.Sprintf("%s does not define func %s() in the code shown.", path, funcMention), true
+	}
+
+	return "", false
+}
+
+func stripReadLinePrefixes(code string) string {
+	return readLinePrefixPattern.ReplaceAllString(code, "")
 }
 
 // looksLikeFailedToolCall checks if a response contains JSON-like patterns

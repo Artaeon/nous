@@ -2,6 +2,9 @@ package cognitive
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -302,6 +305,42 @@ func TestPreGroundSkipsNonCodeQueries(t *testing.T) {
 	}
 }
 
+func TestPreGroundUsesExplicitFilePathBeforeSymbolLookup(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(tools.Tool{
+		Name: "read",
+		Execute: func(args map[string]string) (string, error) {
+			if args["path"] != "cmd/nous/main.go" {
+				t.Fatalf("expected explicit file path, got %v", args)
+			}
+			return "package main\n\nfunc main() {}\n", nil
+		},
+	})
+
+	r := &Reasoner{Tools: reg}
+	pipe := NewPipeline("Read cmd/nous/main.go and tell me the package name plus whether it defines func main().")
+	hint := r.preGroundCodeQuery("Read cmd/nous/main.go and tell me the package name plus whether it defines func main().", pipe)
+	if pipe.StepCount() != 1 {
+		t.Fatalf("expected explicit file pre-read, got %d steps", pipe.StepCount())
+	}
+	if !strings.Contains(hint, "cmd/nous/main.go") {
+		t.Fatalf("expected grounding hint to reference file path, got %q", hint)
+	}
+}
+
+func TestDeterministicCodeAnswerForExplicitFileQuery(t *testing.T) {
+	pipe := NewPipeline("Read cmd/nous/main.go and tell me the package name plus whether it defines func main().")
+	pipe.AddStep("read", "   1 | package main\n   2 | \n   3 | func main() {}\n")
+
+	answer, ok := deterministicCodeAnswer(pipe.userQuery, pipe)
+	if !ok {
+		t.Fatal("expected deterministic code answer")
+	}
+	if !strings.Contains(answer, "package main") || !strings.Contains(answer, "func main()") {
+		t.Fatalf("unexpected deterministic answer: %q", answer)
+	}
+}
+
 func TestLooksLikeFailedToolCall(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -342,5 +381,46 @@ func TestLooksLikeFailedToolCall(t *testing.T) {
 				t.Errorf("looksLikeFailedToolCall(%q) = %v, want %v", tt.response, got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestFinalAnswerFromEvidenceUsesCollectedGrounding(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path != "/api/chat" {
+			t.Fatalf("unexpected path: %s", req.URL.Path)
+		}
+		var payload ollama.GenerateRequest
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if len(payload.Tools) != 0 {
+			t.Fatalf("finalAnswerFromEvidence should not expose tools, got %d", len(payload.Tools))
+		}
+		if len(payload.Messages) < 3 {
+			t.Fatalf("expected system, user, and evidence messages, got %d", len(payload.Messages))
+		}
+		if payload.Messages[2].Role != "user" || !strings.Contains(payload.Messages[2].Content, "package main") {
+			t.Fatalf("expected grounded tool result in conversation, got %+v", payload.Messages[2])
+		}
+		_ = json.NewEncoder(w).Encode(ollama.GenerateResponse{
+			Message: ollama.Message{Role: "assistant", Content: "The file is in package main and it defines func main()."},
+			Done:    true,
+		})
+	}))
+	defer server.Close()
+
+	r := NewReasoner(blackboard.New(), ollama.New(ollama.WithHost(server.URL), ollama.WithModel("test-model")), tools.NewRegistry())
+	pipe := NewPipeline("Read cmd/nous/main.go and tell me the package name plus whether it defines func main().")
+	pipe.AddStep("read", "package main\n\nfunc main() {}\n")
+
+	answer, ok, err := r.finalAnswerFromEvidence(pipe.userQuery, "", "", pipe, "[System: Answer now.]")
+	if err != nil {
+		t.Fatalf("finalAnswerFromEvidence() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("expected grounded final answer to succeed")
+	}
+	if !strings.Contains(answer, "package main") || !strings.Contains(answer, "func main()") {
+		t.Fatalf("unexpected answer: %q", answer)
 	}
 }
