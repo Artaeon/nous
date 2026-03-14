@@ -57,6 +57,40 @@ func TestWebUIContainsBackgroundJobsControls(t *testing.T) {
 	}
 }
 
+func TestCORSRejectsDisallowedOrigin(t *testing.T) {
+	srv := New(":0", blackboard.New(), nil, assistant.NewStore(t.TempDir()))
+	mux := srv.newMux("0.6.0", "test-model", 0, time.Now())
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/health", nil)
+	req.Header.Set("Origin", "https://evil.example")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", res.Code)
+	}
+	if got := res.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("expected no CORS allow header, got %q", got)
+	}
+}
+
+func TestCORSAllowsLocalOrigin(t *testing.T) {
+	srv := New(":0", blackboard.New(), nil, assistant.NewStore(t.TempDir()))
+	mux := srv.newMux("0.6.0", "test-model", 0, time.Now())
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/health", nil)
+	req.Header.Set("Origin", "http://localhost:3333")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", res.Code)
+	}
+	if got := res.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:3333" {
+		t.Fatalf("allow origin = %q, want localhost origin", got)
+	}
+}
+
 func TestAssistantTodayEndpointReturnsNotificationsAndTasks(t *testing.T) {
 	store := assistant.NewStore(t.TempDir())
 	now := time.Now()
