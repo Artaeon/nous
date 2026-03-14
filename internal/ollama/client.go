@@ -3,6 +3,7 @@ package ollama
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,7 +14,7 @@ import (
 const (
 	DefaultHost    = "http://localhost:11434"
 	DefaultModel   = "qwen2.5:1.5b"
-	DefaultTimeout = 120 * time.Second
+	DefaultTimeout = 300 * time.Second
 )
 
 type Client struct {
@@ -111,12 +112,13 @@ func ToolResultMessage(toolName, content string) Message {
 // --- Request/Response Types ---
 
 type GenerateRequest struct {
-	Model    string        `json:"model"`
-	Messages []Message     `json:"messages"`
-	Stream   bool          `json:"stream"`
-	Options  *ModelOptions `json:"options,omitempty"`
-	Tools    []Tool        `json:"tools,omitempty"`
-	Format   string        `json:"format,omitempty"` // "json" constrains output to valid JSON
+	Model     string        `json:"model"`
+	Messages  []Message     `json:"messages"`
+	Stream    bool          `json:"stream"`
+	Options   *ModelOptions `json:"options,omitempty"`
+	Tools     []Tool        `json:"tools,omitempty"`
+	Format    string        `json:"format,omitempty"` // "json" constrains output to valid JSON
+	KeepAlive string        `json:"keep_alive,omitempty"`
 }
 
 type ModelOptions struct {
@@ -150,15 +152,60 @@ func (c *Client) Chat(messages []Message, opts *ModelOptions) (*GenerateResponse
 	return c.ChatWithTools(messages, nil, opts)
 }
 
+// ChatCtx sends a message sequence with context cancellation support.
+// Unlike Chat, this respects the context deadline — if the context is
+// cancelled or times out, the in-flight HTTP request is aborted.
+func (c *Client) ChatCtx(ctx context.Context, messages []Message, opts *ModelOptions) (*GenerateResponse, error) {
+	opts = ensureNumCtx(opts)
+	req := GenerateRequest{
+		Model:     c.model,
+		Messages:  messages,
+		Stream:    false,
+		Options:   opts,
+		KeepAlive: "30m",
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.host+"/api/chat", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("ollama request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("ollama returned %d: %s", resp.StatusCode, string(b))
+	}
+
+	var result GenerateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	return &result, nil
+}
+
 // ChatJSON sends a message sequence with format:"json" constraint.
 // The model is forced to output only valid JSON — no free-form text.
 func (c *Client) ChatJSON(messages []Message, opts *ModelOptions) (*GenerateResponse, error) {
+	opts = ensureNumCtx(opts)
 	req := GenerateRequest{
-		Model:    c.model,
-		Messages: messages,
-		Stream:   false,
-		Options:  opts,
-		Format:   "json",
+		Model:     c.model,
+		Messages:  messages,
+		Stream:    false,
+		Options:   opts,
+		Format:    "json",
+		KeepAlive: "30m",
 	}
 
 	body, err := json.Marshal(req)
@@ -188,12 +235,14 @@ func (c *Client) ChatJSON(messages []Message, opts *ModelOptions) (*GenerateResp
 // ChatWithTools sends a message sequence with tool definitions.
 // When the model decides to call a tool, resp.Message.ToolCalls will be populated.
 func (c *Client) ChatWithTools(messages []Message, tools []Tool, opts *ModelOptions) (*GenerateResponse, error) {
+	opts = ensureNumCtx(opts)
 	req := GenerateRequest{
-		Model:    c.model,
-		Messages: messages,
-		Stream:   false,
-		Options:  opts,
-		Tools:    tools,
+		Model:     c.model,
+		Messages:  messages,
+		Stream:    false,
+		Options:   opts,
+		Tools:     tools,
+		KeepAlive: "30m",
 	}
 
 	body, err := json.Marshal(req)
@@ -238,12 +287,14 @@ func (c *Client) ChatStream(messages []Message, opts *ModelOptions, callback Str
 
 // ChatStreamWithTools streams a response with native tool calling support.
 func (c *Client) ChatStreamWithTools(messages []Message, tools []Tool, opts *ModelOptions, callback ToolStreamCallback) (*GenerateResponse, error) {
+	opts = ensureNumCtx(opts)
 	req := GenerateRequest{
-		Model:    c.model,
-		Messages: messages,
-		Stream:   true,
-		Options:  opts,
-		Tools:    tools,
+		Model:     c.model,
+		Messages:  messages,
+		Stream:    true,
+		Options:   opts,
+		Tools:     tools,
+		KeepAlive: "30m",
 	}
 
 	body, err := json.Marshal(req)
@@ -286,6 +337,21 @@ func (c *Client) ChatStreamWithTools(messages []Message, tools []Tool, opts *Mod
 	}
 
 	return &final, nil
+}
+
+// ensureNumCtx sets a default NumCtx of 8192 if not already specified.
+// This ensures Ollama allocates enough context window for long conversations.
+func ensureNumCtx(opts *ModelOptions) *ModelOptions {
+	if opts == nil {
+		return &ModelOptions{NumCtx: 8192}
+	}
+	if opts.NumCtx == 0 {
+		// Copy to avoid mutating caller's struct
+		copy := *opts
+		copy.NumCtx = 8192
+		return &copy
+	}
+	return opts
 }
 
 // --- Server Methods ---
