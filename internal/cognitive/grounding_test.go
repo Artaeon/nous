@@ -13,6 +13,9 @@ import (
 
 func TestContextBudgetEstimateTokens(t *testing.T) {
 	b := DefaultBudget()
+	if b.MaxTokens != 8192 {
+		t.Errorf("DefaultBudget().MaxTokens = %d, want 8192", b.MaxTokens)
+	}
 	// 400 chars / 4.0 chars per token = 100 tokens
 	got := b.EstimateTokens(strings.Repeat("a", 400))
 	if got != 100 {

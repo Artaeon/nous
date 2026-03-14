@@ -12,6 +12,7 @@ import (
 type Conversation struct {
 	messages    []ollama.Message
 	maxMessages int
+	summarizer  func([]ollama.Message) string
 }
 
 func NewConversation(maxMessages int) *Conversation {
@@ -64,6 +65,55 @@ func (c *Conversation) ToolResult(toolName, result string) {
 	msg := fmt.Sprintf("OBSERVE [%s]: %s", toolName, result)
 	c.messages = append(c.messages, ollama.Message{Role: "user", Content: msg})
 	c.truncate()
+}
+
+// SetSummarizer configures a function that summarizes messages before they are
+// dropped during truncation. When set, truncate() will call this to produce
+// a summary that is preserved as a context message.
+func (c *Conversation) SetSummarizer(fn func([]ollama.Message) string) {
+	c.summarizer = fn
+}
+
+// SummarizeAndTruncate summarizes messages that would be dropped, stores the
+// summary as a special message after the system prompt, then truncates.
+func (c *Conversation) SummarizeAndTruncate(summarizer func([]ollama.Message) string) {
+	if len(c.messages) <= c.maxMessages+1 {
+		return
+	}
+
+	hasSystem := len(c.messages) > 0 && c.messages[0].Role == "system"
+	if !hasSystem {
+		return
+	}
+
+	// Messages that will be dropped
+	start := 1
+	// Check if position 1 is already a summary message
+	if len(c.messages) > 1 && strings.HasPrefix(c.messages[1].Content, "[Previous conversation summary]") {
+		start = 2
+	}
+	dropEnd := len(c.messages) - c.maxMessages
+	if dropEnd <= start {
+		return
+	}
+	toDrop := c.messages[start:dropEnd]
+
+	summary := summarizer(toDrop)
+	if summary == "" {
+		return
+	}
+
+	// Build new message list: system + summary + kept messages
+	sys := c.messages[0]
+	kept := make([]ollama.Message, len(c.messages[dropEnd:]))
+	copy(kept, c.messages[dropEnd:])
+
+	summaryMsg := ollama.Message{
+		Role:    "user",
+		Content: "[Previous conversation summary]\n" + summary,
+	}
+
+	c.messages = append([]ollama.Message{sys, summaryMsg}, kept...)
 }
 
 // Messages returns the current message list for an LLM call.
@@ -124,6 +174,12 @@ func (c *Conversation) Summary() string {
 func (c *Conversation) truncate() {
 	// Keep system message + last N messages
 	if len(c.messages) <= c.maxMessages+1 {
+		return
+	}
+
+	// If a summarizer is configured, summarize before dropping
+	if c.summarizer != nil && len(c.messages) > 0 && c.messages[0].Role == "system" {
+		c.SummarizeAndTruncate(c.summarizer)
 		return
 	}
 

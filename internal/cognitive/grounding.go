@@ -15,10 +15,11 @@ type ContextBudget struct {
 	CharsPerToken float64
 }
 
-// DefaultBudget returns a budget tuned for qwen2.5:1.5b (4096 context).
+// DefaultBudget returns a budget tuned for qwen2.5:1.5b (8192 context).
+// The model supports up to 32K but 8192 is a good balance for CPU inference.
 func DefaultBudget() *ContextBudget {
 	return &ContextBudget{
-		MaxTokens:     4096,
+		MaxTokens:     8192,
 		CharsPerToken: 4.0,
 	}
 }
