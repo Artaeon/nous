@@ -1,0 +1,17 @@
+{
+  "name": "link-checker",
+  "description": "Checks bookmarked URLs for availability and reports broken links.",
+  "schedule": "@daily",
+  "enabled": false,
+  "prompt": "Read the bookmarks file at ~/.nous/hands/link-checker/bookmarks.txt (one URL per line). Fetch each URL and check if it returns a successful response. Write a report to ~/.nous/hands/link-checker/report.md listing any broken or unreachable links with their status codes.",
+  "config": {
+    "max_steps": 10,
+    "timeout_seconds": 300,
+    "tools": [
+      "fetch",
+      "read",
+      "write"
+    ],
+    "requires_approval": false
+  }
+}
