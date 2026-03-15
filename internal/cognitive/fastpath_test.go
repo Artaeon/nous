@@ -297,6 +297,26 @@ func TestIsSimpleBackwardCompat(t *testing.T) {
 	}
 }
 
+func TestQuickGreetingResponses(t *testing.T) {
+	// Trivial greetings should get instant canned responses
+	instant := []string{"hello", "hi", "hey", "thanks", "thanks!", "bye", "ok", "cool"}
+	for _, q := range instant {
+		resp := tryQuickResponse(q)
+		if resp == "" {
+			t.Errorf("expected quick response for %q, got empty", q)
+		}
+	}
+
+	// Non-trivial queries should NOT get canned responses
+	notInstant := []string{"what is Go", "read go.mod", "help me debug", "explain this code"}
+	for _, q := range notInstant {
+		resp := tryQuickResponse(q)
+		if resp != "" {
+			t.Errorf("unexpected quick response for %q: %s", q, resp)
+		}
+	}
+}
+
 func TestPathConstants(t *testing.T) {
 	if PathFast != "fast" {
 		t.Errorf("PathFast = %q, want 'fast'", PathFast)

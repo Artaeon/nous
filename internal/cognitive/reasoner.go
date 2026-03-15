@@ -19,7 +19,7 @@ import (
 	"github.com/artaeon/nous/internal/tools"
 )
 
-const maxToolIterations = 4
+const maxToolIterations = 6
 
 // Reasoner performs autonomous chain-of-thought inference with tool use.
 // It listens for percepts, reasons about them, and can autonomously chain
@@ -364,6 +364,12 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 			}
 			if pipeCtx := pipe.BuildContext(); pipeCtx != "" {
 				userMsg += "\n\nPrevious steps:\n" + pipeCtx
+			}
+			// Iteration awareness: tell the model how many steps remain
+			// so it can decide whether to chain another tool or give a final answer.
+			remaining := maxToolIterations - i - 1
+			if i > 0 && remaining <= 2 {
+				userMsg += fmt.Sprintf("\n\n[Step %d/%d — %d steps remaining. Give a final answer if you have enough information.]", i+1, maxToolIterations, remaining)
 			}
 			conv.User(userMsg)
 
@@ -823,10 +829,23 @@ func (r *Reasoner) publishAnswer(answer string) {
 // callLLMNative calls the model and returns both content and native tool calls.
 func (r *Reasoner) callLLMNative() (*llmResult, error) {
 	nativeTools := r.buildNativeTools()
-	if r.OnToken != nil {
-		return r.streamCallNative(nativeTools)
+	var result *llmResult
+	retryConfig := RetryConfig{
+		MaxRetries:    2,
+		InitialDelay:  500 * time.Millisecond,
+		MaxDelay:      5 * time.Second,
+		BackoffFactor: 2.0,
 	}
-	return r.batchCallNative(nativeTools)
+	err := WithRetry(context.Background(), retryConfig, func() error {
+		var callErr error
+		if r.OnToken != nil {
+			result, callErr = r.streamCallNative(nativeTools)
+		} else {
+			result, callErr = r.batchCallNative(nativeTools)
+		}
+		return callErr
+	})
+	return result, err
 }
 
 // compressOldTurns compresses the oldest conversation turns to free context space.

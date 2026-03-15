@@ -207,8 +207,55 @@ func (r *FastPathResponder) Respond(conv *Conversation, query string) (string, e
 	return r.RespondWithPath(conv, query, PathFast)
 }
 
+// quickGreetings maps trivial inputs to instant responses — no LLM call needed.
+// This is faster (0ms vs 500ms) and better quality than what tiny models generate.
+var quickGreetings = map[string][]string{
+	"hello":         {"Hello! How can I help you today?", "Hey there! What are you working on?", "Hi! Ready to help."},
+	"hi":            {"Hi! What can I do for you?", "Hey! What are we working on?", "Hello! How can I help?"},
+	"hey":           {"Hey! What's up?", "Hi there! Ready when you are.", "Hey! How can I help?"},
+	"yo":            {"Yo! What's the task?", "Hey! What do you need?"},
+	"sup":           {"Not much — ready to help! What's up?", "All good here. What do you need?"},
+	"howdy":         {"Howdy! What can I help with?"},
+	"thanks":        {"You're welcome!", "Happy to help!", "Anytime!"},
+	"thanks!":       {"You're welcome! Let me know if you need anything else.", "Glad I could help!"},
+	"thank you":     {"You're welcome!", "Happy to help! Let me know if there's anything else."},
+	"thx":           {"No problem!", "Anytime!"},
+	"bye":           {"See you later!", "Bye! Happy coding."},
+	"goodbye":       {"Goodbye! See you next time.", "Take care!"},
+	"ok":            {"Got it. Let me know if you need anything.", "Alright!"},
+	"cool":          {"Glad that works! Anything else?"},
+	"great":         {"Glad to hear it! Need anything else?"},
+	"awesome":       {"Thanks! Let me know if there's more to do."},
+	"perfect":       {"Glad that's what you needed!"},
+	"nice":          {"Thanks! What's next?"},
+	"got it":        {"Good. Ready for the next task.", "Alright, what's next?"},
+	"good morning":  {"Good morning! What are we tackling today?"},
+	"good afternoon": {"Good afternoon! How can I help?"},
+	"good evening":  {"Good evening! What are you working on?"},
+}
+
+// tryQuickResponse returns an instant canned response for trivial queries.
+// Returns empty string if no quick response is available.
+func tryQuickResponse(query string) string {
+	lower := strings.ToLower(strings.TrimRight(strings.TrimSpace(query), "!?."))
+	if responses, ok := quickGreetings[lower]; ok {
+		// Simple deterministic selection based on query length
+		return responses[len(query)%len(responses)]
+	}
+	return ""
+}
+
 // RespondWithPath generates a response using the specified path level.
 func (r *FastPathResponder) RespondWithPath(conv *Conversation, query string, path QueryPath) (string, error) {
+	// Instant response for trivial greetings — skip LLM entirely.
+	if path == PathFast {
+		if quick := tryQuickResponse(query); quick != "" {
+			conv.User(query)
+			conv.Assistant(quick)
+			return quick, nil
+		}
+	}
+
 	var sysPrompt string
 	var maxHistory int
 
