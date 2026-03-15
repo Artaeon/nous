@@ -89,8 +89,8 @@ func TestNeuralCortexTrainMultiplePatterns(t *testing.T) {
 	readInput := []float64{0.0, 1.0, 0.0, 0.0}
 	writeInput := []float64{0.0, 0.0, 1.0, 0.0}
 
-	// Train on each pattern (500 iterations for reliable convergence)
-	for i := 0; i < 500; i++ {
+	// Train on each pattern (1000 iterations for reliable convergence with random init)
+	for i := 0; i < 1000; i++ {
 		nc.Train(grepInput, "grep")
 		nc.Train(readInput, "read")
 		nc.Train(writeInput, "write")

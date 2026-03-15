@@ -232,15 +232,31 @@ func (r *FastPathResponder) RespondWithPath(conv *Conversation, query string, pa
 	// Add the current query.
 	msgs = append(msgs, ollama.Message{Role: "user", Content: query})
 
+	// Medium path gets more tokens for knowledge-rich answers.
+	// Fast path stays brief for greetings/acknowledgments.
+	numPredict := 512
+	temp := 0.7
+	if path == PathMedium {
+		numPredict = 1024
+		temp = 0.6
+	}
+
 	resp, err := r.LLM.Chat(msgs, &ollama.ModelOptions{
-		Temperature: 0.7,
-		NumPredict:  512,
+		Temperature: temp,
+		NumPredict:  numPredict,
 	})
 	if err != nil {
 		return "", err
 	}
 
 	answer := strings.TrimSpace(resp.Message.Content)
+
+	// Post-generation fact-checking: verify answer against knowledge store.
+	// This catches hallucinations AFTER generation but BEFORE the user sees them.
+	if path == PathMedium && r.Knowledge != nil {
+		fc := NewFactChecker(r.Knowledge)
+		answer = fc.Check(answer, query)
+	}
 
 	// Record the exchange in conversation history so future messages have context.
 	conv.User(query)
