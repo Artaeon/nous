@@ -70,6 +70,7 @@ var readPatterns = []*regexp.Regexp{
 var searchPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(?:search|grep|find|look)\s+(?:for\s+)?(?:the\s+)?(?:word|string|text|pattern|term)?\s*["'\x60]([^"'\x60]+)["'\x60]`),
 	regexp.MustCompile(`(?i)(?:search|grep|find|look)\s+(?:for\s+)?["'\x60]([^"'\x60]+)["'\x60]`),
+	regexp.MustCompile(`(?i)(?:find|search)\s+where\s+["'\x60]?(\w+)["'\x60]?\s+(?:is|are)\s+(?:defined|used|called|declared|implemented)`),
 	regexp.MustCompile(`(?i)where\s+is\s+["'\x60]?(\w+)["'\x60]?\s+(?:defined|used|called|declared|implemented)`),
 	regexp.MustCompile(`(?i)where\s+(?:is|are)\s+["'\x60]?([A-Z]\w+)["'\x60]?\s`),
 	regexp.MustCompile(`(?i)(?:search|grep|find)\s+(?:for\s+)?(\S+)\s+(?:in\s+)?(?:all\s+)?(?:go|\.go|python|\.py|java|\.java|rust|\.rs|js|\.js|ts|\.ts)\s+files`),
