@@ -541,8 +541,12 @@ func main() {
 		if queryPath == cognitive.PathFast || queryPath == cognitive.PathMedium {
 			// Fast/medium: single LLM call with optional knowledge context
 			llmSpinner.Start("thinking...")
+			fastLLM := llm
+			if router != nil {
+				fastLLM = router.ClientForQuery(input)
+			}
 			fastResp := &cognitive.FastPathResponder{
-				LLM:         llm,
+				LLM:         fastLLM,
 				WorkingMem:  wm,
 				LongTermMem: ltm,
 				Knowledge:   reasoner.Knowledge,
