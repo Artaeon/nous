@@ -1,6 +1,7 @@
 package cognitive
 
 import (
+	"math"
 	"testing"
 )
 
@@ -127,3 +128,77 @@ func TestMin64(t *testing.T) {
 		t.Error("min64(4, 4) should be 4")
 	}
 }
+
+// --- Formula Verification Tests ---
+
+func TestEnsembleConfidenceBoostFormula(t *testing.T) {
+	labels := []string{"grep", "read", "write", "ls", "glob", "tree", "git", "shell", "edit"}
+	cortex := NewNeuralCortex(64, 32, labels, "")
+
+	// Train cortex heavily to predict "grep" for search queries
+	for i := 0; i < 500; i++ {
+		input := CortexInputFromQuery("search for NewReasoner", cortex.InputSize)
+		cortex.Train(input, "grep")
+	}
+
+	dir := t.TempDir()
+	intent := NewIntentCompiler(dir)
+	e := NewToolEnsemble(intent, cortex)
+
+	// "search for NewReasoner" should match both intent and cortex
+	result := e.Predict(`search for "NewReasoner"`)
+	if result == nil {
+		t.Skip("intent didn't match search pattern, skipping")
+	}
+
+	if result.Source == "ensemble" {
+		// Formula: confidence = min(intentConf, cortexConf) * 1.3, capped at 0.95
+		expectedConf := min64(result.IntentConf, result.CortexConf) * 1.3
+		if expectedConf > 0.95 {
+			expectedConf = 0.95
+		}
+		if math.Abs(result.Confidence-expectedConf) > 0.01 {
+			t.Errorf("ensemble confidence = %f, expected %f (intent=%f, cortex=%f)",
+				result.Confidence, expectedConf, result.IntentConf, result.CortexConf)
+		}
+	}
+}
+
+// --- Edge Case Tests ---
+
+func TestEnsembleConflictingPredictions(t *testing.T) {
+	labels := []string{"grep", "read", "write", "ls"}
+	cortex := NewNeuralCortex(64, 32, labels, "")
+
+	// Train cortex to strongly predict "read"
+	for i := 0; i < 500; i++ {
+		input := CortexInputFromQuery("search for code patterns", cortex.InputSize)
+		cortex.Train(input, "read")
+	}
+
+	dir := t.TempDir()
+	intent := NewIntentCompiler(dir)
+	e := NewToolEnsemble(intent, cortex)
+
+	// "search for code patterns" — intent likely says "grep", cortex says "read"
+	result := e.Predict("search for code patterns")
+	if result == nil {
+		t.Skip("no prediction returned, skipping")
+	}
+
+	// Cortex says "read" and intent says "grep" — if both have confidence,
+	// we should see "conflict" or one should win
+	if result.Source == "conflict" {
+		// Confidence should be reduced
+		if result.Confidence > result.CortexConf && result.Confidence > result.IntentConf {
+			t.Error("conflict confidence should not exceed either individual")
+		}
+	}
+	// Either way, a valid tool should be returned
+	if result.Tool == "" {
+		t.Error("conflicting predictions should still return a tool")
+	}
+}
+
+// ensure math import is used
+var _ = math.Abs

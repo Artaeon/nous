@@ -4,6 +4,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -303,6 +304,127 @@ func TestNeuralCortexRegularizationDefaults(t *testing.T) {
 	}
 	if nc.InitialLR != 0.01 {
 		t.Errorf("default initial LR = %f, want 0.01", nc.InitialLR)
+	}
+}
+
+// --- Race Condition Tests ---
+
+func TestNeuralCortexConcurrentTrainPredict(t *testing.T) {
+	labels := []string{"grep", "read", "write", "ls", "edit"}
+	nc := NewNeuralCortex(8, 4, labels, "")
+
+	var wg sync.WaitGroup
+
+	// 10 goroutines training concurrently
+	for g := 0; g < 10; g++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			input := make([]float64, 8)
+			input[id%8] = 1.0
+			label := labels[id%len(labels)]
+			for i := 0; i < 100; i++ {
+				nc.Train(input, label)
+			}
+		}(g)
+	}
+
+	// 10 goroutines predicting concurrently
+	for g := 0; g < 10; g++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			input := make([]float64, 8)
+			input[id%8] = 1.0
+			for i := 0; i < 100; i++ {
+				pred := nc.Predict(input)
+				if pred.Label == "" && pred.Confidence != 0 {
+					t.Errorf("inconsistent prediction: empty label but non-zero confidence")
+				}
+			}
+		}(g)
+	}
+
+	wg.Wait()
+
+	// Verify cortex is still functional
+	pred := nc.Predict([]float64{1, 0, 0, 0, 0, 0, 0, 0})
+	if pred.Label == "" {
+		t.Error("cortex should be functional after concurrent access")
+	}
+}
+
+// --- Formula Verification Tests ---
+
+func TestLearningRateDecayFormula(t *testing.T) {
+	labels := []string{"a", "b"}
+
+	// Verify at specific step counts: LR = InitialLR / (1 + N/500)
+	checkpoints := []int{1, 50, 100, 500, 1000}
+	for _, steps := range checkpoints {
+		nc := NewNeuralCortex(4, 3, labels, "")
+		input := []float64{1.0, 0.0, 0.0, 0.0}
+		for i := 0; i < steps; i++ {
+			nc.Train(input, "a")
+		}
+		expectedLR := 0.01 / (1.0 + float64(steps)/500.0)
+		if math.Abs(nc.LearningRate-expectedLR) > 1e-10 {
+			t.Errorf("after %d steps: LR = %f, want %f", steps, nc.LearningRate, expectedLR)
+		}
+	}
+
+	// Step 0: LR should equal InitialLR
+	nc0 := NewNeuralCortex(4, 3, labels, "")
+	if nc0.LearningRate != 0.01 {
+		t.Errorf("at step 0: LR = %f, want 0.01", nc0.LearningRate)
+	}
+}
+
+func TestNeuralCortexZeroWeightDecay(t *testing.T) {
+	labels := []string{"a", "b"}
+
+	// Train two cortexes: one with WeightDecay=0, one with WeightDecay>0
+	nc0 := NewNeuralCortex(4, 3, labels, "")
+	nc0.WeightDecay = 0.0
+
+	ncWD := NewNeuralCortex(4, 3, labels, "")
+	ncWD.WeightDecay = 0.1
+
+	// Copy weights from nc0 to ncWD so they start the same
+	ncWD.mu.Lock()
+	nc0.mu.RLock()
+	for i := range nc0.W1 {
+		copy(ncWD.W1[i], nc0.W1[i])
+	}
+	copy(ncWD.B1, nc0.B1)
+	for i := range nc0.W2 {
+		copy(ncWD.W2[i], nc0.W2[i])
+	}
+	copy(ncWD.B2, nc0.B2)
+	nc0.mu.RUnlock()
+	ncWD.mu.Unlock()
+
+	input := []float64{1.0, 0.5, 0.0, 0.0}
+	for i := 0; i < 50; i++ {
+		nc0.Train(input, "a")
+		ncWD.Train(input, "a")
+	}
+
+	// Weight decay should produce smaller L2 norm
+	sumW0, sumWD := 0.0, 0.0
+	nc0.mu.RLock()
+	ncWD.mu.RLock()
+	for i := range nc0.W1 {
+		for j := range nc0.W1[i] {
+			sumW0 += nc0.W1[i][j] * nc0.W1[i][j]
+			sumWD += ncWD.W1[i][j] * ncWD.W1[i][j]
+		}
+	}
+	nc0.mu.RUnlock()
+	ncWD.mu.RUnlock()
+
+	if sumWD >= sumW0 {
+		t.Errorf("weight decay should reduce weight magnitude: L2(wd=0)=%f, L2(wd=0.1)=%f", sumW0, sumWD)
 	}
 }
 

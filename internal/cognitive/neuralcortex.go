@@ -128,7 +128,7 @@ func (nc *NeuralCortex) Predict(input []float64) CortexPrediction {
 		return CortexPrediction{}
 	}
 
-	output := nc.forward(input)
+	output := nc.forwardReadOnly(input)
 
 	// Find best prediction
 	bestIdx := 0
@@ -174,8 +174,11 @@ func (nc *NeuralCortex) Train(input []float64, targetLabel string) {
 		}
 	}
 
-	// Forward pass (stores activations)
-	output := nc.forward(input)
+	// Forward pass (store activations under write lock for backprop)
+	output, hidden := nc.forwardPass(input)
+	nc.lastInput = input
+	nc.lastHidden = hidden
+	nc.lastOutput = output
 
 	// Backpropagation
 	nc.backward(input, output, target)
@@ -188,8 +191,16 @@ func (nc *NeuralCortex) Train(input []float64, targetLabel string) {
 	}
 }
 
-// forward runs the forward pass: input → hidden (ReLU) → output (softmax).
-func (nc *NeuralCortex) forward(input []float64) []float64 {
+// forwardReadOnly runs the forward pass without storing activations.
+// Safe to call under RLock (no writes to shared state).
+func (nc *NeuralCortex) forwardReadOnly(input []float64) []float64 {
+	output, _ := nc.forwardPass(input)
+	return output
+}
+
+// forwardPass runs the forward pass: input → hidden (ReLU) → output (softmax).
+// Returns output and hidden activations without writing shared state.
+func (nc *NeuralCortex) forwardPass(input []float64) ([]float64, []float64) {
 	// Hidden layer: h = ReLU(W1^T * x + b1)
 	hidden := make([]float64, nc.HiddenSize)
 	for j := 0; j < nc.HiddenSize; j++ {
@@ -210,14 +221,7 @@ func (nc *NeuralCortex) forward(input []float64) []float64 {
 		logits[j] = sum
 	}
 
-	output := softmax(logits)
-
-	// Store for backprop
-	nc.lastInput = input
-	nc.lastHidden = hidden
-	nc.lastOutput = output
-
-	return output
+	return softmax(logits), hidden
 }
 
 // backward performs backpropagation and updates weights.

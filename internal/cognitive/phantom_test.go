@@ -2,6 +2,7 @@ package cognitive
 
 import (
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -395,6 +396,62 @@ func TestPhantomCacheInvalidate(t *testing.T) {
 	size, _ := pr.CacheStats()
 	if size != 0 {
 		t.Errorf("after invalidation, cache size = %d, want 0", size)
+	}
+}
+
+// --- Race Condition Tests ---
+
+func TestPhantomCacheConcurrentAccess(t *testing.T) {
+	pr := NewPhantomReasoner()
+
+	var wg sync.WaitGroup
+
+	// Concurrent BuildChainCached with different queries
+	for g := 0; g < 10; g++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			query := "find " + string(rune('a'+id))
+			steps := []synthStep{
+				{Tool: "grep", Args: map[string]string{"pattern": query}, Result: "file.go:1:" + query},
+			}
+			for i := 0; i < 20; i++ {
+				pr.BuildChainCached(query, steps)
+			}
+		}(g)
+	}
+
+	// Concurrent InvalidateCache
+	for g := 0; g < 3; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 10; i++ {
+				pr.InvalidateCache()
+			}
+		}()
+	}
+
+	// Concurrent CacheStats
+	for g := 0; g < 3; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 20; i++ {
+				pr.CacheStats()
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// Should not crash; cache may be empty or populated
+	size, max := pr.CacheStats()
+	if max != 200 {
+		t.Errorf("max cache should be 200, got %d", max)
+	}
+	if size < 0 {
+		t.Errorf("cache size should be non-negative, got %d", size)
 	}
 }
 

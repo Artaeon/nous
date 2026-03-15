@@ -1,8 +1,10 @@
 package cognitive
 
 import (
+	"math"
 	"path/filepath"
 	"regexp"
+	"sync"
 	"testing"
 	"time"
 )
@@ -343,6 +345,98 @@ func TestCrystalAgePenalty(t *testing.T) {
 }
 
 // --- Benchmark ---
+
+// --- Race Condition Tests ---
+
+func TestCrystalConcurrentMatchCrystallize(t *testing.T) {
+	cb := NewCrystalBook("")
+
+	// Pre-populate
+	for i := 0; i < 5; i++ {
+		pipe := NewPipeline("initial query with keywords")
+		pipe.AddStep("read", "initial result data")
+		cb.Crystallize("initial query about component "+string(rune('a'+i)), pipe, "Initial answer that is long enough to be crystallized")
+	}
+
+	var wg sync.WaitGroup
+
+	// 5 goroutines doing Match
+	for g := 0; g < 5; g++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				cb.Match("query about component " + string(rune('a'+id)))
+			}
+		}(g)
+	}
+
+	// 5 goroutines doing Crystallize
+	for g := 0; g < 5; g++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for i := 0; i < 20; i++ {
+				pipe := NewPipeline("concurrent crystallize test")
+				pipe.AddStep("grep", "match found in file.go")
+				query := "concurrent query " + string(rune('a'+id)) + " iteration " + string(rune('0'+i%10))
+				cb.Crystallize(query, pipe, "Concurrent answer that is long enough to crystallize properly")
+			}
+		}(g)
+	}
+
+	wg.Wait()
+
+	if cb.Size() < 1 {
+		t.Errorf("crystal book should have at least 1 crystal, got %d", cb.Size())
+	}
+}
+
+// --- Formula Verification Tests ---
+
+func TestCrystalTemporalDecayFormula(t *testing.T) {
+	now := time.Now()
+
+	// crystalValue uses: successRate*2.0 + uses*0.1, then *= recencyFactor,
+	// then + recency bonus (1.0 for <1 day, 0.5 for <7 days, 0 otherwise)
+	// recencyFactor = 1/(1 + daysSinceUse/14)
+
+	recentCrystal := Crystal{Uses: 5, Successes: 5, LastUsed: now, CreatedAt: now}
+	weekOldCrystal := Crystal{Uses: 5, Successes: 5, LastUsed: now.Add(-3 * 24 * time.Hour), CreatedAt: now}
+	oldCrystal := Crystal{Uses: 5, Successes: 5, LastUsed: now.Add(-30 * 24 * time.Hour), CreatedAt: now}
+
+	recentVal := crystalValue(&recentCrystal)
+	weekVal := crystalValue(&weekOldCrystal)
+	oldVal := crystalValue(&oldCrystal)
+
+	// Recent > week-old > month-old
+	if recentVal <= weekVal {
+		t.Errorf("recent (%f) should exceed week-old (%f)", recentVal, weekVal)
+	}
+	if weekVal <= oldVal {
+		t.Errorf("week-old (%f) should exceed month-old (%f)", weekVal, oldVal)
+	}
+
+	// Verify exact values:
+	// Base: 5/5 * 2.0 + 5*0.1 = 2.5
+	// Recent: recencyFactor ~1.0, bonus +1.0 → 2.5 * 1.0 + 1.0 = 3.5
+	expectedRecent := 2.5*1.0 + 1.0
+	if math.Abs(recentVal-expectedRecent) > 0.05 {
+		t.Errorf("recent value = %f, want ~%f", recentVal, expectedRecent)
+	}
+
+	// 3-day-old: recencyFactor = 1/(1+3/14) ≈ 0.824, bonus +0.5
+	expectedWeek := 2.5/(1.0+3.0/14.0) + 0.5
+	if math.Abs(weekVal-expectedWeek) > 0.05 {
+		t.Errorf("week value = %f, want ~%f", weekVal, expectedWeek)
+	}
+
+	// 30-day-old: recencyFactor = 1/(1+30/14) ≈ 0.318, no bonus
+	expectedOld := 2.5 / (1.0 + 30.0/14.0)
+	if math.Abs(oldVal-expectedOld) > 0.05 {
+		t.Errorf("old value = %f, want ~%f", oldVal, expectedOld)
+	}
+}
 
 func BenchmarkCrystalMatch(b *testing.B) {
 	cb := NewCrystalBook("")

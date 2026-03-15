@@ -223,6 +223,40 @@ func TestBuildCrystalFromPattern(t *testing.T) {
 	}
 }
 
+func TestAutoCrystallizerMixedSuccessFailure(t *testing.T) {
+	book := NewCrystalBook("")
+	mem := memory.NewEpisodicMemory("", nil)
+
+	// 4 successes with ["grep"] — above threshold
+	for i := 0; i < 4; i++ {
+		mem.Record(memory.Episode{
+			Timestamp: time.Now().Add(time.Duration(i) * time.Second),
+			Input:     "search for pattern",
+			ToolsUsed: []string{"grep"},
+			Success:   true,
+			Duration:  100,
+		})
+	}
+	// 5 failures with same tools — should NOT count toward crystallization
+	for i := 0; i < 5; i++ {
+		mem.Record(memory.Episode{
+			Timestamp: time.Now().Add(time.Duration(10+i) * time.Second),
+			Input:     "search for pattern",
+			ToolsUsed: []string{"grep"},
+			Success:   false,
+			Duration:  200,
+		})
+	}
+
+	ac := NewAutoCrystallizer(book, mem)
+	created := ac.ForceRun()
+
+	// Only successes should count: 4 >= threshold of 3
+	if created < 1 {
+		t.Errorf("4 successful episodes should crystallize, got %d created", created)
+	}
+}
+
 func TestBuildCrystalFromPatternEmpty(t *testing.T) {
 	ac := &AutoCrystallizer{book: NewCrystalBook("")}
 

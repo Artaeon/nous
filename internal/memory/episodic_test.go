@@ -4,6 +4,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -422,3 +423,111 @@ func TestFailurePatterns(t *testing.T) {
 		t.Errorf("failure count = %d, want 3", patterns[0].Count)
 	}
 }
+
+// --- Race Condition Tests ---
+
+func TestEpisodicMemoryConcurrentRecordSearch(t *testing.T) {
+	em := NewEpisodicMemory("", nil)
+
+	var wg sync.WaitGroup
+
+	// 5 goroutines recording
+	for g := 0; g < 5; g++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				em.Record(Episode{
+					Timestamp: time.Now(),
+					Input:     "concurrent query from goroutine",
+					Output:    "answer",
+					ToolsUsed: []string{"grep", "read"},
+					Success:   true,
+				})
+			}
+		}(g)
+	}
+
+	// 5 goroutines searching
+	for g := 0; g < 5; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				_ = em.SearchKeyword("concurrent query", 5)
+				_ = em.Recent(3)
+				_ = em.Size()
+				_ = em.SuccessRate()
+				_ = em.ToolUsageStats()
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	if em.Size() < 250 {
+		t.Errorf("should have at least 250 episodes, got %d", em.Size())
+	}
+}
+
+// --- Edge Case Tests ---
+
+func TestSuccessfulToolEpisodesOrdering(t *testing.T) {
+	em := NewEpisodicMemory("", nil)
+
+	for i := 0; i < 5; i++ {
+		em.Record(Episode{
+			Timestamp: time.Now().Add(time.Duration(i) * time.Second),
+			Input:     "query " + string(rune('A'+i)),
+			Output:    "answer",
+			ToolsUsed: []string{"grep"},
+			Success:   true,
+		})
+	}
+
+	results := em.SuccessfulToolEpisodes("grep", 5)
+	if len(results) != 5 {
+		t.Fatalf("expected 5, got %d", len(results))
+	}
+	// Most recent first
+	if results[0].Input != "query E" {
+		t.Errorf("first should be most recent 'query E', got %q", results[0].Input)
+	}
+	if results[4].Input != "query A" {
+		t.Errorf("last should be oldest 'query A', got %q", results[4].Input)
+	}
+	// Verify timestamp ordering
+	for i := 0; i < len(results)-1; i++ {
+		if results[i].Timestamp.Before(results[i+1].Timestamp) {
+			t.Errorf("episode %d should be after episode %d", i, i+1)
+		}
+	}
+}
+
+func TestSuccessPatternsExactThreshold(t *testing.T) {
+	em := NewEpisodicMemory("", nil)
+
+	// Exactly 3 occurrences — at threshold
+	for i := 0; i < 3; i++ {
+		em.Record(Episode{
+			Timestamp: time.Now().Add(time.Duration(i) * time.Second),
+			Input:     "exact threshold query",
+			ToolsUsed: []string{"read"},
+			Success:   true,
+		})
+	}
+
+	patterns := em.SuccessPatterns(3) // minOccurrences = 3
+	if len(patterns) != 1 {
+		t.Errorf("exactly-at-threshold should produce 1 pattern, got %d", len(patterns))
+	}
+
+	// Just below threshold
+	patterns = em.SuccessPatterns(4)
+	if len(patterns) != 0 {
+		t.Errorf("below threshold should produce 0 patterns, got %d", len(patterns))
+	}
+}
+
+// Ensure math import is used
+var _ = math.Abs

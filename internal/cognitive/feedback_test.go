@@ -1,6 +1,7 @@
 package cognitive
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -153,5 +154,175 @@ func TestFeedbackLoopGrowthSync(t *testing.T) {
 	// Quality should be above default 0.5 after success + growth boost
 	if report[0].Quality <= 0.5 {
 		t.Errorf("quality = %f, should be above 0.5 after success + growth boost", report[0].Quality)
+	}
+}
+
+// --- Race Condition Tests ---
+
+func TestFeedbackLoopConcurrentCallbacks(t *testing.T) {
+	cortex := NewNeuralCortex(64, 32, []string{"grep", "read", "write", "ls"}, "")
+	episodic := memory.NewEpisodicMemory("", nil)
+	vctx := NewVirtualContext(1500)
+	vctx.AddSource(ContextSource{Name: "knowledge", Size: 100, Priority: 50})
+
+	fl := NewFeedbackLoop(cortex, episodic, vctx, nil, nil)
+
+	var wg sync.WaitGroup
+
+	// Concurrent OnToolSuccess
+	for g := 0; g < 5; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				fl.OnToolSuccess("query", "grep", []string{"grep"})
+			}
+		}()
+	}
+
+	// Concurrent OnToolFailure
+	for g := 0; g < 5; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				fl.OnToolFailure("bad query", "shell")
+			}
+		}()
+	}
+
+	// Concurrent OnFirewallViolation
+	for g := 0; g < 5; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				fl.OnFirewallViolation("danger", "wrong output")
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// Should not crash; verify stats are plausible
+	stats := fl.Stats()
+	if stats.CortexTrainCount == 0 {
+		t.Error("cortex should have been trained")
+	}
+}
+
+// --- Edge Case Tests ---
+
+func TestFeedbackLoopPartialComponents(t *testing.T) {
+	// Cortex only — no episodic, no vctx, no growth, no crystals
+	t.Run("cortex_only", func(t *testing.T) {
+		cortex := NewNeuralCortex(64, 32, []string{"grep", "read"}, "")
+		fl := NewFeedbackLoop(cortex, nil, nil, nil, nil)
+		fl.OnToolSuccess("query", "grep", nil)
+		fl.OnToolFailure("query", "read")
+		fl.OnFirewallViolation("query", "bad")
+		if cortex.TrainCount == 0 {
+			t.Error("cortex should have been trained")
+		}
+	})
+
+	// Episodic only
+	t.Run("episodic_only", func(t *testing.T) {
+		ep := memory.NewEpisodicMemory("", nil)
+		fl := NewFeedbackLoop(nil, ep, nil, nil, nil)
+		fl.OnToolSuccess("query", "grep", nil)
+		fl.OnToolFailure("query", "read")
+		fl.OnFirewallViolation("query", "bad")
+		// Firewall violation records to episodic
+		if ep.Size() != 1 {
+			t.Errorf("expected 1 episode from firewall, got %d", ep.Size())
+		}
+	})
+
+	// VCtx only
+	t.Run("vctx_only", func(t *testing.T) {
+		vc := NewVirtualContext(1500)
+		vc.AddSource(ContextSource{Name: "knowledge", Size: 100, Priority: 50})
+		fl := NewFeedbackLoop(nil, nil, vc, nil, nil)
+		fl.OnToolSuccess("query", "grep", nil)
+		fl.OnToolFailure("query", "read")
+		fl.OnFirewallViolation("query", "bad")
+		// Should not crash
+	})
+
+	// Nothing at all
+	t.Run("no_components", func(t *testing.T) {
+		fl := NewFeedbackLoop(nil, nil, nil, nil, nil)
+		fl.OnToolSuccess("query", "grep", nil)
+		fl.OnToolFailure("query", "read")
+		fl.OnFirewallViolation("query", "bad")
+		stats := fl.Stats()
+		if stats.CortexTrainCount != 0 {
+			t.Error("nil cortex should have 0 train count")
+		}
+	})
+}
+
+// --- Integration Test ---
+
+func TestFeedbackLoopIntegration(t *testing.T) {
+	labels := []string{"grep", "read", "write", "ls", "edit"}
+	cortex := NewNeuralCortex(64, 32, labels, "")
+	episodic := memory.NewEpisodicMemory("", nil)
+	vctx := NewVirtualContext(1500)
+	vctx.AddSource(ContextSource{Name: "knowledge", Size: 50000, Priority: 70})
+	growth := NewPersonalGrowth("")
+	crystals := NewCrystalBook("")
+
+	fl := NewFeedbackLoop(cortex, episodic, vctx, growth, crystals)
+
+	// Seed episodic memory with similar past successes
+	for i := 0; i < 5; i++ {
+		episodic.Record(memory.Episode{
+			Timestamp: time.Now().Add(time.Duration(i) * time.Second),
+			Input:     "find function definition in code",
+			ToolsUsed: []string{"grep"},
+			Success:   true,
+			Duration:  100,
+		})
+	}
+
+	// Record growth interactions
+	for i := 0; i < 10; i++ {
+		growth.RecordInteraction("find function definition")
+	}
+
+	// Now trigger 20 successes
+	initialTrain := cortex.TrainCount
+	for i := 0; i < 20; i++ {
+		fl.OnToolSuccess("find function definition in code", "grep", []string{"grep"})
+	}
+
+	// Cortex should have trained with memory replay (more than 20 times)
+	trainDelta := cortex.TrainCount - initialTrain
+	if trainDelta < 20 {
+		t.Errorf("cortex should have trained at least 20 times, got %d", trainDelta)
+	}
+
+	// With past episodes matching, should train >20 (memory boost)
+	if trainDelta <= 20 {
+		t.Logf("note: memory boost trained %d times (expected >20 with replay)", trainDelta)
+	}
+
+	// VCtx should have recorded successes
+	report := vctx.SourceHealthReport()
+	if len(report) > 0 && report[0].Quality <= 0.5 {
+		t.Errorf("quality should be above 0.5 after 20 successes, got %f", report[0].Quality)
+	}
+
+	// Auto-crystallizer should be created
+	if fl.AutoCryst == nil {
+		t.Error("auto-crystallizer should be created when crystals and episodic are provided")
+	}
+
+	// Stats should reflect all activity
+	stats := fl.Stats()
+	if stats.CortexTrainCount < 20 {
+		t.Errorf("cortex train count should be >= 20, got %d", stats.CortexTrainCount)
 	}
 }

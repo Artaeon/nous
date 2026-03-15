@@ -1,7 +1,9 @@
 package cognitive
 
 import (
+	"math"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -348,6 +350,121 @@ func TestRecordQuality(t *testing.T) {
 }
 
 // --- Benchmark ---
+
+// --- Race Condition Tests ---
+
+func TestVirtualContextConcurrentAccess(t *testing.T) {
+	vc := NewVirtualContext(1500)
+	vc.AddSource(ContextSource{
+		Name: "test-src", Type: SourceKnowledge, Size: 50000, Priority: 70,
+		Query: func(query string, budget int) []ContextSlice {
+			return []ContextSlice{{Source: "test-src", Content: "content about " + query, Tokens: 10, Relevance: 0.8}}
+		},
+	})
+
+	var wg sync.WaitGroup
+
+	// RecordSuccess goroutines
+	for g := 0; g < 5; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				vc.RecordSuccess("test-src")
+			}
+		}()
+	}
+
+	// RecordFailure goroutines
+	for g := 0; g < 5; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				vc.RecordFailure("test-src")
+			}
+		}()
+	}
+
+	// RecordQuality goroutines
+	for g := 0; g < 5; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				vc.RecordQuality("test-src", 0.8)
+			}
+		}()
+	}
+
+	// SourceHealthReport goroutines
+	for g := 0; g < 5; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				_ = vc.SourceHealthReport()
+			}
+		}()
+	}
+
+	// Weave goroutines
+	for g := 0; g < 5; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 20; i++ {
+				a := vc.Weave("concurrent query")
+				if a == nil {
+					t.Error("Weave should never return nil")
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	if vc.SourceCount() != 1 {
+		t.Errorf("should still have 1 source, got %d", vc.SourceCount())
+	}
+}
+
+// --- Formula Verification Tests ---
+
+func TestQualityEMAFormula(t *testing.T) {
+	vc := NewVirtualContext(1500)
+
+	// EMA: new = alpha*value + (1-alpha)*old, alpha=0.1
+	// First value sets quality directly
+	vc.RecordQuality("src", 0.5)
+	if math.Abs(vc.sourceQuality["src"]-0.5) > 1e-10 {
+		t.Errorf("first quality should be 0.5, got %f", vc.sourceQuality["src"])
+	}
+
+	// Second: 0.1*0.9 + 0.9*0.5 = 0.54
+	vc.RecordQuality("src", 0.9)
+	expected := 0.1*0.9 + 0.9*0.5
+	if math.Abs(vc.sourceQuality["src"]-expected) > 1e-10 {
+		t.Errorf("second quality should be %f, got %f", expected, vc.sourceQuality["src"])
+	}
+
+	// Third: 0.1*0.2 + 0.9*0.54 = 0.506
+	prev := expected
+	vc.RecordQuality("src", 0.2)
+	expected = 0.1*0.2 + 0.9*prev
+	if math.Abs(vc.sourceQuality["src"]-expected) > 1e-10 {
+		t.Errorf("third quality should be %f, got %f", expected, vc.sourceQuality["src"])
+	}
+
+	// Independent sources don't interfere
+	vc.RecordQuality("other", 1.0)
+	if math.Abs(vc.sourceQuality["other"]-1.0) > 1e-10 {
+		t.Errorf("independent source should be 1.0, got %f", vc.sourceQuality["other"])
+	}
+	if math.Abs(vc.sourceQuality["src"]-expected) > 1e-10 {
+		t.Errorf("original source should be unchanged at %f, got %f", expected, vc.sourceQuality["src"])
+	}
+}
 
 func BenchmarkVirtualContextWeave(b *testing.B) {
 	vc := NewVirtualContext(1500)
