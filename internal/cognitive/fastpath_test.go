@@ -227,6 +227,10 @@ func TestClassifyQuery_ComplexPatternPriority(t *testing.T) {
 		"git status",
 		"compile the project",
 		"build a container",
+		"what files are in internal/cognitive/",
+		"find all test files",
+		"list go files",
+		"show all spec files",
 	}
 	for _, q := range mustBeComplex {
 		if path := c.ClassifyQuery(q); path != PathFull {

@@ -32,7 +32,7 @@ var complexPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(read|write|create|delete|edit|open|save|move|rename|copy)\b.*(file|directory|folder|dir|path)`),
 	regexp.MustCompile(`(?i)\b(find|search|grep|look for|locate)\b.*(file|code|function|class|error|bug|todo|pattern|log)`),
 	regexp.MustCompile(`(?i)\b(run|execute|compile|build|test|deploy|install)\b`),
-	regexp.MustCompile(`(?i)\b(git|commit|push|pull|merge|branch|diff|rebase)\b`),
+	regexp.MustCompile(`(?i)\b(git|commits?|push|pull|merge|branch|diff|rebase)\b`),
 	regexp.MustCompile(`(?i)\b(list|show|display)\b.*(file|director|folder|process|port)`),
 
 	// Web and network
@@ -49,6 +49,8 @@ var complexPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(grep|search|find)\b\s+\S+`),
 	regexp.MustCompile(`(?i)\b(how many|count)\b.*\bfiles?\b`),
 	regexp.MustCompile(`(?i)\b(largest|biggest|smallest|newest|oldest)\b.*\bfiles?\b`),
+	regexp.MustCompile(`(?i)\bwhat\s+files\b.*\b(?:in|inside|under)\b`),
+	regexp.MustCompile(`(?i)\b(?:find|list|show)\s+(?:all\s+)?(?:test|spec|mock|go|py|js|ts|java|rust)\s+files?\b`),
 
 	// Tool invocations
 	regexp.MustCompile(`(?i)\b(use|call|invoke|run)\b.*(tool|command|script|shell|bash|terminal)`),
@@ -143,17 +145,18 @@ func (c *FastPathClassifier) ClassifyQuery(query string) QueryPath {
 		}
 	}
 
-	// Short messages (under 5 words) without tool keywords are fast.
+	// Check medium patterns before short-message heuristic — questions like
+	// "what is quantum entanglement" (4 words) need medium, not fast.
 	words := strings.Fields(query)
-	if len(words) < 5 {
-		return PathFast
-	}
-
-	// Check medium patterns.
 	for _, pat := range mediumPatterns {
 		if pat.MatchString(query) {
 			return PathMedium
 		}
+	}
+
+	// Short messages (under 5 words) that didn't match medium patterns are fast.
+	if len(words) < 5 {
+		return PathFast
 	}
 
 	// Short-ish messages (under 8 words) are medium (need some context).

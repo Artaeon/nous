@@ -321,11 +321,11 @@ func (r *ModelRouter) ClientForQuery(query string) *ollama.Client {
 
 	switch path {
 	case PathFast:
-		return r.ClientFor(TaskPerception) // smallest model
-	case PathMedium:
-		return r.ClientFor(TaskCompression) // mid-tier model
+		return r.ClientFor(TaskPerception) // smallest model for greetings/trivial
 	default:
-		return r.ClientFor(TaskReasoning) // largest model
+		// Medium and full both use the reasoning model — knowledge queries
+		// need the best model, not the compression/fast model.
+		return r.ClientFor(TaskReasoning)
 	}
 }
 
@@ -337,8 +337,6 @@ func (r *ModelRouter) QueryRoute(query string) string {
 	switch path {
 	case PathFast:
 		return r.Route(TaskPerception)
-	case PathMedium:
-		return r.Route(TaskCompression)
 	default:
 		return r.Route(TaskReasoning)
 	}

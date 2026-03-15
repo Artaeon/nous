@@ -144,7 +144,19 @@ var globSuperlativePattern = regexp.MustCompile(`(?i)(?:find|show|list|get)\s+(?
 var gitPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(?:git|show)\s+(status|log|diff|branch|remote|blame|stash|show)`),
 	regexp.MustCompile(`(?i)(?:show|what(?:'s| is| are))\s+(?:the\s+)?(?:git\s+)?(?:status|changes|modifications|modified files?)`),
-	regexp.MustCompile(`(?i)(?:show|what(?:'s| is| are))\s+(?:the\s+)?(?:recent\s+)?(?:commit|change)\s*(?:history|log)`),
+	regexp.MustCompile(`(?i)(?:show|what(?:'s| is| are))\s+(?:the\s+)?(?:recent|last|latest)\s+(?:commits?|changes?)(?:\s*(?:history|log))?`),
+	regexp.MustCompile(`(?i)(?:show|what(?:'s| is| are))\s+(?:the\s+)?(?:commit|change)\s*(?:history|log)`),
+}
+
+// fileQualifierGlob maps common file qualifiers (not extensions) to glob patterns.
+var fileQualifierGlob = map[string]string{
+	"test":    "**/*_test*",
+	"tests":   "**/*_test*",
+	"spec":    "**/*_spec*",
+	"specs":   "**/*_spec*",
+	"mock":    "**/*mock*",
+	"mocks":   "**/*mock*",
+	"fixture": "**/*fixture*",
 }
 
 // fileExtToGlob maps common language to glob filters
@@ -418,9 +430,12 @@ func (ic *IntentCompiler) tryGlobIntent(input string) []CompiledAction {
 			continue
 		}
 
-		// If it's a bare extension name like "go", convert to glob
+		// Check if the word is a file qualifier (test, spec, mock) not an extension
 		pattern := raw
-		if glob, ok := fileExtToGlob[strings.ToLower(raw)]; ok {
+		if qualGlob, ok := fileQualifierGlob[strings.ToLower(raw)]; ok {
+			pattern = qualGlob
+		} else if glob, ok := fileExtToGlob[strings.ToLower(raw)]; ok {
+			// Bare extension name like "go" → "**/*.go"
 			pattern = "**/" + glob
 		} else if !strings.Contains(raw, "*") && !strings.Contains(raw, "/") {
 			pattern = "**/*." + raw
@@ -449,11 +464,14 @@ func (ic *IntentCompiler) tryGitIntent(input string) []CompiledAction {
 
 		// Map natural language to git subcommands
 		lower := strings.ToLower(input)
+		hasRecent := strings.Contains(lower, "recent") || strings.Contains(lower, "last") || strings.Contains(lower, "latest")
 		switch {
+		case strings.Contains(lower, "log") || strings.Contains(lower, "history") ||
+			strings.Contains(lower, "commit") ||
+			(hasRecent && (strings.Contains(lower, "changes") || strings.Contains(lower, "commits"))):
+			cmd = "log --oneline -15"
 		case strings.Contains(lower, "status") || strings.Contains(lower, "changes") || strings.Contains(lower, "modified"):
 			cmd = "status"
-		case strings.Contains(lower, "log") || strings.Contains(lower, "history") || strings.Contains(lower, "commit"):
-			cmd = "log --oneline -15"
 		case strings.Contains(lower, "diff"):
 			cmd = "diff"
 		case strings.Contains(lower, "branch"):

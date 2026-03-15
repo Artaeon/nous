@@ -271,6 +271,10 @@ func TestIntentCompileGit(t *testing.T) {
 		{"what changed", "what are the changes", "status"},
 		{"git log", "show the commit history", "log --oneline -15"},
 		{"git diff", "git diff", "diff"},
+		{"show recent commits", "show recent commits", "log --oneline -15"},
+		{"last commits", "show last commits", "log --oneline -15"},
+		{"latest commits", "show latest commits", "log --oneline -15"},
+		{"recent changes", "show recent changes", "log --oneline -15"},
 	}
 
 	for _, tt := range tests {
@@ -386,6 +390,9 @@ func TestIntentCompileGlob(t *testing.T) {
 		{"find go files", "find all go files", "**/*.go"},
 		{"find matching", `find files matching "*.test.js"`, "*.test.js"},
 		{"list py files", "list all python files", "**/*.py"},
+		{"find test files", "find all test files", "**/*_test*"},
+		{"find spec files", "find all spec files", "**/*_spec*"},
+		{"find mock files", "find all mock files", "**/*mock*"},
 	}
 
 	for _, tt := range tests {

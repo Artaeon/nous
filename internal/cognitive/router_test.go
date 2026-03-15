@@ -242,9 +242,9 @@ func TestClientForQueryRouting(t *testing.T) {
 		{"thanks", "tinyllama:latest", "thanks is fast"},
 		{"hi there", "tinyllama:latest", "short greeting is fast"},
 
-		// Medium queries → mid-tier model (compression/tinyllama in 2-model setup)
-		{"explain why the sky is blue", "tinyllama:latest", "explanation is medium"},
-		{"what is quantum entanglement", "tinyllama:latest", "definitional question is medium"},
+		// Medium queries → reasoning model (knowledge queries need quality)
+		{"explain why the sky is blue", "qwen2.5:1.5b", "explanation is medium"},
+		{"what is quantum entanglement", "qwen2.5:1.5b", "definitional question is medium"},
 
 		// Full queries → reasoning model (qwen)
 		{"read the file go.mod and tell me the version", "qwen2.5:1.5b", "file read is full"},
