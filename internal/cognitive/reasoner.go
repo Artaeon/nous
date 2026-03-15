@@ -220,6 +220,16 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 					r.finishReasoning(percept, pipe, answer)
 					return nil
 				}
+				// Phantom evidence collected but LLM couldn't synthesize —
+				// publish the raw evidence so the user isn't left with silence.
+				if raw := pipe.LastResult(); raw != "" {
+					fallback := "Here's what I found:\n\n" + raw
+					r.Conv.User(percept.Raw)
+					r.Conv.Assistant(fallback)
+					r.publishAnswer(fallback)
+					r.finishReasoning(percept, pipe, fallback)
+					return nil
+				}
 			} else {
 				// Fallback: original scaffold path
 				scaffold := NewNeuralScaffold()
@@ -238,6 +248,16 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 					answer = r.firewallCheck(answer, pipe)
 					r.publishAnswer(answer)
 					r.finishReasoning(percept, pipe, answer)
+					return nil
+				}
+				// Scaffold evidence collected but LLM couldn't synthesize —
+				// publish the raw evidence so the user isn't left with silence.
+				if raw := pipe.LastResult(); raw != "" {
+					fallback := "Here's what I found:\n\n" + raw
+					r.Conv.User(percept.Raw)
+					r.Conv.Assistant(fallback)
+					r.publishAnswer(fallback)
+					r.finishReasoning(percept, pipe, fallback)
 					return nil
 				}
 			}
@@ -292,6 +312,13 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 		} else if ok {
 			r.publishAnswer(answer)
 			r.finishReasoning(percept, pipe, answer)
+			return nil
+		} else if raw := pipe.LastResult(); raw != "" {
+			// Grounding evidence collected but LLM couldn't synthesize —
+			// publish the raw evidence so the user isn't left with silence.
+			fallback := "Here's what I found:\n\n" + raw
+			r.publishAnswer(fallback)
+			r.finishReasoning(percept, pipe, fallback)
 			return nil
 		}
 	}
