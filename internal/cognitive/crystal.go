@@ -2,6 +2,7 @@ package cognitive
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"regexp"
 	"sort"
@@ -285,11 +286,16 @@ func (cb *CrystalBook) matchScore(c *Crystal, query string, words []string) floa
 		score += 0.15
 	}
 
-	// Success rate bonus
+	// Success rate bonus — log-scaled usage so proven crystals rank higher
+	// but can't dominate purely on volume. Capped at 0.15.
 	if c.Uses > 2 {
 		rate := float64(c.Successes) / float64(c.Uses)
 		if rate >= 0.8 {
-			score += 0.1
+			usageBonus := math.Log2(float64(c.Uses)+1) * 0.02
+			if usageBonus > 0.15 {
+				usageBonus = 0.15
+			}
+			score += usageBonus
 		}
 	}
 
@@ -332,8 +338,10 @@ func crystalValue(c *Crystal) float64 {
 		value += float64(c.Successes) / float64(c.Uses) * 2.0
 	}
 
-	// Usage frequency
-	value += float64(c.Uses) * 0.1
+	// Usage frequency — log-scaled so early uses matter most.
+	// log2(1+1)*0.2 = 0.2, log2(10+1)*0.2 = 0.69, log2(100+1)*0.2 = 1.33
+	// This prevents high-use crystals from dominating purely on volume.
+	value += math.Log2(float64(c.Uses)+1) * 0.2
 
 	// Temporal decay: crystals lose value exponentially over time.
 	// Half-life of 14 days — unused crystals fade, frequently used ones stay.

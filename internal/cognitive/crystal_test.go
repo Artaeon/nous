@@ -397,7 +397,7 @@ func TestCrystalConcurrentMatchCrystallize(t *testing.T) {
 func TestCrystalTemporalDecayFormula(t *testing.T) {
 	now := time.Now()
 
-	// crystalValue uses: successRate*2.0 + uses*0.1, then *= recencyFactor,
+	// crystalValue uses: successRate*2.0 + log2(uses+1)*0.2, then *= recencyFactor,
 	// then + recency bonus (1.0 for <1 day, 0.5 for <7 days, 0 otherwise)
 	// recencyFactor = 1/(1 + daysSinceUse/14)
 
@@ -417,24 +417,115 @@ func TestCrystalTemporalDecayFormula(t *testing.T) {
 		t.Errorf("week-old (%f) should exceed month-old (%f)", weekVal, oldVal)
 	}
 
-	// Verify exact values:
-	// Base: 5/5 * 2.0 + 5*0.1 = 2.5
-	// Recent: recencyFactor ~1.0, bonus +1.0 → 2.5 * 1.0 + 1.0 = 3.5
-	expectedRecent := 2.5*1.0 + 1.0
+	// Verify exact values with log2 formula:
+	// Base: 5/5 * 2.0 + log2(6)*0.2 = 2.0 + 0.5170 = 2.5170
+	base := 2.0 + math.Log2(6)*0.2
+	// Recent: recencyFactor ~1.0, bonus +1.0 → base * 1.0 + 1.0
+	expectedRecent := base*1.0 + 1.0
 	if math.Abs(recentVal-expectedRecent) > 0.05 {
 		t.Errorf("recent value = %f, want ~%f", recentVal, expectedRecent)
 	}
 
 	// 3-day-old: recencyFactor = 1/(1+3/14) ≈ 0.824, bonus +0.5
-	expectedWeek := 2.5/(1.0+3.0/14.0) + 0.5
+	expectedWeek := base/(1.0+3.0/14.0) + 0.5
 	if math.Abs(weekVal-expectedWeek) > 0.05 {
 		t.Errorf("week value = %f, want ~%f", weekVal, expectedWeek)
 	}
 
 	// 30-day-old: recencyFactor = 1/(1+30/14) ≈ 0.318, no bonus
-	expectedOld := 2.5 / (1.0 + 30.0/14.0)
+	expectedOld := base / (1.0 + 30.0/14.0)
 	if math.Abs(oldVal-expectedOld) > 0.05 {
 		t.Errorf("old value = %f, want ~%f", oldVal, expectedOld)
+	}
+}
+
+func TestCrystalValueLog2Scaling(t *testing.T) {
+	now := time.Now()
+
+	// Verify log2 usage scaling: early uses matter more than later ones.
+	// log2(1+1)*0.2 = 0.2, log2(10+1)*0.2 ≈ 0.69, log2(100+1)*0.2 ≈ 1.33
+	// Compared to linear: 1*0.1 = 0.1, 10*0.1 = 1.0, 100*0.1 = 10.0
+	// Log scaling prevents high-volume crystals from dominating.
+	c1 := Crystal{Uses: 1, Successes: 1, LastUsed: now, CreatedAt: now}
+	c10 := Crystal{Uses: 10, Successes: 10, LastUsed: now, CreatedAt: now}
+	c100 := Crystal{Uses: 100, Successes: 100, LastUsed: now, CreatedAt: now}
+
+	v1 := crystalValue(&c1)
+	v10 := crystalValue(&c10)
+	v100 := crystalValue(&c100)
+
+	// All should be increasing
+	if v10 <= v1 {
+		t.Errorf("10-use (%f) should exceed 1-use (%f)", v10, v1)
+	}
+	if v100 <= v10 {
+		t.Errorf("100-use (%f) should exceed 10-use (%f)", v100, v10)
+	}
+
+	// Key property: 100-use should NOT be 10x the value of 10-use
+	// With linear (0.1): 100*0.1/10*0.1 = 10x. With log2: log2(101)/log2(11) ≈ 1.93x
+	ratio := v100 / v10
+	if ratio > 3.0 {
+		t.Errorf("100-use/10-use ratio = %f, should be < 3.0 with log scaling", ratio)
+	}
+
+	// Verify exact log2 component for 10 uses:
+	// log2(11) * 0.2 ≈ 0.6918
+	expectedLog := math.Log2(11) * 0.2
+	// Full value: successRate*2.0 + log component + recency bonus
+	// 10/10*2.0 + 0.6918 + 1.0 (recent bonus) = 3.6918
+	expectedVal := 2.0 + expectedLog + 1.0
+	if math.Abs(v10-expectedVal) > 0.01 {
+		t.Errorf("10-use value = %f, want %f", v10, expectedVal)
+	}
+}
+
+func TestMatchScoreLogUsageBonus(t *testing.T) {
+	cb := NewCrystalBook("")
+
+	// Crystal with high usage and high success rate
+	highUse := Crystal{
+		Uses: 50, Successes: 48,
+		LastUsed: time.Now().Add(-2 * time.Hour), // not recent
+		Trigger: &CrystalTrigger{
+			Keywords: []string{"version", "project"},
+			MinWords: 3,
+			MaxWords: 12,
+		},
+	}
+
+	// Crystal with low usage but same success rate
+	lowUse := Crystal{
+		Uses: 3, Successes: 3,
+		LastUsed: time.Now().Add(-2 * time.Hour),
+		Trigger: &CrystalTrigger{
+			Keywords: []string{"version", "project"},
+			MinWords: 3,
+			MaxWords: 12,
+		},
+	}
+
+	words := []string{"what", "version", "does", "this", "project", "use"}
+	query := "what version does this project use"
+
+	highScore := cb.matchScore(&highUse, query, words)
+	lowScore := cb.matchScore(&lowUse, query, words)
+
+	// High-use should score higher due to log-scaled usage bonus
+	if highScore <= lowScore {
+		t.Errorf("high-use score (%f) should exceed low-use (%f)", highScore, lowScore)
+	}
+
+	// But the difference should be modest (capped at 0.15)
+	diff := highScore - lowScore
+	if diff > 0.16 {
+		t.Errorf("score difference %f exceeds cap of 0.15", diff)
+	}
+
+	// Verify the cap: log2(51)*0.02 ≈ 0.1135, which is < 0.15
+	expectedBonus := math.Log2(51) * 0.02
+	if expectedBonus > 0.15 {
+		t.Errorf("expected bonus %f should be < 0.15 for 50 uses", expectedBonus)
 	}
 }
 
