@@ -15,7 +15,7 @@ make test-short      # Quick subset
 
 | Metric | Value |
 |--------|-------|
-| Total test cases | **1,161** |
+| Total test cases | **1,174** |
 | Test files | **73** |
 | Test lines of code | **19,643+** |
 | Race conditions | **0** |
@@ -25,7 +25,7 @@ make test-short      # Quick subset
 
 ## Test Architecture
 
-### Unit Tests (1,100+ tests)
+### Unit Tests (1,174 tests)
 
 Every package has unit tests covering:
 - **Cognitive pipeline**: Pipeline compression, step management, context building

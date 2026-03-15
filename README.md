@@ -13,7 +13,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/version-0.6.0-blue?style=flat-square" alt="v0.6.0">
   <img src="https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.22+">
-  <img src="https://img.shields.io/badge/tests-1161_passing-brightgreen?style=flat-square" alt="1161 tests">
+  <img src="https://img.shields.io/badge/tests-1174_passing-brightgreen?style=flat-square" alt="1174 tests">
   <img src="https://img.shields.io/badge/binary-~10_MB-blue?style=flat-square" alt="~10 MB binary">
   <img src="https://img.shields.io/badge/deps-zero-brightgreen?style=flat-square" alt="Zero deps">
   <img src="https://img.shields.io/badge/cloud-not_required-green?style=flat-square" alt="No Cloud">
