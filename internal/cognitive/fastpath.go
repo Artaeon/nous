@@ -44,6 +44,12 @@ var complexPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(analyze|scan|index|inspect)\b.*(code|project|repo|codebase)`),
 	regexp.MustCompile(`(?i)\b(what does|how does|explain).*(this|the) (code|function|file|module|class|method)\b`),
 
+	// Direct file references (e.g., "read go.mod", "show main.go", "cat README.md")
+	regexp.MustCompile(`(?i)\b(read|cat|show|open|view|display)\b\s+\S+\.\w+`),
+	regexp.MustCompile(`(?i)\b(grep|search|find)\b\s+\S+`),
+	regexp.MustCompile(`(?i)\b(how many|count)\b.*\bfiles?\b`),
+	regexp.MustCompile(`(?i)\b(largest|biggest|smallest|newest|oldest)\b.*\bfiles?\b`),
+
 	// Tool invocations
 	regexp.MustCompile(`(?i)\b(use|call|invoke|run)\b.*(tool|command|script|shell|bash|terminal)`),
 	regexp.MustCompile(`(?i)\b(set|change|update|modify)\b.*(config|setting|preference|environment)`),
