@@ -3,6 +3,7 @@ package cognitive
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -262,6 +263,200 @@ func TestRecipeBookPrune(t *testing.T) {
 
 	if rb.Size() > 40 {
 		t.Errorf("prune should reduce to 40, got %d", rb.Size())
+	}
+}
+
+func TestRecipeBookReplayParameterSubstitution(t *testing.T) {
+	rb := NewRecipeBook("")
+
+	// Manually add a recipe with parameters
+	rb.mu.Lock()
+	rb.recipes = append(rb.recipes, Recipe{
+		ID:      "test_param",
+		Name:    "grep→read",
+		Trigger: "question",
+		Steps: []RecipeStep{
+			{Tool: "grep", Args: map[string]string{"pattern": "$PATTERN"}},
+			{Tool: "read", Args: map[string]string{"path": "$FILE"}},
+		},
+		Params:    []string{"$PATTERN", "$FILE"},
+		Uses:      1,
+		Successes: 1,
+	})
+	rb.mu.Unlock()
+
+	steps, err := rb.Replay("test_param", map[string]string{
+		"$PATTERN": "NewReasoner",
+		"$FILE":    "internal/cognitive/reasoner.go",
+	})
+	if err != nil {
+		t.Fatalf("Replay error: %v", err)
+	}
+	if steps[0].Args["pattern"] != "NewReasoner" {
+		t.Errorf("pattern not substituted: %s", steps[0].Args["pattern"])
+	}
+	if steps[1].Args["path"] != "internal/cognitive/reasoner.go" {
+		t.Errorf("path not substituted: %s", steps[1].Args["path"])
+	}
+}
+
+func TestRecipeBookMatchSortsByScore(t *testing.T) {
+	rb := NewRecipeBook("")
+
+	// Add recipes with different relevance
+	rb.mu.Lock()
+	rb.recipes = append(rb.recipes,
+		Recipe{
+			ID: "low", Trigger: "question",
+			Keywords: []string{"unrelated", "stuff"},
+			Steps:    []RecipeStep{{Tool: "ls"}, {Tool: "read"}},
+			Uses: 10, Successes: 9,
+		},
+		Recipe{
+			ID: "high", Trigger: "question",
+			Keywords: []string{"find", "function", "definition"},
+			Steps:    []RecipeStep{{Tool: "grep"}, {Tool: "read"}},
+			Uses: 5, Successes: 5,
+		},
+	)
+	rb.mu.Unlock()
+
+	matches := rb.Match("question", "find the function definition")
+	if len(matches) == 0 {
+		t.Fatal("expected matches")
+	}
+	if matches[0].ID != "high" {
+		t.Errorf("expected 'high' recipe first, got %q", matches[0].ID)
+	}
+}
+
+func TestRecipeBookMatchMaxResults(t *testing.T) {
+	rb := NewRecipeBook("")
+
+	// Add 10 matching recipes
+	rb.mu.Lock()
+	for i := 0; i < 10; i++ {
+		rb.recipes = append(rb.recipes, Recipe{
+			ID:       string(rune('A' + i)),
+			Trigger:  "question",
+			Keywords: []string{"find", "function"},
+			Steps:    []RecipeStep{{Tool: "grep"}, {Tool: "read"}},
+			Uses:     1,
+			Successes: 1,
+		})
+	}
+	rb.mu.Unlock()
+
+	matches := rb.Match("question", "find the function")
+	if len(matches) > 3 {
+		t.Errorf("expected max 3 matches, got %d", len(matches))
+	}
+}
+
+func TestRecipeBookEmptyInputMatch(t *testing.T) {
+	rb := NewRecipeBook("")
+	rb.mu.Lock()
+	rb.recipes = append(rb.recipes, Recipe{
+		ID: "x", Trigger: "question", Keywords: []string{"test"},
+		Steps: []RecipeStep{{Tool: "ls"}, {Tool: "read"}},
+	})
+	rb.mu.Unlock()
+
+	// Empty input should return nil
+	matches := rb.Match("question", "")
+	if len(matches) != 0 {
+		t.Errorf("empty input should return no matches, got %d", len(matches))
+	}
+}
+
+func TestLooksLikePathVariants(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"internal/cognitive/reasoner.go", true},
+		{"main.go", true},
+		{"README.md", true},
+		{"script.py", true},
+		{"index.js", true},
+		{"style.ts", true},
+		{"some-dir/", true},
+		{"plain-text", false},
+		{"1234", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := looksLikePath(tt.input); got != tt.want {
+			t.Errorf("looksLikePath(%q) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestGenerateRecipeNameLong(t *testing.T) {
+	var steps []StepResult
+	for i := 0; i < 5; i++ {
+		steps = append(steps, StepResult{ToolName: "tool" + string(rune('A'+i))})
+	}
+	name := generateRecipeName(steps)
+	if name == "" {
+		t.Error("expected non-empty name for long recipe")
+	}
+	// Should contain step count for >3 unique tools
+	if len(steps) > 3 {
+		if !strings.Contains(name, "steps") {
+			t.Errorf("long recipe name should mention step count, got: %s", name)
+		}
+	}
+}
+
+func TestRecipeConfidenceEdgeCases(t *testing.T) {
+	tests := []struct {
+		name       string
+		uses       int
+		successes  int
+		wantConf   float64
+	}{
+		{"new recipe", 0, 0, 0.5},
+		{"perfect", 10, 10, 1.0},
+		{"half", 10, 5, 0.5},
+		{"poor", 10, 1, 0.1},
+		{"single use success", 1, 1, 1.0},
+		{"single use failure", 1, 0, 0.0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := Recipe{Uses: tt.uses, Successes: tt.successes}
+			if got := r.Confidence(); got != tt.wantConf {
+				t.Errorf("Confidence() = %f, want %f", got, tt.wantConf)
+			}
+		})
+	}
+}
+
+func TestExtractKeywordsStopWords(t *testing.T) {
+	// All stop words should be filtered
+	keywords := extractKeywords("the and for that this with from are was have has can will how what where when who which does please could would should")
+	if len(keywords) != 0 {
+		t.Errorf("all stop words should be filtered, got: %v", keywords)
+	}
+}
+
+func TestExtractKeywordsShortWords(t *testing.T) {
+	// Words < 3 chars should be filtered
+	keywords := extractKeywords("a i go do to be it of on at")
+	if len(keywords) != 0 {
+		t.Errorf("short words should be filtered, got: %v", keywords)
+	}
+}
+
+func TestExtractKeywordsPunctuation(t *testing.T) {
+	keywords := extractKeywords("find, the 'function' definition! in (main.go)")
+	found := make(map[string]bool)
+	for _, k := range keywords {
+		found[k] = true
+	}
+	if !found["find"] || !found["function"] || !found["definition"] {
+		t.Errorf("punctuation should be stripped, got: %v", keywords)
 	}
 }
 
