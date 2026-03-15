@@ -242,6 +242,15 @@ func main() {
 		reasoner.Neuroplastic, embedGrounder, reasoner.Crystals,
 	)
 
+	// 10. Cognitive Firewall — post-LLM validation and correction
+	reasoner.Firewall = cognitive.NewCognitiveFirewall(reasoner.Distiller)
+
+	// 11. Phantom Reasoning — pre-computed chains, model only writes conclusion
+	reasoner.Phantom = cognitive.NewPhantomReasoner()
+
+	// 12. Adaptive Prompt Distillation — JIT-compiled minimal prompts per query type
+	reasoner.PromptDist = cognitive.NewPromptDistiller()
+
 	reasoner.AssistantContext = func(input string, recent string) string {
 		return buildAssistantContext(assistantStore, input, recent, time.Now())
 	}

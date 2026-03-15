@@ -56,6 +56,9 @@ type Reasoner struct {
 	Distiller        *SelfDistiller
 	EmbedGround      *EmbedGrounder
 	Exo              *Exocortex
+	Firewall         *CognitiveFirewall
+	Phantom          *PhantomReasoner
+	PromptDist       *PromptDistiller
 	OnToken          func(token string, done bool)
 	OnStatus         func(status string)
 	Confirm          ConfirmFunc
@@ -184,24 +187,52 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 				}
 			}
 
-			// Tier 2 fallback: use LLM with neural scaffolding (facts pre-filled)
-			scaffold := NewNeuralScaffold()
-			sp := scaffold.BuildFromMultipleResults(percept.Raw, steps)
+			// Tier 2 fallback: Phantom Reasoning + Neural Scaffolding
+			// Pre-compute the entire reasoning chain so the LLM only writes the conclusion.
+			if r.Phantom != nil {
+				chain := r.Phantom.BuildChain(percept.Raw, steps)
+				if chain.CanBypass {
+					// Phantom bypass: chain contains a complete answer
+					r.Conv.User(percept.Raw)
+					r.Conv.Assistant(chain.DirectAnswer)
+					r.publishAnswer(chain.DirectAnswer)
+					r.finishReasoning(percept, pipe, chain.DirectAnswer)
+					return nil
+				}
+				// Seed the LLM with phantom chain
+				memoryFacts := r.recallKeyFacts(percept.Raw)
+				answer, ok, err := r.finalAnswerFromEvidence(percept.Raw, "", memoryFacts, pipe,
+					chain.FullContext+"\n[Complete the reasoning above with a concise final answer.]",
+				)
+				if err != nil {
+					return err
+				}
+				if ok {
+					answer = r.firewallCheck(answer, pipe)
+					r.publishAnswer(answer)
+					r.finishReasoning(percept, pipe, answer)
+					return nil
+				}
+			} else {
+				// Fallback: original scaffold path
+				scaffold := NewNeuralScaffold()
+				sp := scaffold.BuildFromMultipleResults(percept.Raw, steps)
 
-			memoryFacts := r.recallKeyFacts(percept.Raw)
-			answer, ok, err := r.finalAnswerFromEvidence(percept.Raw, "", memoryFacts, pipe,
-				sp.ResponseSeed+"\n\n[Continue from the text above. Add detail from the evidence. Be direct.]",
-			)
-			if err != nil {
-				return err
-			}
-			if ok {
-				// Validate: catch hallucinations
-				answer = scaffold.ValidateResponse(answer, sp.ResponseSeed, actions[0].Tool,
-					pipe.LastResult())
-				r.publishAnswer(answer)
-				r.finishReasoning(percept, pipe, answer)
-				return nil
+				memoryFacts := r.recallKeyFacts(percept.Raw)
+				answer, ok, err := r.finalAnswerFromEvidence(percept.Raw, "", memoryFacts, pipe,
+					sp.ResponseSeed+"\n\n[Continue from the text above. Add detail from the evidence. Be direct.]",
+				)
+				if err != nil {
+					return err
+				}
+				if ok {
+					answer = scaffold.ValidateResponse(answer, sp.ResponseSeed, actions[0].Tool,
+						pipe.LastResult())
+					answer = r.firewallCheck(answer, pipe)
+					r.publishAnswer(answer)
+					r.finishReasoning(percept, pipe, answer)
+					return nil
+				}
 			}
 			// Fall through to normal reasoning
 		}
@@ -368,6 +399,7 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 				if parsed.Answer != "" {
 					finalAnswer = parsed.Answer
 				}
+				finalAnswer = r.firewallCheck(finalAnswer, pipe)
 				r.publishAnswer(finalAnswer)
 				if parsed.Think != "" {
 					r.Board.Set("last_thought", parsed.Think)
@@ -452,13 +484,27 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 			// Force stop if gate says so
 			if gateCheck.ForceStop {
 				r.emitStatus(fmt.Sprintf("  %s⚠ forcing final answer%s", ColorYellow, ColorReset))
+				// Phantom reasoning: pre-compute chain from pipeline evidence
+				forceInstruction := "[System: You MUST give your final answer now. No more tool calls. Use the evidence you already collected and state any remaining uncertainty plainly.]"
+				if r.Phantom != nil {
+					chain := r.Phantom.BuildChainFromPipeline(percept.Raw, pipe)
+					if chain.CanBypass {
+						r.publishAnswer(chain.DirectAnswer)
+						r.finishReasoning(percept, pipe, chain.DirectAnswer)
+						return nil
+					}
+					if chain.FullContext != "" {
+						forceInstruction = chain.FullContext + "\n" + forceInstruction
+					}
+				}
 				answer, ok, err := r.finalAnswerFromEvidence(percept.Raw, assistantFacts, memoryFacts, pipe,
-					"[System: You MUST give your final answer now. No more tool calls. Use the evidence you already collected and state any remaining uncertainty plainly.]",
+					forceInstruction,
 				)
 				if err != nil {
 					return err
 				}
 				if ok {
+					answer = r.firewallCheck(answer, pipe)
 					r.publishAnswer(answer)
 					r.finishReasoning(percept, pipe, answer)
 					return nil
@@ -477,9 +523,23 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 	}
 
 	r.emitStatus(fmt.Sprintf("  %s⚠ reached maximum tool iterations; finalizing from evidence%s", ColorYellow, ColorReset))
+	// Phantom reasoning: pre-compute chain from all pipeline evidence
+	maxIterInstruction := "[System: You have reached the tool limit. Give the best final answer you can from the evidence collected so far. Do not call tools.]"
+	if r.Phantom != nil {
+		chain := r.Phantom.BuildChainFromPipeline(percept.Raw, pipe)
+		if chain.CanBypass {
+			r.publishAnswer(chain.DirectAnswer)
+			r.finishReasoning(percept, pipe, chain.DirectAnswer)
+			return nil
+		}
+		if chain.FullContext != "" {
+			maxIterInstruction = chain.FullContext + "\n" + maxIterInstruction
+		}
+	}
 	if answer, ok, err := r.finalAnswerFromEvidence(percept.Raw, assistantFacts, memoryFacts, pipe,
-		"[System: You have reached the tool limit. Give the best final answer you can from the evidence collected so far. Do not call tools.]",
+		maxIterInstruction,
 	); err == nil && ok {
+		answer = r.firewallCheck(answer, pipe)
 		r.publishAnswer(answer)
 		r.finishReasoning(percept, pipe, answer)
 		return nil
@@ -493,7 +553,17 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 func (r *Reasoner) finalAnswerFromEvidence(userQuery, assistantFacts, memoryFacts string, pipe *Pipeline, instruction string) (string, bool, error) {
 	finalConv := NewConversation(10)
 	var sys strings.Builder
-	sys.WriteString("You are Nous in final-answer mode. Give a direct plain-text answer using only the evidence already collected. Do not call tools. Do not emit JSON. If evidence is incomplete, say so clearly.\n")
+	// Use distilled final-answer prompt if available
+	if r.PromptDist != nil {
+		lang := ""
+		if CurrentProject != nil {
+			lang = CurrentProject.Language
+		}
+		sys.WriteString(r.PromptDist.BuildFinalAnswerPrompt(lang))
+		sys.WriteString("\n")
+	} else {
+		sys.WriteString("You are Nous in final-answer mode. Give a direct plain-text answer using only the evidence already collected. Do not call tools. Do not emit JSON. If evidence is incomplete, say so clearly.\n")
+	}
 	if assistantFacts != "" {
 		sys.WriteString("\n")
 		sys.WriteString(assistantFacts)
@@ -538,6 +608,36 @@ func (r *Reasoner) finalAnswerFromEvidence(userQuery, assistantFacts, memoryFact
 
 	finalConv.Assistant(answer)
 	return answer, true, nil
+}
+
+// firewallCheck validates and corrects an LLM response using the cognitive firewall.
+func (r *Reasoner) firewallCheck(answer string, pipe *Pipeline) string {
+	if r.Firewall == nil {
+		return answer
+	}
+
+	ctx := &FirewallContext{
+		Query:    r.currentInput,
+		Response: answer,
+	}
+
+	// Populate tool results from pipeline
+	if pipe != nil {
+		for _, s := range pipe.steps {
+			ctx.ToolResults = append(ctx.ToolResults, FirewallToolResult{
+				Tool:   s.ToolName,
+				Result: s.RawResult,
+			})
+		}
+	}
+
+	// Detect language from project
+	if CurrentProject != nil {
+		ctx.Language = CurrentProject.Language
+	}
+
+	corrected, _ := r.Firewall.Validate(ctx)
+	return corrected
 }
 
 func (r *Reasoner) tryResearchAndWrite(input string) (string, bool, error) {
@@ -888,6 +988,21 @@ var WorkDir string
 // Uses the THINK/ACT/OBSERVE protocol and progressive tool disclosure to
 // minimize token usage while maximizing reasoning quality.
 func (r *Reasoner) compactSystemPrompt() string {
+	// Adaptive Prompt Distillation: if distiller available, classify and build minimal prompt
+	if r.PromptDist != nil && r.currentInput != "" {
+		class := r.PromptDist.Classify(r.currentInput)
+		toolList := r.toolPrompt()
+		if len(r.activeTools) > 0 {
+			toolList = ToolPromptForSubset(r.activeTools)
+		}
+		lang := ""
+		if CurrentProject != nil {
+			lang = CurrentProject.Language
+		}
+		return r.PromptDist.BuildSystemPrompt(class, toolList, lang)
+	}
+
+	// Fallback: original monolithic prompt
 	wd := WorkDir
 	if wd == "" {
 		wd = "."
