@@ -1641,6 +1641,19 @@ func (r *Reasoner) recallKeyFacts(input string) string {
 func (r *Reasoner) recallMemories(input string) string {
 	var parts []string
 
+	// Always inject user profile from LTM so the model knows who it's talking to.
+	if r.LongTermMem != nil {
+		var profileLines []string
+		for _, e := range r.LongTermMem.All() {
+			if strings.HasPrefix(e.Key, "user.") {
+				profileLines = append(profileLines, fmt.Sprintf("- %s: %s", e.Key, e.Value))
+			}
+		}
+		if len(profileLines) > 0 {
+			parts = append(parts, "[User Profile]\n"+strings.Join(profileLines, "\n"))
+		}
+	}
+
 	// Recall from working memory (most relevant items)
 	if r.WorkingMem != nil {
 		items := r.WorkingMem.MostRelevant(5)

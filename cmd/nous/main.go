@@ -505,6 +505,10 @@ func main() {
 		return
 	}
 
+	// --- First-run onboarding ---
+	// If LTM is empty, ask the user a few questions to personalize Nous.
+	cognitive.RunOnboarding(os.Stdin, ltm, wm)
+
 	// --- REPL Mode ---
 	fmt.Print(cognitive.Panel("Quick start", []string{
 		cognitive.Styled(cognitive.ColorCyan, "/compass") + " triage view — do now, focus, next anchor, risks",
