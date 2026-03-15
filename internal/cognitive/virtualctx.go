@@ -1,0 +1,454 @@
+package cognitive
+
+import (
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+)
+
+// VirtualContext is the innovation that makes a 4k-token model feel like it has
+// 200k+ tokens of context. It doesn't expand the model's window — it ensures
+// the RIGHT context is always in the window.
+//
+// How it works:
+//   - Every memory system (knowledge, episodic, working, long-term, growth) is
+//     a "context source" with its own size measured in tokens
+//   - The virtual context SIZE is the sum of all sources (can be millions of tokens)
+//   - For each query, the Context Weaver selects the most relevant slices from
+//     ALL sources and assembles them into a compact context that fits the model
+//   - The model never sees irrelevant context — every token in the window matters
+//
+// This is fundamentally different from RAG:
+//   - RAG retrieves chunks and dumps them in. Virtual Context WEAVES them.
+//   - Each source gets a budget proportional to its relevance to the query.
+//   - Sources compete for context space — the most relevant wins.
+//   - The weaver tracks what context was useful (via success feedback) and
+//     learns to allocate better over time.
+//
+// Result: A 1.5b model with 4k context that has access to encyclopedias,
+// past conversations, personal preferences, and domain knowledge — and uses
+// them intelligently because the context is CURATED, not dumped.
+type VirtualContext struct {
+	mu      sync.RWMutex
+	sources []ContextSource
+	budget  int // actual model context budget in tokens
+
+	// Allocation learning
+	successCounts map[string]int // source name → times its context led to good answers
+	totalQueries  int
+}
+
+// ContextSource represents one source of context that can be queried.
+type ContextSource struct {
+	Name     string
+	Type     SourceType
+	Size     int // total tokens available in this source
+	Query    func(query string, budget int) []ContextSlice
+	Priority int // base priority (0-100)
+}
+
+// SourceType classifies context sources for budget allocation.
+type SourceType int
+
+const (
+	SourceKnowledge SourceType = iota // encyclopedic knowledge
+	SourceEpisodic                    // past interactions
+	SourceWorking                     // recent conversation context
+	SourcePersonal                    // user preferences and profile
+	SourceDomain                      // domain-specific (code, science, etc.)
+)
+
+// ContextSlice is one piece of retrieved context with metadata.
+type ContextSlice struct {
+	Source    string
+	Content  string
+	Tokens   int     // estimated token count
+	Relevance float64 // 0.0-1.0 relevance to query
+}
+
+// ContextAssembly is the final woven context ready for the model.
+type ContextAssembly struct {
+	Slices       []ContextSlice
+	TotalTokens  int
+	SourcesUsed  int
+	VirtualSize  int // total tokens across all sources
+	Utilization  float64 // what fraction of budget was used
+}
+
+// NewVirtualContext creates a new virtual context engine.
+func NewVirtualContext(budgetTokens int) *VirtualContext {
+	if budgetTokens <= 0 {
+		budgetTokens = 1500 // conservative default for small models
+	}
+	return &VirtualContext{
+		budget:        budgetTokens,
+		successCounts: make(map[string]int),
+	}
+}
+
+// AddSource registers a new context source.
+func (vc *VirtualContext) AddSource(source ContextSource) {
+	vc.mu.Lock()
+	defer vc.mu.Unlock()
+	vc.sources = append(vc.sources, source)
+}
+
+// TotalSize returns the total virtual context size across all sources.
+func (vc *VirtualContext) TotalSize() int {
+	vc.mu.RLock()
+	defer vc.mu.RUnlock()
+	total := 0
+	for _, s := range vc.sources {
+		total += s.Size
+	}
+	return total
+}
+
+// SourceCount returns the number of registered context sources.
+func (vc *VirtualContext) SourceCount() int {
+	vc.mu.RLock()
+	defer vc.mu.RUnlock()
+	return len(vc.sources)
+}
+
+// Weave assembles the optimal context for a query from all sources.
+// This is the core innovation — intelligent context assembly.
+func (vc *VirtualContext) Weave(query string) *ContextAssembly {
+	vc.mu.Lock()
+	vc.totalQueries++
+	vc.mu.Unlock()
+
+	vc.mu.RLock()
+	sources := make([]ContextSource, len(vc.sources))
+	copy(sources, vc.sources)
+	vc.mu.RUnlock()
+
+	if len(sources) == 0 {
+		return &ContextAssembly{VirtualSize: 0}
+	}
+
+	// Phase 1: Allocate budget proportionally to source priority and learned success
+	budgets := vc.allocateBudgets(sources)
+
+	// Phase 2: Query each source with its allocated budget
+	var allSlices []ContextSlice
+	for i, source := range sources {
+		if budgets[i] <= 0 || source.Query == nil {
+			continue
+		}
+		slices := source.Query(query, budgets[i])
+		allSlices = append(allSlices, slices...)
+	}
+
+	// Phase 3: Rank all slices by relevance and fit into budget
+	assembly := vc.assembleContext(allSlices)
+	assembly.VirtualSize = vc.TotalSize()
+
+	return assembly
+}
+
+// RecordSuccess records that a particular source's context led to a good answer.
+func (vc *VirtualContext) RecordSuccess(sourceName string) {
+	vc.mu.Lock()
+	defer vc.mu.Unlock()
+	vc.successCounts[sourceName]++
+}
+
+// Stats returns virtual context statistics.
+func (vc *VirtualContext) Stats() VirtualContextStats {
+	vc.mu.RLock()
+	defer vc.mu.RUnlock()
+
+	stats := VirtualContextStats{
+		TotalSources:  len(vc.sources),
+		BudgetTokens:  vc.budget,
+		TotalQueries:  vc.totalQueries,
+	}
+
+	for _, s := range vc.sources {
+		stats.VirtualTokens += s.Size
+		stats.SourceDetails = append(stats.SourceDetails, SourceDetail{
+			Name:     s.Name,
+			Type:     s.Type,
+			Tokens:   s.Size,
+			Successes: vc.successCounts[s.Name],
+		})
+	}
+
+	return stats
+}
+
+// VirtualContextStats holds statistics about the virtual context.
+type VirtualContextStats struct {
+	TotalSources  int
+	VirtualTokens int
+	BudgetTokens  int
+	TotalQueries  int
+	SourceDetails []SourceDetail
+}
+
+// SourceDetail has per-source statistics.
+type SourceDetail struct {
+	Name      string
+	Type      SourceType
+	Tokens    int
+	Successes int
+}
+
+// FormatStats returns a human-readable summary of virtual context stats.
+func (s VirtualContextStats) FormatStats() string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Virtual context: %s tokens across %d sources\n",
+		formatTokenCount(s.VirtualTokens), s.TotalSources))
+	sb.WriteString(fmt.Sprintf("Model budget: %d tokens per query\n", s.BudgetTokens))
+	sb.WriteString(fmt.Sprintf("Queries served: %d\n", s.TotalQueries))
+
+	if len(s.SourceDetails) > 0 {
+		sb.WriteString("Sources:\n")
+		for _, d := range s.SourceDetails {
+			sb.WriteString(fmt.Sprintf("  %-15s %8s tokens", d.Name, formatTokenCount(d.Tokens)))
+			if d.Successes > 0 {
+				sb.WriteString(fmt.Sprintf("  (%d hits)", d.Successes))
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	return sb.String()
+}
+
+// --- Internal ---
+
+// allocateBudgets distributes the token budget across sources.
+func (vc *VirtualContext) allocateBudgets(sources []ContextSource) []int {
+	budgets := make([]int, len(sources))
+
+	// Calculate weighted priorities (base priority + learned success bonus)
+	totalWeight := 0.0
+	weights := make([]float64, len(sources))
+
+	vc.mu.RLock()
+	for i, s := range sources {
+		w := float64(s.Priority)
+		if w <= 0 {
+			w = 50 // default priority
+		}
+		// Boost sources that have historically provided useful context
+		if successes, ok := vc.successCounts[s.Name]; ok && vc.totalQueries > 0 {
+			successRate := float64(successes) / float64(vc.totalQueries)
+			w *= (1.0 + successRate*2.0) // up to 3x boost for consistently useful sources
+		}
+		weights[i] = w
+		totalWeight += w
+	}
+	vc.mu.RUnlock()
+
+	if totalWeight == 0 {
+		return budgets
+	}
+
+	// Distribute budget proportionally
+	remaining := vc.budget
+	for i, w := range weights {
+		share := int(float64(vc.budget) * w / totalWeight)
+		// Minimum 50 tokens per source (enough for 1-2 sentences)
+		if share < 50 && sources[i].Size > 0 {
+			share = 50
+		}
+		if share > remaining {
+			share = remaining
+		}
+		budgets[i] = share
+		remaining -= share
+	}
+
+	// Distribute leftover tokens to highest-priority source
+	if remaining > 0 && len(sources) > 0 {
+		bestIdx := 0
+		for i, w := range weights {
+			if w > weights[bestIdx] {
+				bestIdx = i
+			}
+		}
+		budgets[bestIdx] += remaining
+	}
+
+	return budgets
+}
+
+// assembleContext ranks slices by relevance and fits them into the budget.
+func (vc *VirtualContext) assembleContext(slices []ContextSlice) *ContextAssembly {
+	if len(slices) == 0 {
+		return &ContextAssembly{}
+	}
+
+	// Sort by relevance (highest first)
+	sortSlicesByRelevance(slices)
+
+	var selected []ContextSlice
+	totalTokens := 0
+	sourcesUsed := make(map[string]bool)
+
+	for _, slice := range slices {
+		if slice.Relevance < 0.2 {
+			continue // skip very low relevance
+		}
+		tokens := slice.Tokens
+		if tokens <= 0 {
+			tokens = len(slice.Content) / 4 // rough estimate
+		}
+		if totalTokens+tokens > vc.budget {
+			// Try to fit a truncated version
+			remaining := vc.budget - totalTokens
+			if remaining > 50 && len(slice.Content) > 0 {
+				truncLen := remaining * 4 // rough chars from tokens
+				if truncLen < len(slice.Content) {
+					slice.Content = slice.Content[:truncLen] + "..."
+					tokens = remaining
+				}
+			} else {
+				continue
+			}
+		}
+		selected = append(selected, slice)
+		totalTokens += tokens
+		sourcesUsed[slice.Source] = true
+
+		if totalTokens >= vc.budget {
+			break
+		}
+	}
+
+	utilization := 0.0
+	if vc.budget > 0 {
+		utilization = float64(totalTokens) / float64(vc.budget)
+	}
+
+	return &ContextAssembly{
+		Slices:      selected,
+		TotalTokens: totalTokens,
+		SourcesUsed: len(sourcesUsed),
+		Utilization: utilization,
+	}
+}
+
+// FormatForPrompt converts a context assembly into text for the system prompt.
+func (a *ContextAssembly) FormatForPrompt() string {
+	if len(a.Slices) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	currentSource := ""
+
+	for _, slice := range a.Slices {
+		if slice.Source != currentSource {
+			if currentSource != "" {
+				sb.WriteString("\n")
+			}
+			currentSource = slice.Source
+		}
+		sb.WriteString(slice.Content)
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
+// sortSlicesByRelevance sorts context slices by relevance score (highest first).
+func sortSlicesByRelevance(slices []ContextSlice) {
+	// Simple insertion sort (slices are typically small)
+	for i := 1; i < len(slices); i++ {
+		for j := i; j > 0 && slices[j].Relevance > slices[j-1].Relevance; j-- {
+			slices[j], slices[j-1] = slices[j-1], slices[j]
+		}
+	}
+}
+
+// formatTokenCount formats a token count for human display.
+func formatTokenCount(tokens int) string {
+	switch {
+	case tokens >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(tokens)/1_000_000)
+	case tokens >= 1_000:
+		return fmt.Sprintf("%.1fK", float64(tokens)/1_000)
+	default:
+		return fmt.Sprintf("%d", tokens)
+	}
+}
+
+// --- Virtual Context Source Adapters ---
+
+// KnowledgeSource creates a ContextSource from a KnowledgeVec store.
+func KnowledgeSource(kv *KnowledgeVec) ContextSource {
+	return ContextSource{
+		Name:     "knowledge",
+		Type:     SourceKnowledge,
+		Size:     kv.Size() * 100, // ~100 tokens per chunk average
+		Priority: 70,
+		Query: func(query string, budget int) []ContextSlice {
+			maxChunks := budget / 100
+			if maxChunks < 1 {
+				maxChunks = 1
+			}
+			if maxChunks > 5 {
+				maxChunks = 5
+			}
+			results, err := kv.Search(query, maxChunks)
+			if err != nil || len(results) == 0 {
+				return nil
+			}
+			var slices []ContextSlice
+			for _, r := range results {
+				if r.Score < 0.3 {
+					continue
+				}
+				slices = append(slices, ContextSlice{
+					Source:    "knowledge",
+					Content:  r.Text,
+					Tokens:   len(r.Text) / 4,
+					Relevance: r.Score,
+				})
+			}
+			return slices
+		},
+	}
+}
+
+// GrowthSource creates a ContextSource from the personal growth system.
+func GrowthSource(g *PersonalGrowth) ContextSource {
+	return ContextSource{
+		Name:     "personal",
+		Type:     SourcePersonal,
+		Size:     g.totalTokens(),
+		Priority: 80, // personal context is high priority
+		Query: func(query string, budget int) []ContextSlice {
+			profile := g.ContextForQuery(query)
+			if profile == "" {
+				return nil
+			}
+			return []ContextSlice{{
+				Source:    "personal",
+				Content:  profile,
+				Tokens:   len(profile) / 4,
+				Relevance: 0.8, // personal context is always somewhat relevant
+			}}
+		},
+	}
+}
+
+// InteractionTimestamp tracks when context was last assembled for staleness detection.
+var lastWeaveTime time.Time
+
+// UpdateSourceSize updates the size of a named source (call when data changes).
+func (vc *VirtualContext) UpdateSourceSize(name string, newSize int) {
+	vc.mu.Lock()
+	defer vc.mu.Unlock()
+	for i := range vc.sources {
+		if vc.sources[i].Name == name {
+			vc.sources[i].Size = newSize
+			return
+		}
+	}
+}

@@ -59,6 +59,11 @@ type Reasoner struct {
 	Firewall         *CognitiveFirewall
 	Phantom          *PhantomReasoner
 	PromptDist       *PromptDistiller
+	Cortex           *NeuralCortex
+	Knowledge        *KnowledgeVec
+	Compiler         *ModelCompiler
+	VCtx             *VirtualContext
+	Growth           *PersonalGrowth
 	OnToken          func(token string, done bool)
 	OnStatus         func(status string)
 	Confirm          ConfirmFunc
@@ -1016,13 +1021,12 @@ func (r *Reasoner) compactSystemPrompt() string {
 
 	// Build minimal system prompt — every token counts for 1.5B models.
 	var sb strings.Builder
-	sb.WriteString("You are Nous, a local assistant for personal tasks and code. Be warm, concise.\n")
-	sb.WriteString("NEVER repeat instructions. NEVER invent file contents — read first.\n\n")
+	sb.WriteString("You are Nous, a personal AI assistant running fully on the user's machine. Be warm, helpful, concise.\n")
+	sb.WriteString("You have vast knowledge and tools. You grow and learn with every interaction.\n")
+	sb.WriteString("NEVER repeat instructions. NEVER invent facts — search your knowledge first.\n\n")
 	sb.WriteString("RULES:\n")
-	sb.WriteString("- Personal questions → answer from memory, be natural\n")
-	sb.WriteString("- Code questions → USE TOOLS to read actual code, then answer\n")
-	sb.WriteString("- read/show → read tool | create/write → write tool | edit/fix → edit tool\n")
-	sb.WriteString("- find/search → grep/glob tool | run command → shell tool\n")
+	sb.WriteString("- Answer from knowledge and memory. If unsure, use tools to find out.\n")
+	sb.WriteString("- read/show → read tool | create/write → write tool | find/search → grep/glob tool\n")
 	sb.WriteString("- Paths are relative to working directory below\n\n")
 	sb.WriteString("Tool call format:\n")
 	sb.WriteString(`{"tool": "NAME", "args": {"key": "value"}}`)
@@ -1557,6 +1561,20 @@ func (r *Reasoner) recallKeyFacts(input string) string {
 		}
 	}
 
+	// Virtual Context Engine — weave relevant context from ALL sources
+	// (knowledge, personal growth, episodic memory) into the prompt
+	if r.VCtx != nil {
+		assembly := r.VCtx.Weave(input)
+		if prompt := assembly.FormatForPrompt(); prompt != "" {
+			facts = append(facts, prompt)
+		}
+	} else if r.Knowledge != nil {
+		// Fallback: direct knowledge lookup if virtual context not available
+		if kCtx := r.knowledgeLookup(input); kCtx != "" {
+			facts = append(facts, kCtx)
+		}
+	}
+
 	if len(facts) == 0 {
 		return ""
 	}
@@ -2066,7 +2084,81 @@ func (r *Reasoner) finishReasoning(percept blackboard.Percept, pipe *Pipeline, f
 		}
 	}
 
+	// Train neural cortex on successful tool usage
+	if r.Cortex != nil && pipe.StepCount() >= 1 {
+		go r.trainCortex(percept.Raw, pipe)
+	}
+
+	// Personal growth — track user interests and interaction patterns
+	if r.Growth != nil {
+		go r.Growth.RecordInteraction(percept.Raw)
+	}
+
 	r.storeToMemory(percept.Raw, finalAnswer)
+}
+
+// trainCortex trains the neural cortex from a successful pipeline execution.
+// It uses a simple bag-of-words input vector and trains on the first tool used.
+func (r *Reasoner) trainCortex(query string, pipe *Pipeline) {
+	if r.Cortex == nil || pipe.StepCount() == 0 {
+		return
+	}
+	firstTool := pipe.steps[0].ToolName
+	if firstTool == "" {
+		return
+	}
+
+	// Build input vector from query (simple character frequency encoding)
+	input := CortexInputFromQuery(query, r.Cortex.InputSize)
+	r.Cortex.Train(input, firstTool)
+}
+
+// CortexInputFromQuery creates a numeric input vector from a query string.
+// Uses character frequency encoding normalized to unit length.
+func CortexInputFromQuery(query string, size int) []float64 {
+	vec := make([]float64, size)
+	lower := strings.ToLower(query)
+	for _, c := range lower {
+		idx := int(c) % size
+		vec[idx] += 1.0
+	}
+	// Normalize
+	norm := 0.0
+	for _, v := range vec {
+		norm += v * v
+	}
+	if norm > 0 {
+		norm = 1.0 / norm // fast inverse (no sqrt needed for training signal)
+		for i := range vec {
+			vec[i] *= norm
+		}
+	}
+	return vec
+}
+
+// predictTool uses the neural cortex to predict which tool to use for a query.
+func (r *Reasoner) predictTool(query string) *CortexPrediction {
+	if r.Cortex == nil {
+		return nil
+	}
+	input := CortexInputFromQuery(query, r.Cortex.InputSize)
+	pred := r.Cortex.Predict(input)
+	if pred.Confidence < 0.3 {
+		return nil
+	}
+	return &pred
+}
+
+// knowledgeLookup searches the knowledge store for relevant context.
+func (r *Reasoner) knowledgeLookup(query string) string {
+	if r.Knowledge == nil {
+		return ""
+	}
+	results, err := r.Knowledge.Search(query, 3)
+	if err != nil || len(results) == 0 {
+		return ""
+	}
+	return FormatKnowledgeContext(results)
 }
 
 // storeToMemory saves the current interaction context to working memory.

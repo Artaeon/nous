@@ -1,20 +1,21 @@
-<h1 align="center">
-  Nous
-</h1>
-
 <p align="center">
-  <strong>Native Orchestration of Unified Streams</strong>
+  <img src="assets/banner.svg" alt="Nous Banner" width="800">
 </p>
 
 <p align="center">
-  <em>An always-on local cognitive assistant with persistent memory, background reminders, and zero cloud dependencies.</em>
+  <strong>Your Personal AI That Thinks, Learns, and Grows With You</strong>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.0-blue?style=flat-square" alt="v0.6.0">
+  <em>100% local. Zero cloud. Zero API keys. Fully private.</em>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/version-0.8.0-blue?style=flat-square" alt="v0.8.0">
   <img src="https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.22+">
-  <img src="https://img.shields.io/badge/tests-1174_passing-brightgreen?style=flat-square" alt="1174 tests">
-  <img src="https://img.shields.io/badge/binary-~10_MB-blue?style=flat-square" alt="~10 MB binary">
+  <img src="https://img.shields.io/badge/knowledge-669_chunks-blueviolet?style=flat-square" alt="669 knowledge chunks">
+  <img src="https://img.shields.io/badge/virtual_context-66.9K_tokens-cyan?style=flat-square" alt="66.9K virtual tokens">
+  <img src="https://img.shields.io/badge/binary-~11_MB-blue?style=flat-square" alt="~11 MB binary">
   <img src="https://img.shields.io/badge/deps-zero-brightgreen?style=flat-square" alt="Zero deps">
   <img src="https://img.shields.io/badge/cloud-not_required-green?style=flat-square" alt="No Cloud">
   <img src="https://img.shields.io/badge/license-MIT-brightgreen?style=flat-square" alt="MIT License">
@@ -23,49 +24,31 @@
 ---
 
 > *"It is the active intellect that makes all things."*
-> &mdash; Aristotle, *De Anima*, on nous
+> &mdash; Aristotle, *De Anima*, on nous (νοῦς)
 
 ---
 
 ## What Is Nous
 
-Nous is an open-source **personal AI assistant** that runs **entirely on your local hardware** via [Ollama](https://ollama.ai). No cloud. No API keys. No data leaves your machine.
+Nous is an open-source **personal AI assistant** that runs **entirely on your local hardware** via [Ollama](https://ollama.ai). It's not a chatbot &mdash; it's a **cognitive system** that thinks, remembers, learns, and grows with you over time.
 
-It's built as a **concurrent cognitive architecture**: six independent processing streams (perceive, reason, plan, execute, reflect, learn) communicate through a shared blackboard, producing intelligent behavior from the interplay of simple, well-defined modules.
+Built as a **concurrent cognitive architecture** with six independent processing streams, a knowledge engine with 669 encyclopedic chunks, and a virtual context system that makes a 1.5B model feel like it has 200K+ tokens of context.
 
-The result is a **single ~10 MB Go binary** with zero external dependencies that can:
+**One ~11 MB Go binary. Zero dependencies. Zero cloud. Your data never leaves your machine.**
 
-- Remember personal preferences and tasks across restarts
-- Run background reminders and recurring daily check-ins
-- Generate recurring routines such as morning reviews and weekday inbox sweeps
-- Act as a local assistant for notes, files, shell commands, and web lookups
-- Still help with code, files, and terminal workflows when you need it
-- Chain up to 8 tool calls autonomously per turn
-- Remember every interaction forever (episodic memory with semantic search)
-- Learn successful tool sequences and replay them (tool choreography)
-- Watch your filesystem in real-time (inotify sentinel)
-- Speculatively pre-compute likely follow-up results (predictive cache)
-- Fine-tune itself from its own experience (LoRA training pipeline)
-- Run as an HTTP server with a web UI
-- Deploy anywhere with Docker, systemd, or a one-line install
+### What Nous Can Do
+
+- **Answer knowledge questions** &mdash; science, history, philosophy, technology, math, health, arts, and daily life topics from its 669-chunk knowledge base
+- **Remember and grow** &mdash; learns your interests, preferences, and personal facts over time
+- **Manage your day** &mdash; reminders, tasks, routines, morning briefings, daily compass
+- **Search and research** &mdash; web lookups, file exploration, semantic memory search
+- **Work with files** &mdash; read, write, edit, grep, organize &mdash; with undo support
+- **Help with code** &mdash; when needed, with 18 built-in tools and Go AST indexing
+- **Fine-tune itself** &mdash; learns from every interaction, can compile its experience into a custom model
+- **Run as a server** &mdash; HTTP API + web UI for remote access
+- **Deploy anywhere** &mdash; Docker, systemd, or one-line install
 
 All running on CPU with a 1.5B parameter model.
-
-### Quality at a Glance
-
-| Metric | Value |
-|--------|-------|
-| Production code | **23,843 lines** of Go |
-| Test code | **19,643 lines** |
-| Passing tests | **1,161** |
-| Benchmarks | **25** (all hot paths <1μs) |
-| Fuzz targets | **7** (200K+ executions, 0 crashes) |
-| Race conditions | **0** (`go test -race` clean) |
-| `go vet` warnings | **0** |
-| External dependencies | **0** |
-| Cognitive overhead per step | **~150μs** (0.03% of LLM time) |
-
-See [TESTING.md](TESTING.md), [BENCHMARKS.md](BENCHMARKS.md), and [ARCHITECTURE.md](ARCHITECTURE.md) for details.
 
 ---
 
@@ -75,18 +58,352 @@ See [TESTING.md](TESTING.md), [BENCHMARKS.md](BENCHMARKS.md), and [ARCHITECTURE.
 # 1. Install Ollama
 curl -fsSL https://ollama.ai/install.sh | sh
 ollama pull qwen2.5:1.5b
-ollama pull tinyllama   # optional: faster perception
+ollama pull nomic-embed-text    # for knowledge + episodic memory
+ollama pull tinyllama            # optional: faster perception
 
 # 2. Install Nous
 git clone https://github.com/artaeon/nous.git
 cd nous
 go build -o nous ./cmd/nous
 
-# 3. Run
+# 3. Load the knowledge base
 ./nous
+/ingest knowledge/01_science.txt
+/ingest knowledge/02_history.txt
+/ingest knowledge/03_philosophy.txt
+/ingest knowledge/04_technology.txt
+/ingest knowledge/05_geography.txt
+/ingest knowledge/06_mathematics.txt
+/ingest knowledge/07_literature.txt
+/ingest knowledge/08_health.txt
+/ingest knowledge/09_arts_music.txt
+/ingest knowledge/10_daily_life.txt
 ```
 
-That's it. No `npm install`. No Python virtualenv. No API keys.
+That's it. No `npm install`. No Python virtualenv. No API keys. No data leaves your machine.
+
+---
+
+## Architecture
+
+```
+                    ╔═══════════════════════════╗
+                    ║   Virtual Context Engine   ║
+                    ║   66.9K tokens across      ║
+                    ║   knowledge + personal      ║
+                    ╚═══════════╤═══════════════╝
+                                │
+              ╔═════════════════╧═══════════════════╗
+              ║          Blackboard (shared state)    ║
+              ╚══╤═══╤═══╤═══╤═══╤═══╤═════════════╝
+                 │   │   │   │   │   │
+           ┌─────┘   │   │   │   │   └─────┐
+     ╔═════╧═════╗ ╔═╧═══╧═╗ ╔═╧═══╧═╗ ╔══╧════╗
+     ║ Perceiver  ║ ║Reasoner║ ║Planner║ ║Learner║
+     ║ (intent)   ║ ║(tools) ║ ║(steps)║ ║(grow) ║
+     ╚═════╤═════╝ ╚═══╤═══╝ ╚═══╤═══╝ ╚══╤════╝
+           │            │         │          │
+     ╔═════╧═════╗ ╔═══╧═══╗ ╔══╧════╗ ╔══╧════════╗
+     ║  Router    ║ ║Pipeline║ ║Execute║ ║  Neural    ║
+     ║ (models)   ║ ║(fresh) ║ ║(run)  ║ ║  Cortex    ║
+     ╚════════════╝ ╚═══════╝ ╚═══════╝ ╚═══════════╝
+           │            │                      │
+     ╔═════╧════════════╧══════════════════════╧═════╗
+     ║              Memory System                      ║
+     ║  Working · Long-term · Episodic · Project       ║
+     ║  Knowledge Vec · Personal Growth                ║
+     ╚════════════════════════════════════════════════╝
+```
+
+### Six Cognitive Streams
+
+Each stream runs as an independent goroutine, communicating through the blackboard:
+
+| Stream | Role | What It Does |
+|--------|------|-------------|
+| **Perceiver** | Sense | Extracts intent + entities from raw input |
+| **Reasoner** | Think | Autonomous tool-calling agent (up to 8 steps) |
+| **Planner** | Plan | Decomposes goals into step sequences |
+| **Executor** | Act | Runs plan steps with tool calls |
+| **Reflector** | Evaluate | Detects loops, hallucinations, quality issues |
+| **Learner** | Grow | Extracts behavioral patterns, trains neural cortex |
+
+### 3-Tier Query Classification
+
+Not every question needs the full pipeline:
+
+| Tier | Path | When | Latency |
+|------|------|------|---------|
+| **Fast** | Single LLM call | Greetings, thanks, yes/no | ~1-2s |
+| **Medium** | LLM + knowledge context | Knowledge questions, explanations | ~3-5s |
+| **Full** | Complete cognitive pipeline | Tool use, file ops, complex tasks | ~5-15s |
+
+---
+
+## Key Innovations
+
+### 1. Virtual Context Engine
+
+**The innovation that makes a 4K-token model feel like 200K+.**
+
+Instead of cramming everything into the context window, the Virtual Context Engine *weaves* the most relevant information from all sources for each query:
+
+- **Knowledge Vec**: 669 encyclopedic chunks embedded with `nomic-embed-text`
+- **Personal Growth**: Learned interests, preferences, and personal facts
+- **Episodic Memory**: Every past interaction with semantic search
+- **Working Memory**: Current session context with decay
+
+Each source competes for context space. The weaver tracks what was useful and learns to allocate better over time.
+
+```
+  Total virtual context: 66.9K tokens
+  Model context window:  4K tokens
+  Budget per query:      1,500 tokens (most relevant slices)
+```
+
+### 2. Knowledge Vector Store
+
+669 knowledge chunks across 10 domains, embedded and searchable in microseconds:
+
+| Domain | Chunks | Topics |
+|--------|--------|--------|
+| Science | 83 | Physics, chemistry, biology, astronomy, earth science |
+| History | 80 | Ancient through modern, key figures |
+| Philosophy | 63 | Greek through 20th century, ethics |
+| Technology | 70 | CS, networking, AI/ML, languages, hardware |
+| Geography | 73 | Continents, countries, oceans, climate |
+| Mathematics | 60 | Arithmetic through advanced, famous mathematicians |
+| Literature | 60 | Classical through 20th century, literary concepts |
+| Health | 60 | Human body, nutrition, conditions, wellness |
+| Arts & Music | 60 | Visual arts, musicians, film, theater |
+| Daily Life | 60 | Food, finance, productivity, communication, travel |
+
+Add your own knowledge with `/ingest <file>`.
+
+### 3. Personal Growth System
+
+Nous learns about **you** over time:
+- Tracks which topics you ask about most (frequency + recency weighted)
+- Learns your communication style preferences
+- Remembers personal facts you share
+- Feeds personalized context into every response
+
+### 4. Synthetic Neural Cortex
+
+A pure Go feedforward neural network (64→32→N) that learns tool prediction:
+- Trains on every successful interaction
+- Predicts which tool to use before the LLM decides
+- Xavier initialization, ReLU activation, softmax output, backpropagation
+- Zero dependencies &mdash; implemented from scratch
+
+### 5. Model Compiler
+
+Compile Nous's learned experience into a custom Ollama model:
+```
+/compile    → Creates nous-v1, nous-v2, etc.
+```
+Embeds learned patterns, personality, and tool-calling behaviors into the model's system prompt via Ollama Modelfile.
+
+### 6. Cognitive Pipeline (Fresh Context Per Step)
+
+The #1 problem with small models: context fills up after 3-4 tool calls. Quality degrades catastrophically.
+
+**Solution**: Each reasoning step gets a **fresh LLM conversation** with only the essentials. At step 8, context usage is ~15% instead of ~80%.
+
+### 7. Cognitive Grounding (Anti-Hallucination)
+
+Five layers preventing the model from making things up:
+
+1. **Progressive Tool Disclosure** &mdash; 5-8 relevant tools per intent, not all 18
+2. **Smart Truncation** &mdash; Tool-specific result shortening
+3. **Result Validation** &mdash; Checks for empty reads, missing files, errors
+4. **Context Budget** &mdash; Auto-compresses at 75%, forces answer at 85%
+5. **Reflection Gate** &mdash; Detects loops, repetition, consecutive failures
+
+### More Innovations
+
+| Feature | What It Does |
+|---------|-------------|
+| **Multi-Model Router** | Routes perception→tinyllama, reasoning→qwen2.5:1.5b |
+| **Tool Choreography** | Records successful tool sequences as reusable recipes |
+| **Predictive Cache** | Pre-computes likely follow-ups (read→test file, grep→read match) |
+| **Filesystem Sentinel** | inotify-based real-time file watching |
+| **Episodic Memory** | Remembers every interaction forever with semantic search |
+| **Self-Improvement** | Collects training data, generates LoRA fine-tuning scripts |
+| **Codebase Index** | Go AST parsing (~318 symbols), zero-cost structural context |
+| **Prompt Distillation** | JIT-compiled prompts per query class (30-200 tokens vs 2000) |
+| **Phantom Reasoning** | Pre-computes reasoning chains so LLM only writes conclusions |
+| **Cognitive Firewall** | Validates outputs, blocks hallucinated tool calls |
+
+---
+
+## 18 Built-in Tools
+
+| Category | Tools |
+|----------|-------|
+| **Explore** | `read`, `glob`, `grep`, `ls`, `tree` |
+| **Modify** | `write`, `edit`, `patch`, `find_replace`, `replace_all`, `mkdir` |
+| **System** | `shell`, `run`, `sysinfo`, `clipboard`, `fetch` |
+| **Version Control** | `git`, `diff` |
+
+---
+
+## Memory System
+
+| Layer | Scope | Persistence | Search |
+|-------|-------|-------------|--------|
+| **Working** | Current session | In-memory (decay) | Relevance scoring |
+| **Long-term** | All sessions | JSON file | Keyword |
+| **Project** | Per-project | `.nous/` directory | Keyword + exact |
+| **Episodic** | Every interaction | `.nous/episodes.json` | **Semantic** (embeddings) |
+| **Knowledge** | Encyclopedic | `.nous/knowledge.json` | **Vector** (cosine similarity) |
+| **Personal** | User profile | `.nous/growth.json` | Topic + recency weighted |
+
+---
+
+## Slash Commands
+
+### Daily Life
+| Command | Description |
+|---------|-------------|
+| `/compass` | Triage panel: do now, focus, next anchor, risks |
+| `/now` | One-line answer for the next best action |
+| `/today` | Unread reminders and upcoming tasks |
+| `/briefing` | Morning briefing &mdash; what matters today |
+| `/checkin` | Quick pulse on your day |
+| `/remind <when> <task>` | Create a persistent reminder |
+| `/routine <daily\|weekdays> <HH:MM> <task>` | Recurring routine |
+
+### Knowledge & Growth
+| Command | Description |
+|---------|-------------|
+| `/ingest <file>` | Ingest a text file into the knowledge store |
+| `/knowledge` | Knowledge store statistics |
+| `/vctx` | Virtual context engine status |
+| `/growth` | Personal growth profile |
+| `/learn <fact>` | Teach Nous a personal fact |
+| `/compile` | Compile experience into custom Ollama model |
+| `/cortex` | Neural cortex statistics |
+
+### Memory
+| Command | Description |
+|---------|-------------|
+| `/memory` | Working memory contents |
+| `/longterm` | Long-term memory entries |
+| `/episodes` | Recent episodic memories |
+| `/search <query>` | Semantic search through all memories |
+| `/remember <k> <v>` | Store a project fact |
+| `/recall <query>` | Search project memory |
+
+### System
+| Command | Description |
+|---------|-------------|
+| `/status` | Cognitive system status |
+| `/tools` | List available tools |
+| `/dashboard` | Full system overview |
+| `/training` | Training data statistics |
+| `/export <fmt>` | Export training data (jsonl/alpaca/chatml) |
+| `/finetune` | Generate Modelfile + fine-tuning guide |
+| `/undo` | Revert last file change |
+| `/save [name]` | Save current session |
+| `/sessions` | List saved sessions |
+| `/help` | Full command reference |
+
+---
+
+## Usage
+
+### Interactive REPL
+
+```
+$ ./nous
+
+  ╭──────────────────────────────────────────────╮
+  │ Nous v0.8.0                                  │
+  │ model   qwen2.5:1.5b                         │
+  │ host    http://localhost:11434                │
+  │ tools   18 built-ins                          │
+  │ memory  64 working slots                      │
+  │ context 66.9K virtual tokens                  │
+  ╰──────────────────────────────────────────────╯
+
+  nous › what is the theory of relativity?
+
+  The theory of relativity is a framework developed by Albert Einstein
+  that explains the behavior of objects in motion and gravity. It
+  consists of two main parts:
+
+  1. Special Relativity (1905): introduced spacetime as curved and
+     influenced by mass and energy.
+  2. General Theory of Relativity (1915): massive objects cause
+     space-time to curve, explaining gravity without Newtonian force.
+  5.1s
+
+  nous › good morning!
+
+  Good morning to you too! How can I assist you today?
+  3.0s
+
+  nous › /compass
+  ┌ Do Now ─────────────────────────┐
+  │ Review your reminders           │
+  └─────────────────────────────────┘
+```
+
+### CLI Flags
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--model` | Ollama model to use | `qwen2.5:1.5b` |
+| `--host` | Ollama server address | `http://localhost:11434` |
+| `--allow-shell` | Enable shell command execution | `false` |
+| `--trust` | Skip confirmation prompts | `false` |
+| `--serve` | Run as HTTP server | `false` |
+| `--port` | HTTP server port | `3333` |
+| `--public` | Bind server to `0.0.0.0` | `false` |
+| `--resume` | Resume a previous session by ID | |
+| `--memory` | Path for persistent memory | `~/.nous` |
+
+### Server Mode
+
+```bash
+# HTTP API + Web UI
+./nous --serve --port 3333 --allow-shell --trust
+
+# API endpoints
+curl -X POST http://localhost:3333/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "what is quantum mechanics?"}'
+```
+
+### Docker
+
+```bash
+docker compose up -d
+# Open http://localhost:3333
+```
+
+---
+
+## Fine-Tuning Your Own Model
+
+Nous collects training data from every successful interaction:
+
+```bash
+# Inside Nous:
+/training              # Check collected data
+/export chatml         # Export as ChatML JSONL
+/finetune              # Generate Modelfile + instructions
+/compile               # Compile experience into Modelfile
+
+# Then:
+pip install unsloth transformers datasets peft trl
+python .nous/finetune.py
+ollama create nous-custom -f .nous/Modelfile
+./nous --model nous-custom
+```
+
+This creates a model with Nous's personality, knowledge, and tool-calling patterns baked into the weights.
 
 ---
 
@@ -111,287 +428,6 @@ curl -sSL https://raw.githubusercontent.com/artaeon/nous/main/install.sh | bash
 
 ```bash
 docker compose up -d
-# Open http://localhost:3333
-```
-
-### Server Mode
-
-```bash
-# Run as HTTP API with web UI
-./nous --serve --port 3333
-
-# Expose on your LAN only when you mean to
-./nous --serve --public --port 3333
-```
-
----
-
-## Usage
-
-### Interactive REPL
-
-```
-$ ./nous --allow-shell
-
-                +===================================+
-                |             N O U S               |
-                |   Native Orchestration of         |
-                |       Unified Streams             |
-                +===================================+
-
-  version 0.6.0 | amd64 | 16 cores | 32 GB RAM
-
-  connecting to ollama... OK (qwen2.5:1.5b)
-  routing: perception->tinyllama, reasoning->qwen2.5:1.5b
-  scanning project... nous (Go, 56 files)
-  codebase index: 350 symbols
-  sentinel: watching 12 dirs
-  6 cognitive streams active
-  18 tools: read, write, edit, grep, glob, ls, ...
-
-  I am Nous. I think, therefore I am - locally.
-
-  nous> /today
-  nous> /remind tomorrow 09:00 call dentist
-  nous> summarize what matters today
-```
-
-### CLI Flags
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--model` | Ollama model to use | `qwen2.5:1.5b` |
-| `--host` | Ollama server address | `http://localhost:11434` |
-| `--allow-shell` | Enable shell command execution | `false` |
-| `--trust` | Skip confirmation prompts | `false` |
-| `--serve` | Run as HTTP server | `false` |
-| `--listen` | HTTP listen host (with `--serve`) | `127.0.0.1` |
-| `--public` | Bind server to `0.0.0.0` | `false` |
-| `--port` | HTTP server port | `3333` |
-| `--resume` | Resume a previous session by ID | |
-| `--memory` | Path for persistent memory | `~/.nous` |
-
-### Slash Commands
-
-| Command | Description |
-|---------|-------------|
-| `/help` | Show all commands |
-| `/compass` | Compact triage panel for next action, focus, and risks |
-| `/now` | Deterministic answer for what to do next |
-| `/focus` | Personalized focus guidance |
-| `/checkin` | Quick pulse on your day |
-| `/prep` | Prepare for the next meeting or time-boxed task |
-| `/today` | Show unread reminders and upcoming assistant tasks |
-| `/tasks` | List pending assistant tasks |
-| `/routines` | List recurring assistant routines |
-| `/remind <when> <task>` | Create a persistent reminder |
-| `/routine <daily\|weekdays> <HH:MM> <task>` | Create a recurring assistant routine |
-| `/done <task-id>` | Mark a task as completed |
-| `/pref <k> <v>` | Store a personal preference |
-| `/capture <note>` | Save a personal note for future assistant context |
-| `/prefs` | List saved preferences |
-| `/status` | Cognitive system status |
-| `/memory` | Working memory contents |
-| `/longterm` | Long-term memory entries |
-| `/episodes` | Recent episodic memories |
-| `/search <query>` | Semantic search through all memories |
-| `/remember <k> <v>` | Store a project fact |
-| `/recall <query>` | Search project memory |
-| `/forget <key>` | Remove a project fact |
-| `/training` | Training data statistics |
-| `/export <fmt>` | Export training data (jsonl/alpaca/chatml) |
-| `/finetune` | Generate Modelfile + fine-tuning guide |
-| `/undo` | Revert last file change |
-| `/history` | Show undo stack |
-| `/tools` | List available tools |
-| `/sessions` | List saved sessions |
-| `/save [name]` | Save current session |
-| `/clear` | Clear conversation context |
-| `/quit` | Exit (auto-saves) |
-
-### Assistant HTTP API
-
-When running with `--serve`, Nous now exposes assistant-first endpoints in addition to `/api/chat` and `/api/jobs`:
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/assistant/today` | Return unread reminders, today items, and upcoming tasks |
-| `GET/POST /api/assistant/tasks` | List or create persistent tasks |
-| `POST /api/assistant/tasks/{id}/done` | Mark a task as complete |
-| `GET/POST /api/assistant/preferences` | List or update saved preferences |
-| `GET/POST /api/assistant/routines` | List or create recurring routines |
-| `POST /api/assistant/notifications/read` | Mark unread reminders as read |
-
----
-
-## Architecture
-
-```
-                         +-------------------+
-                         |    Blackboard     |
-                         |  (shared state)   |
-                         +--------+----------+
-                                  |
-          +-----------+-----------+-----------+-----------+
-          |           |           |           |           |
-    +-----------+ +----------+ +---------+ +----------+ +----------+
-    | Perceiver | | Reasoner | | Planner | | Executor | | Reflector|
-    | (intent)  | | (tools)  | | (steps) | | (run)    | | (eval)   |
-    +-----------+ +----------+ +---------+ +----------+ +----------+
-          |           |                                       |
-    +-----------+ +----------+                          +----------+
-    |  Router   | | Pipeline |                          | Learner  |
-    | (models)  | | (fresh)  |                          | (pattern)|
-    +-----------+ +----------+                          +----------+
-```
-
-### Six Cognitive Streams
-
-Each stream runs as an independent goroutine, communicating through the blackboard:
-
-| Stream | Role | Event |
-|--------|------|-------|
-| **Perceiver** | Extracts intent + entities from raw input | `percept` |
-| **Reasoner** | Autonomous tool-calling agent (up to 8 steps) | `percept` &rarr; `last_answer` |
-| **Planner** | Decomposes goals into step sequences | `goal_pushed` |
-| **Executor** | Runs plan steps with tool calls | `plan_set` |
-| **Reflector** | Evaluates reasoning quality | `action_recorded` |
-| **Learner** | Extracts behavioral patterns | `goal_updated` |
-
-### 18 Built-in Tools
-
-| Category | Tools |
-|----------|-------|
-| **Explore** | `read`, `glob`, `grep`, `ls`, `tree` |
-| **Modify** | `write`, `edit`, `patch`, `find_replace`, `replace_all`, `mkdir` |
-| **System** | `shell`, `run`, `sysinfo`, `clipboard`, `fetch` |
-| **Version Control** | `git`, `diff` |
-
-### Four Memory Layers
-
-| Layer | Scope | Persistence | Search |
-|-------|-------|-------------|--------|
-| **Working** | Current session | In-memory (decay) | Relevance scoring |
-| **Long-term** | All sessions | JSON file | Keyword |
-| **Project** | Per-project | `.nous/` directory | Keyword + exact |
-| **Episodic** | Every interaction ever | `.nous/episodes.json` | **Semantic** (embeddings) |
-
----
-
-## Key Innovations
-
-### Cognitive Pipeline (Fresh Context Per Step)
-
-The #1 problem with small models: context window fills up after 3-4 tool calls, and quality degrades catastrophically.
-
-**Solution**: Each reasoning step gets a **fresh LLM conversation** with only:
-1. Compact system prompt
-2. Original user question
-3. One-line compressed summaries of previous steps
-4. Latest tool result
-
-At step 8, context usage is **~15%** instead of ~80% with message accumulation.
-
-### Multi-Model Router
-
-Auto-discovers all locally available Ollama models and routes by cognitive task:
-
-| Task | Model | Latency |
-|------|-------|---------|
-| Perception | tinyllama | ~200ms |
-| Reasoning | qwen2.5:1.5b | ~2s |
-| Compression | tinyllama | ~200ms |
-| Reflection | tinyllama | ~200ms |
-
-Falls back to single model if only one is available.
-
-### Cognitive Grounding (Anti-Hallucination)
-
-Five layers preventing the model from making things up:
-
-1. **Progressive Tool Disclosure** &mdash; Show 5-8 relevant tools per intent (not all 18)
-2. **Smart Truncation** &mdash; Tool-specific result shortening
-3. **Result Validation** &mdash; Checks for empty reads, missing files, permission errors
-4. **Context Budget** &mdash; Tracks token usage, auto-compresses at 75%, forces answer at 85%
-5. **Reflection Gate** &mdash; Detects loops, repetition, consecutive failures; forces convergence
-
-### Filesystem Sentinel
-
-Linux inotify-based ambient file watching with zero polling:
-- Watches all project directories recursively
-- Debounced batched notifications (500ms window)
-- Auto-updates codebase index when `.go` files change
-- Ignores `.git`, `vendor`, swap files, etc.
-
-### Tool Choreography (Learned Recipes)
-
-Records successful multi-step tool sequences and replays them:
-- "grep for function → read the file" becomes a reusable recipe
-- Keyword-based matching finds relevant recipes for new queries
-- Confidence scoring based on success rate
-- Parameterized replay with `$FILE`/`$DIR` placeholders
-
-### Predictive Pre-computation
-
-After each tool call, speculatively pre-executes likely follow-ups:
-- `read X.go` &rarr; pre-cache `X_test.go`
-- `grep` &rarr; pre-read first matched file
-- `ls` &rarr; pre-read README/main entry point
-- Only pre-computes read-only tools (never writes)
-
-### Episodic Memory with Semantic Search
-
-Every interaction is stored forever with embedding vectors:
-- Cosine similarity search over Ollama's embedding space
-- Hybrid search: semantic first, keyword fallback
-- Success rate tracking, tool usage statistics
-- Auto-extracted topic tags
-
-### Self-Improvement Pipeline
-
-Nous can fine-tune its own base model:
-
-```
-Interactions → Quality Filter → Export (ChatML/Alpaca/JSONL)
-                                       ↓
-                               LoRA Fine-tuning (unsloth)
-                                       ↓
-                               Custom Ollama Model
-                                       ↓
-                            nous --model nous-custom
-```
-
-The `/finetune` command generates everything needed: Modelfile, training data export, and a complete Python fine-tuning script.
-
-### Codebase Index
-
-Go AST parsing extracts every function, struct, method, interface, constant, and variable with full signatures. Gives the model structural context in ~50 tokens instead of reading files.
-
----
-
-## Deployment
-
-### Local (Development)
-
-```bash
-./nous                          # Interactive REPL
-./nous --allow-shell            # Enable shell commands
-./nous --trust --allow-shell    # No confirmation prompts
-```
-
-### Server (HTTP API)
-
-```bash
-./nous --serve --port 3333 --allow-shell --trust
-# Web UI at http://localhost:3333
-# API at http://localhost:3333/api/chat
-```
-
-### Docker
-
-```bash
-docker compose up -d
-# Includes Ollama with GPU passthrough
 ```
 
 ### Systemd (Production)
@@ -399,44 +435,18 @@ docker compose up -d
 ```bash
 sudo make install
 sudo systemctl enable --now nous
-# Running at http://localhost:3333
-```
-
-### API Example
-
-```bash
-# Chat
-curl -X POST http://localhost:3333/api/chat \
-  -H 'Content-Type: application/json' \
-  -d '{"message": "show me the main function"}'
-
-# Status
-curl http://localhost:3333/api/status
-
-# Health check
-curl http://localhost:3333/api/health
 ```
 
 ---
 
-## Fine-Tuning Your Own Model
+## Requirements
 
-Nous collects training data from every successful interaction. When you have enough data, you can fine-tune a custom model:
-
-```bash
-# Inside Nous:
-/training              # Check how many pairs collected
-/export chatml         # Export as ChatML JSONL
-/finetune              # Generate Modelfile + instructions
-
-# Then:
-pip install unsloth transformers datasets peft trl
-python .nous/finetune.py
-ollama create nous-custom -f .nous/Modelfile
-./nous --model nous-custom
-```
-
-This creates a model with Nous's personality and tool-calling patterns baked into the weights &mdash; not just prompts.
+- **Go 1.22+** (build only)
+- **Ollama** (runtime)
+- **nomic-embed-text** (for knowledge + episodic memory)
+- **Linux** (for inotify sentinel; rest works on macOS/Windows)
+- **~2 GB RAM** (for qwen2.5:1.5b)
+- GPU optional (CPU works fine)
 
 ---
 
@@ -445,105 +455,58 @@ This creates a model with Nous's personality and tool-calling patterns baked int
 ```
 nous/
 ├── cmd/nous/
-│   └── main.go                 # Entry point, REPL + server mode
+│   └── main.go                    # Entry point, REPL + server, 30+ slash commands
+├── knowledge/                     # 10 encyclopedic knowledge files (669 chunks)
+│   ├── 01_science.txt             # Physics, chemistry, biology, astronomy
+│   ├── 02_history.txt             # Ancient through modern history
+│   ├── 03_philosophy.txt          # Greek through 20th century philosophy
+│   ├── 04_technology.txt          # CS, networking, AI/ML, hardware
+│   ├── 05_geography.txt           # Continents, countries, climate
+│   ├── 06_mathematics.txt         # Arithmetic through advanced math
+│   ├── 07_literature.txt          # Classical through modern literature
+│   ├── 08_health.txt              # Human body, nutrition, wellness
+│   ├── 09_arts_music.txt          # Visual arts, music, film
+│   └── 10_daily_life.txt          # Food, finance, productivity, travel
 ├── internal/
-│   ├── blackboard/             # Shared cognitive workspace (pub/sub)
 │   ├── cognitive/
-│   │   ├── reasoner.go         # Core autonomous agent
-│   │   ├── pipeline.go         # Fresh-context per step
-│   │   ├── grounding.go        # Anti-hallucination system
-│   │   ├── router.go           # Multi-model routing
-│   │   ├── recipes.go          # Tool choreography
-│   │   ├── predictor.go        # Speculative pre-computation
-│   │   ├── perceiver.go        # Intent extraction
-│   │   ├── planner.go          # Goal decomposition
-│   │   ├── executor.go         # Plan execution
-│   │   ├── reflector.go        # Quality evaluation
-│   │   ├── learner.go          # Pattern extraction
-│   │   ├── tool_selector.go    # Progressive tool disclosure
-│   │   ├── persona.go          # Identity + system prompts
-│   │   ├── conversation.go     # Message management
-│   │   ├── session.go          # Session persistence
-│   │   └── scanner.go          # Project auto-detection
-│   ├── index/
-│   │   └── codebase.go         # Go AST structural index
-│   ├── memory/
-│   │   ├── working.go          # Decay-based working memory
-│   │   ├── longterm.go         # Persistent KV store
-│   │   ├── project.go          # Per-project fact store
-│   │   ├── episodic.go         # Interaction replay + embeddings
-│   │   └── undo.go             # File modification undo stack
-│   ├── sentinel/
-│   │   └── watcher.go          # inotify filesystem watcher
-│   ├── server/
-│   │   └── server.go           # HTTP API + web UI
-│   ├── training/
-│   │   ├── collector.go        # Training data pipeline
-│   │   └── modelfile.go        # Ollama Modelfile generator
-│   ├── tools/
-│   │   ├── builtin.go          # 18 built-in tools
-│   │   └── registry.go         # Tool registry
-│   ├── compress/
-│   │   └── atoms.go            # Context compression
-│   └── ollama/
-│       └── client.go           # Ollama HTTP client
+│   │   ├── reasoner.go            # Core autonomous agent
+│   │   ├── pipeline.go            # Fresh-context per step
+│   │   ├── virtualctx.go          # Virtual Context Engine
+│   │   ├── growth.go              # Personal Growth System
+│   │   ├── knowledgevec.go        # Knowledge Vector Store
+│   │   ├── neuralcortex.go        # Synthetic Neural Cortex
+│   │   ├── modelcompiler.go       # Model Compiler (experience → weights)
+│   │   ├── fastpath.go            # 3-tier query classification
+│   │   ├── grounding.go           # Anti-hallucination system
+│   │   ├── router.go              # Multi-model routing
+│   │   ├── recipes.go             # Tool choreography
+│   │   ├── predictor.go           # Speculative pre-computation
+│   │   ├── promptdistill.go       # JIT prompt compilation
+│   │   ├── phantom.go             # Phantom reasoning chains
+│   │   ├── persona.go             # Identity + system prompts
+│   │   └── ...                    # 30+ cognitive modules
+│   ├── memory/                    # 6-layer memory system
+│   ├── sentinel/                  # inotify filesystem watcher
+│   ├── server/                    # HTTP API + web UI
+│   ├── training/                  # Self-improvement pipeline
+│   ├── tools/                     # 18 built-in tools
+│   └── ollama/                    # Ollama HTTP client
 ├── Dockerfile
 ├── docker-compose.yml
-├── nous.service                # systemd unit
-├── install.sh                  # One-line installer
-├── Makefile
-├── LICENSE
-├── CONTRIBUTING.md
-└── go.mod                      # Zero external dependencies
+├── install.sh
+└── go.mod                         # Zero external dependencies
 ```
-
----
-
-## Comparison: Nous vs Claude Code
-
-| | Claude Code | Nous |
-|---|---|---|
-| **Model** | Claude Opus (200B+) | qwen2.5:1.5b (1.5B) |
-| **Privacy** | Cloud API | **100% local** |
-| **Cost** | $15-75/month | **Free forever** |
-| **Binary** | ~50 MB + Node.js | **~10 MB, zero deps** |
-| **Startup** | 2-5 seconds | **<1 second** |
-| **Memory** | Per-project CLAUDE.md | **4-layer memory + semantic search** |
-| **Self-improvement** | None | **LoRA fine-tuning pipeline** |
-| **File watching** | None | **inotify sentinel** |
-| **Predictive cache** | None | **Speculative pre-computation** |
-| **Tool learning** | None | **Recipe choreography** |
-| **Server mode** | No | **HTTP API + web UI** |
-| **Docker** | No | **docker-compose with Ollama** |
-| **Reasoning depth** | Exceptional | Good (8 steps, pipeline-optimized) |
-| **Code generation** | Best-in-class | Focused edits (1.5B model) |
-
-**Nous wins on**: privacy, cost, architecture, memory, self-improvement, deployment flexibility.
-
-**Claude Code wins on**: raw model intelligence (200B vs 1.5B).
-
-As local models improve, Nous's architecture amplifies those gains. A 7B model in this architecture is genuinely competitive.
-
----
-
-## Requirements
-
-- **Go 1.22+** (build only)
-- **Ollama** (runtime)
-- **Linux** (for inotify sentinel; rest works on macOS/Windows)
-- **~2 GB RAM** (for qwen2.5:1.5b)
-- GPU optional (CPU works fine)
 
 ---
 
 ## Documentation
 
-| Document | What it covers |
+| Document | What It Covers |
 |----------|---------------|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Deep dive into cognitive architecture, 7 key innovations, system diagrams |
-| [TESTING.md](TESTING.md) | Test methodology: 1,161 tests, 25 benchmarks, 7 fuzz targets, coverage |
-| [BENCHMARKS.md](BENCHMARKS.md) | Performance analysis: all operations profiled, 0.03% overhead vs LLM inference |
-| [SECURITY.md](SECURITY.md) | Security model: 7 defense layers, privacy guarantees, threat model |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Deep dive into cognitive architecture, key innovations, system diagrams |
+| [TESTING.md](TESTING.md) | Test methodology, benchmarks, fuzz targets, coverage |
+| [BENCHMARKS.md](BENCHMARKS.md) | Performance analysis: all operations profiled |
+| [SECURITY.md](SECURITY.md) | Security model: defense layers, privacy guarantees, threat model |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 
@@ -551,15 +514,13 @@ As local models improve, Nous's architecture amplifies those gains. A 7B model i
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. We welcome contributions:
 
-We welcome contributions! Whether it's:
+- New knowledge files (any domain!)
 - Bug fixes and improvements
-- New tools
-- Support for more languages in the codebase index
+- New tools and capabilities
 - Better prediction strategies
 - Fine-tuning datasets and recipes
-- Documentation and examples
 
 ---
 
@@ -573,10 +534,11 @@ MIT License. See [LICENSE](LICENSE) for details.
 
 - [Ollama](https://ollama.ai) &mdash; local model inference
 - [Qwen](https://github.com/QwenLM/Qwen2.5) &mdash; the remarkably capable 1.5B model
+- [Nomic](https://nomic.ai) &mdash; embedding model for knowledge + memory
 - Aristotle &mdash; for the name and the philosophy
 
 ---
 
 <p align="center">
-  <strong>Nous thinks, therefore Nous is.</strong>
+  <strong>Nous thinks, therefore Nous is &mdash; locally.</strong>
 </p>

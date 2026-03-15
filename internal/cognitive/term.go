@@ -31,6 +31,11 @@ func Styled(color, text string) string {
 // Banner returns the Nous startup banner with version info.
 // Clean minimal design inspired by modern CLI tools.
 func Banner(version, model, host string, toolCount int, memSlots int) string {
+	return BannerFull(version, model, host, toolCount, memSlots, "")
+}
+
+// BannerFull renders the startup banner with optional virtual context size.
+func BannerFull(version, model, host string, toolCount int, memSlots int, vctxSize string) string {
 	var b strings.Builder
 	b.WriteString("\n")
 	b.WriteString(fmt.Sprintf("  %s╭──────────────────────────────────────────────╮%s\n", ColorDim, ColorReset))
@@ -39,6 +44,9 @@ func Banner(version, model, host string, toolCount int, memSlots int) string {
 	b.WriteString(fmt.Sprintf("  %s│%s %shost%s    %s%-35s%s│%s\n", ColorDim, ColorReset, ColorGray, ColorReset, ColorGray, truncateDisplay(host, 35), ColorDim, ColorReset))
 	b.WriteString(fmt.Sprintf("  %s│%s %stools%s   %s%-35s%s│%s\n", ColorDim, ColorReset, ColorGray, ColorReset, ColorWhite, fmt.Sprintf("%d built-ins", toolCount), ColorDim, ColorReset))
 	b.WriteString(fmt.Sprintf("  %s│%s %smemory%s  %s%-35s%s│%s\n", ColorDim, ColorReset, ColorGray, ColorReset, ColorWhite, fmt.Sprintf("%d working slots", memSlots), ColorDim, ColorReset))
+	if vctxSize != "" {
+		b.WriteString(fmt.Sprintf("  %s│%s %scontext%s %s%-35s%s│%s\n", ColorDim, ColorReset, ColorGray, ColorReset, ColorCyan, vctxSize+" virtual tokens", ColorDim, ColorReset))
+	}
 	b.WriteString(fmt.Sprintf("  %s╰──────────────────────────────────────────────╯%s\n", ColorDim, ColorReset))
 	b.WriteString("\n")
 	return b.String()

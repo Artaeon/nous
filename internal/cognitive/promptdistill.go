@@ -204,7 +204,8 @@ func (pd *PromptDistiller) BuildSystemPrompt(class QueryClass, toolList string, 
 
 	switch class {
 	case ClassChat:
-		sb.WriteString("You are Nous, a friendly local AI assistant. Be warm and concise.\n")
+		sb.WriteString("You are Nous, a personal AI who runs fully on the user's machine. Be warm, helpful, natural.\n")
+		sb.WriteString("You know the user and grow with them. Draw on your knowledge and memory.\n")
 
 	case ClassCodeGen:
 		sb.WriteString("You are Nous. Generate clean, correct code.\n")
@@ -217,8 +218,8 @@ func (pd *PromptDistiller) BuildSystemPrompt(class QueryClass, toolList string, 
 		}
 
 	case ClassCodeQuery:
-		sb.WriteString("You are Nous. Answer about this codebase using ONLY the evidence provided.\n")
-		sb.WriteString("Do NOT invent file contents — use tools to read actual code.\n")
+		sb.WriteString("You are Nous. Answer using ONLY the evidence provided.\n")
+		sb.WriteString("Do NOT invent information — use tools to find facts.\n")
 		if profile.IncludeTools && toolList != "" {
 			sb.WriteString("\n")
 			sb.WriteString(toolList)
@@ -226,13 +227,13 @@ func (pd *PromptDistiller) BuildSystemPrompt(class QueryClass, toolList string, 
 		}
 
 	case ClassToolResult:
-		sb.WriteString("You are Nous. Summarize tool results for the user.\n")
-		sb.WriteString("Use ONLY the data provided below. Do NOT contradict the evidence.\n")
-		sb.WriteString("If the evidence shows N items, say N items. Do NOT guess different numbers.\n")
+		sb.WriteString("You are Nous. Explain results clearly for the user.\n")
+		sb.WriteString("Use ONLY the data provided. Do NOT contradict the evidence.\n")
+		sb.WriteString("If the evidence shows specific numbers, use those EXACT numbers.\n")
 
 	case ClassToolUse:
-		sb.WriteString("You are Nous, a local assistant. Use tools to help the user.\n")
-		sb.WriteString("NEVER invent file contents — read first.\n\n")
+		sb.WriteString("You are Nous, a personal AI with tools. Help the user with their request.\n")
+		sb.WriteString("NEVER invent facts — search or read first.\n\n")
 		sb.WriteString("Tool call format:\n")
 		sb.WriteString(`{"tool": "NAME", "args": {"key": "value"}}`)
 		sb.WriteString("\n\n")
@@ -242,8 +243,8 @@ func (pd *PromptDistiller) BuildSystemPrompt(class QueryClass, toolList string, 
 		}
 
 	default: // ClassGeneral
-		sb.WriteString("You are Nous, a knowledgeable AI assistant. Answer directly and concisely.\n")
-		sb.WriteString("Give accurate, factual information. If unsure, say so.\n")
+		sb.WriteString("You are Nous, a knowledgeable personal AI. Answer directly and concisely.\n")
+		sb.WriteString("Draw from your knowledge. If unsure, say so honestly.\n")
 		if profile.IncludeLangRules && lang != "" {
 			if rules, ok := pd.langRules[strings.ToLower(lang)]; ok {
 				sb.WriteString("\nWhen discussing code in ")

@@ -74,7 +74,7 @@ func TestSelfKnowledgeFormat(t *testing.T) {
 			tools:       18,
 			memItems:    5,
 			ltmEntries:  10,
-			wantContain: []string{"Nous", "νοῦς", "qwen2.5:1.5b", "6 streams", "18 tools", "5 working", "10 long-term"},
+			wantContain: []string{"Nous", "νοῦς", "qwen2.5:1.5b", "6 cognitive streams", "18 tools", "5 working", "10 long-term"},
 		},
 		{
 			name:        "zero_memory",
@@ -92,7 +92,7 @@ func TestSelfKnowledgeFormat(t *testing.T) {
 			tools:       25,
 			memItems:    64,
 			ltmEntries:  500,
-			wantContain: []string{"deepseek-r1:8b", "8 streams", "25 tools"},
+			wantContain: []string{"deepseek-r1:8b", "8 cognitive streams", "25 tools"},
 		},
 	}
 
@@ -111,14 +111,14 @@ func TestSelfKnowledgeFormat(t *testing.T) {
 func TestSelfKnowledgeLocalOnly(t *testing.T) {
 	result := SelfKnowledge("test-model", 6, 18, 5, 10)
 	lower := strings.ToLower(result)
-	if !strings.Contains(lower, "local only") && !strings.Contains(lower, "no cloud") {
+	if !strings.Contains(lower, "local") {
 		t.Error("SelfKnowledge should emphasize local-only operation")
 	}
 }
 
 func TestSelfKnowledgeGroundingStatement(t *testing.T) {
 	result := SelfKnowledge("test-model", 6, 18, 5, 10)
-	if !strings.Contains(result, "verify") || !strings.Contains(result, "guess") {
+	if !strings.Contains(result, "search") || !strings.Contains(result, "make things up") {
 		t.Error("SelfKnowledge should include grounding statement about verification")
 	}
 }

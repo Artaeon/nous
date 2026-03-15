@@ -28,7 +28,7 @@ import (
 	"github.com/artaeon/nous/internal/training"
 )
 
-const version = "0.7.0"
+const version = "0.8.0"
 
 func main() {
 	// Flags
@@ -251,6 +251,39 @@ func main() {
 	// 12. Adaptive Prompt Distillation — JIT-compiled minimal prompts per query type
 	reasoner.PromptDist = cognitive.NewPromptDistiller()
 
+	// 13. Synthetic Neural Cortex — pure Go neural network learns tool prediction
+	toolLabels := make([]string, 0, len(toolReg.List()))
+	for _, t := range toolReg.List() {
+		toolLabels = append(toolLabels, t.Name)
+	}
+	reasoner.Cortex = cognitive.NewNeuralCortex(
+		64, 32, toolLabels,
+		filepath.Join(nousDir, "cortex.json"),
+	)
+
+	// 14. Knowledge Vector Store — unlimited knowledge via vector search
+	reasoner.Knowledge = cognitive.NewKnowledgeVec(
+		llm.Embed,
+		filepath.Join(nousDir, "knowledge.json"),
+	)
+
+	// 15. Model Compiler — compile experience into optimized Modelfiles
+	reasoner.Compiler = cognitive.NewModelCompiler(
+		*model, reasoner.Distiller, reasoner.Crystals,
+	)
+	reasoner.Compiler.SetKnowledge(reasoner.Knowledge)
+	reasoner.Compiler.SetCortex(reasoner.Cortex)
+
+	// 16. Personal Growth — learns user's interests, preferences, and patterns
+	reasoner.Growth = cognitive.NewPersonalGrowth(
+		filepath.Join(nousDir, "growth.json"),
+	)
+
+	// 17. Virtual Context Engine — makes 4k tokens feel like 200k+
+	reasoner.VCtx = cognitive.NewVirtualContext(1500)
+	reasoner.VCtx.AddSource(cognitive.KnowledgeSource(reasoner.Knowledge))
+	reasoner.VCtx.AddSource(cognitive.GrowthSource(reasoner.Growth))
+
 	reasoner.AssistantContext = func(input string, recent string) string {
 		return buildAssistantContext(assistantStore, input, recent, time.Now())
 	}
@@ -393,7 +426,19 @@ func main() {
 
 	// Print startup banner
 	toolList := toolReg.List()
-	fmt.Print(cognitive.Banner(version, *model, *host, len(toolList), 64))
+	vctxSize := ""
+	if reasoner.VCtx != nil {
+		totalVTokens := reasoner.VCtx.TotalSize()
+		switch {
+		case totalVTokens >= 1_000_000:
+			vctxSize = fmt.Sprintf("%.1fM", float64(totalVTokens)/1_000_000)
+		case totalVTokens >= 1_000:
+			vctxSize = fmt.Sprintf("%.1fK", float64(totalVTokens)/1_000)
+		default:
+			vctxSize = fmt.Sprintf("%d", totalVTokens)
+		}
+	}
+	fmt.Print(cognitive.BannerFull(version, *model, *host, len(toolList), 64, vctxSize))
 
 	// Handle graceful shutdown — save session + episodic memory
 	sigCh := make(chan os.Signal, 1)
@@ -429,6 +474,9 @@ func main() {
 			LLM:         llm,
 			WorkingMem:  wm,
 			LongTermMem: ltm,
+			Knowledge:   reasoner.Knowledge,
+			VCtx:        reasoner.VCtx,
+			Growth:      reasoner.Growth,
 		}, reasoner.Conv)
 		if err := srv.Start(version, *model, len(toolList)); err != nil {
 			fmt.Fprintf(os.Stderr, "server error: %v\n", err)
@@ -468,16 +516,43 @@ func main() {
 			}
 		}
 
-		// Submit to the perceiver and wait for reasoning to complete
+		// Classify query: fast/medium paths skip the full pipeline for speed.
+		classifier := &cognitive.FastPathClassifier{}
+		queryPath := classifier.ClassifyQuery(input)
+
 		fmt.Println()
 		firstToken = true
 		responseStarted = false
-		llmSpinner.Start("thinking...")
 		start := time.Now()
-		perceiver.Submit(input)
 
-		// Wait for the answer to appear on the blackboard
-		answer := waitForAnswerStr(board)
+		var answer string
+		if queryPath == cognitive.PathFast || queryPath == cognitive.PathMedium {
+			// Fast/medium: single LLM call with optional knowledge context
+			llmSpinner.Start("thinking...")
+			fastResp := &cognitive.FastPathResponder{
+				LLM:         llm,
+				WorkingMem:  wm,
+				LongTermMem: ltm,
+				Knowledge:   reasoner.Knowledge,
+				VCtx:        reasoner.VCtx,
+				Growth:      reasoner.Growth,
+			}
+			var err error
+			answer, err = fastResp.RespondWithPath(reasoner.Conv, input, queryPath)
+			llmSpinner.Stop()
+			if err != nil || strings.TrimSpace(answer) == "" {
+				// Fallback to full pipeline on error or empty response
+				llmSpinner.Start("thinking...")
+				perceiver.Submit(input)
+				answer = waitForAnswerStr(board)
+				llmSpinner.Stop()
+			}
+		} else {
+			// Full pipeline: autonomous tool-calling agent
+			llmSpinner.Start("thinking...")
+			perceiver.Submit(input)
+			answer = waitForAnswerStr(board)
+		}
 		duration := time.Since(start)
 		if !responseStarted && strings.TrimSpace(answer) != "" {
 			fmt.Printf("  %s\n", strings.ReplaceAll(answer, "\n", "\n  "))
@@ -955,6 +1030,124 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 		fmt.Printf("    4. ollama create %s -f %s\n", cfg.Name, mfPath)
 		fmt.Printf("    5. nous --model %s\n", cfg.Name)
 
+	case "/compile":
+		if reasoner.Compiler == nil {
+			fmt.Println("  model compiler not initialized")
+			break
+		}
+		modelfile := reasoner.Compiler.GenerateModelfile()
+		mfPath := filepath.Join(cognitive.WorkDir, ".nous", "Modelfile.compiled")
+		if err := os.WriteFile(mfPath, []byte(modelfile), 0644); err != nil {
+			fmt.Printf("  error writing modelfile: %v\n", err)
+			break
+		}
+		modelName := reasoner.Compiler.ModelName()
+		fmt.Printf("  compiled model: %s\n", reasoner.Compiler.Versions[len(reasoner.Compiler.Versions)-1].ModelName)
+		fmt.Printf("  modelfile: %s\n", mfPath)
+		fmt.Printf("  next version: %s\n", modelName)
+		fmt.Println()
+		fmt.Println("  To create the compiled model:")
+		fmt.Printf("    ollama create %s -f %s\n", reasoner.Compiler.Versions[len(reasoner.Compiler.Versions)-1].ModelName, mfPath)
+		fmt.Printf("    nous --model %s\n", reasoner.Compiler.Versions[len(reasoner.Compiler.Versions)-1].ModelName)
+
+	case "/ingest":
+		if reasoner.Knowledge == nil {
+			fmt.Println("  knowledge store not initialized")
+			break
+		}
+		if len(parts) < 2 {
+			fmt.Println("  usage: /ingest <file-path>")
+			fmt.Println("  ingests a text file into the knowledge vector store")
+			break
+		}
+		filePath := strings.Join(parts[1:], " ")
+		fmt.Printf("  ingesting %s...\n", filePath)
+		added, err := reasoner.Knowledge.Ingest(filePath)
+		if err != nil {
+			fmt.Printf("  error: %v\n", err)
+			break
+		}
+		fmt.Printf("  added %d knowledge chunks (total: %d)\n", added, reasoner.Knowledge.Size())
+
+	case "/knowledge":
+		if reasoner.Knowledge == nil {
+			fmt.Println("  knowledge store not initialized")
+			break
+		}
+		fmt.Printf("  chunks: %d\n", reasoner.Knowledge.Size())
+		fmt.Printf("  searches: %d\n", reasoner.Knowledge.SearchCount)
+		fmt.Printf("  hits: %d\n", reasoner.Knowledge.HitCount)
+		if len(parts) > 1 {
+			query := strings.Join(parts[1:], " ")
+			results, err := reasoner.Knowledge.Search(query, 3)
+			if err != nil {
+				fmt.Printf("  search error: %v\n", err)
+			} else if len(results) == 0 {
+				fmt.Println("  no results")
+			} else {
+				for _, r := range results {
+					fmt.Printf("  [%.2f] %s (%s)\n", r.Score, truncate(r.Text, 80), r.Source)
+				}
+			}
+		}
+
+	case "/vctx":
+		if reasoner.VCtx == nil {
+			fmt.Println("  virtual context not initialized")
+			break
+		}
+		stats := reasoner.VCtx.Stats()
+		fmt.Print("  " + strings.ReplaceAll(stats.FormatStats(), "\n", "\n  "))
+		fmt.Println()
+
+	case "/growth":
+		if reasoner.Growth == nil {
+			fmt.Println("  personal growth not initialized")
+			break
+		}
+		stats := reasoner.Growth.Stats()
+		fmt.Printf("  interactions: %d\n", stats.TotalInteractions)
+		fmt.Printf("  topics tracked: %d\n", stats.TopicsTracked)
+		fmt.Printf("  facts learned: %d\n", stats.FactsLearned)
+		fmt.Printf("  days known: %d\n", stats.DaysKnown)
+		top := reasoner.Growth.TopInterests(5)
+		if len(top) > 0 {
+			fmt.Println("  top interests:")
+			for _, t := range top {
+				fmt.Printf("    %-20s (weight: %.2f, seen: %d times)\n", t.Name, t.Weight, t.Count)
+			}
+		}
+
+	case "/learn":
+		if reasoner.Growth == nil {
+			fmt.Println("  personal growth not initialized")
+			break
+		}
+		if len(parts) < 3 {
+			fmt.Println("  usage: /learn <category> <fact>")
+			fmt.Println("  categories: work, interest, preference, identity")
+			break
+		}
+		category := parts[1]
+		fact := strings.Join(parts[2:], " ")
+		reasoner.Growth.LearnFact(fact, category)
+		fmt.Printf("  learned: %s (%s)\n", fact, category)
+
+	case "/cortex":
+		if reasoner.Cortex == nil {
+			fmt.Println("  neural cortex not initialized")
+			break
+		}
+		trainCount, paramCount := reasoner.Cortex.Stats()
+		fmt.Printf("  parameters: %d\n", paramCount)
+		fmt.Printf("  training samples: %d\n", trainCount)
+		fmt.Printf("  labels: %s\n", strings.Join(reasoner.Cortex.Labels, ", "))
+		if len(parts) > 1 {
+			query := strings.Join(parts[1:], " ")
+			pred := reasoner.Cortex.Predict(cognitive.CortexInputFromQuery(query, reasoner.Cortex.InputSize))
+			fmt.Printf("  prediction for %q: %s (%.1f%%)\n", query, pred.Label, pred.Confidence*100)
+		}
+
 	case "/plan":
 		if len(parts) < 2 {
 			fmt.Println("  usage: /plan <goal description>")
@@ -1069,6 +1262,15 @@ func renderHelp() string {
 	b.WriteString(cognitive.Panel("Training and tuning", []string{
 		"/training, /autotune [force], /export <jsonl|alpaca|chatml>",
 		"/finetune to generate a Modelfile and local tuning guide",
+		"/compile to generate an experience-compiled Modelfile",
+		"/cortex [query] — neural cortex stats and prediction test",
+	}))
+	b.WriteString(cognitive.Panel("Knowledge and growth", []string{
+		"/ingest <file> — add text file to knowledge vector store",
+		"/knowledge [query] — stats and search the knowledge store",
+		"/vctx — virtual context stats (your 200K+ token window)",
+		"/growth — your interests, topics, and interaction patterns",
+		"/learn <category> <fact> — teach Nous about yourself",
 	}))
 	b.WriteString(cognitive.Panel("Sessions and safety", []string{
 		"/sessions, /save [name], /clear, /undo, /history, /quit",
@@ -1250,6 +1452,13 @@ func renderRoutines(store *assistant.Store) string {
 		}
 	}
 	return cognitive.Panel("Routines", lines)
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
 
 func prefersGerman(store *assistant.Store) bool {

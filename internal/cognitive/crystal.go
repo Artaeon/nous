@@ -451,6 +451,28 @@ func parseCrystalStepArgs(rawResult string) map[string]string {
 	return make(map[string]string)
 }
 
+// TopCrystals returns the top N crystals sorted by success rate and usage.
+func (cb *CrystalBook) TopCrystals(n int) []Crystal {
+	cb.mu.RLock()
+	defer cb.mu.RUnlock()
+
+	if len(cb.crystals) == 0 {
+		return nil
+	}
+
+	// Copy and sort by value
+	sorted := make([]Crystal, len(cb.crystals))
+	copy(sorted, cb.crystals)
+	sort.Slice(sorted, func(i, j int) bool {
+		return crystalValue(&sorted[i]) > crystalValue(&sorted[j])
+	})
+
+	if n > len(sorted) {
+		n = len(sorted)
+	}
+	return sorted[:n]
+}
+
 // --- Persistence ---
 
 func (cb *CrystalBook) load() {

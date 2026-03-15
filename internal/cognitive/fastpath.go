@@ -173,11 +173,21 @@ type FastPathResponder struct {
 	LLM         *ollama.Client
 	WorkingMem  *memory.WorkingMemory
 	LongTermMem *memory.LongTermMemory
+	Knowledge   *KnowledgeVec
+	VCtx        *VirtualContext
+	Growth      *PersonalGrowth
 }
 
-const fastPathSystemPrompt = `You are Nous, a helpful AI assistant. Answer the user's message directly and concisely. Be friendly and informative. If you don't know something, say so.`
+const fastPathSystemPrompt = `You are Nous (νοῦς), a personal AI running fully on the user's machine. Be warm, friendly, and natural. You have vast knowledge and grow with the user over time. Always respond warmly to greetings — you are a companion, not just a tool. If you don't know something, say so honestly.`
 
-const mediumPathSystemPrompt = `You are Nous, a helpful AI assistant. Answer the user's message directly and concisely. Be friendly and informative. If you don't know something, say so.
+const mediumPathSystemPrompt = `You are Nous (νοῦς), a personal AI running fully on the user's machine. You know the user, remember past conversations, and grow smarter over time. Be warm, helpful, and knowledgeable.
+
+RULES:
+- For factual questions, use the knowledge context provided below to give accurate answers
+- For practical "how to" questions, give actionable steps and concrete advice
+- Never say "I don't have access to" — you DO have knowledge, memory, and tools
+- Be direct and helpful, not evasive
+- If the user asks you to help them DO something, give them a plan or template, don't ask clarifying questions
 
 Use the context below to give relevant, personalized answers.`
 
@@ -239,10 +249,33 @@ func (r *FastPathResponder) RespondWithPath(conv *Conversation, query string, pa
 	return answer, nil
 }
 
-// buildMediumPrompt creates a richer system prompt with memory facts for the medium path.
+// buildMediumPrompt creates a richer system prompt with memory facts and knowledge for the medium path.
 func (r *FastPathResponder) buildMediumPrompt(conv *Conversation, query string) string {
 	var sb strings.Builder
 	sb.WriteString(mediumPathSystemPrompt)
+
+	// Inject knowledge context — this is what makes medium-path answers accurate.
+	if r.VCtx != nil {
+		assembly := r.VCtx.Weave(query)
+		if prompt := assembly.FormatForPrompt(); prompt != "" {
+			sb.WriteString("\n\n[Knowledge]\n")
+			sb.WriteString(prompt)
+		}
+	} else if r.Knowledge != nil {
+		results, err := r.Knowledge.Search(query, 3)
+		if err == nil && len(results) > 0 {
+			sb.WriteString("\n\n[Knowledge]\n")
+			sb.WriteString(FormatKnowledgeContext(results))
+		}
+	}
+
+	// Inject personal growth context
+	if r.Growth != nil {
+		if ctx := r.Growth.ContextForQuery(query); ctx != "" {
+			sb.WriteString("\n\n[Personal Context]\n")
+			sb.WriteString(ctx)
+		}
+	}
 
 	// Inject memory facts if available.
 	var facts []string

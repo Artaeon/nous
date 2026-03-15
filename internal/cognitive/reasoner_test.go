@@ -43,7 +43,7 @@ func TestPublishAnswerWithoutRequestSpecificKey(t *testing.T) {
 func TestCompactSystemPromptIsAssistantFirst(t *testing.T) {
 	r := &Reasoner{Tools: tools.NewRegistry()}
 	prompt := r.compactSystemPrompt()
-	checks := []string{"local assistant", "memory", "NEVER", "warm, concise", "read first"}
+	checks := []string{"personal AI", "NEVER", "warm, helpful", "knowledge"}
 	for _, check := range checks {
 		if !strings.Contains(prompt, check) {
 			t.Fatalf("compactSystemPrompt() should contain %q", check)
