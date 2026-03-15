@@ -405,6 +405,19 @@ func toolGlob(workDir string, args map[string]string) (string, error) {
 		base = resolvePath(workDir, v)
 	}
 
+	// Handle ** (doublestar) patterns: Go's filepath.Match doesn't support **
+	// so we strip it and match the filename portion against the base pattern.
+	isRecursive := strings.Contains(pattern, "**")
+	basePattern := pattern
+	if isRecursive {
+		// "**/*.go" → "*.go", "**/*_test.go" → "*_test.go"
+		basePattern = strings.TrimPrefix(pattern, "**/")
+		basePattern = strings.TrimPrefix(basePattern, "**")
+		if basePattern == "" {
+			basePattern = "*"
+		}
+	}
+
 	var matches []string
 
 	err := filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
@@ -421,14 +434,21 @@ func toolGlob(workDir string, args map[string]string) (string, error) {
 		}
 
 		rel, _ := filepath.Rel(base, path)
-		matched, _ := filepath.Match(pattern, info.Name())
 
-		if !matched {
-			matched, _ = filepath.Match(pattern, rel)
-		}
-
-		if matched {
-			matches = append(matches, rel)
+		if isRecursive {
+			// For ** patterns, match the filename against the base pattern
+			matched, _ := filepath.Match(basePattern, info.Name())
+			if matched {
+				matches = append(matches, rel)
+			}
+		} else {
+			matched, _ := filepath.Match(pattern, info.Name())
+			if !matched {
+				matched, _ = filepath.Match(pattern, rel)
+			}
+			if matched {
+				matches = append(matches, rel)
+			}
 		}
 
 		return nil
