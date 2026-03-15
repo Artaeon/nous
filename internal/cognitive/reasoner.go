@@ -64,6 +64,8 @@ type Reasoner struct {
 	Compiler         *ModelCompiler
 	VCtx             *VirtualContext
 	Growth           *PersonalGrowth
+	Ensemble         *ToolEnsemble
+	Feedback         *FeedbackLoop
 	OnToken          func(token string, done bool)
 	OnStatus         func(status string)
 	Confirm          ConfirmFunc
@@ -2092,6 +2094,19 @@ func (r *Reasoner) finishReasoning(percept blackboard.Percept, pipe *Pipeline, f
 	// Personal growth — track user interests and interaction patterns
 	if r.Growth != nil {
 		go r.Growth.RecordInteraction(percept.Raw)
+	}
+
+	// Cross-memory feedback: propagate success across all subsystems
+	if r.Feedback != nil && pipe.StepCount() >= 1 {
+		var toolNames []string
+		for _, s := range pipe.steps {
+			if s.ToolName != "" {
+				toolNames = append(toolNames, s.ToolName)
+			}
+		}
+		if len(toolNames) > 0 {
+			go r.Feedback.OnToolSuccess(percept.Raw, toolNames[0], toolNames)
+		}
 	}
 
 	r.storeToMemory(percept.Raw, finalAnswer)

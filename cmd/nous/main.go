@@ -284,6 +284,15 @@ func main() {
 	reasoner.VCtx.AddSource(cognitive.KnowledgeSource(reasoner.Knowledge))
 	reasoner.VCtx.AddSource(cognitive.GrowthSource(reasoner.Growth))
 
+	// 18. Intent-Cortex Ensemble — two prediction systems voting together
+	reasoner.Ensemble = cognitive.NewToolEnsemble(reasoner.Intent, reasoner.Cortex)
+
+	// 19. Cross-Memory Feedback Loop — wires all subsystems together
+	reasoner.Feedback = cognitive.NewFeedbackLoop(
+		reasoner.Cortex, reasoner.EpisodicMem,
+		reasoner.VCtx, reasoner.Growth, reasoner.Crystals,
+	)
+
 	reasoner.AssistantContext = func(input string, recent string) string {
 		return buildAssistantContext(assistantStore, input, recent, time.Now())
 	}
