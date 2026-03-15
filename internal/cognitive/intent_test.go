@@ -127,6 +127,52 @@ func TestIntentCompileSearch(t *testing.T) {
 	}
 }
 
+// --- Semantic Grep Intent Tests ---
+
+func TestIntentCompileSemanticGrep(t *testing.T) {
+	ic, _ := setupTestCompiler(t)
+
+	tests := []struct {
+		name        string
+		input       string
+		wantPattern string
+		wantPath    string
+	}{
+		{"show structs", "show all structs in reasoner.go", `type \w+ struct`, "internal/cognitive/reasoner.go"},
+		{"find functions", "find functions in pipeline.go", `^func `, "internal/cognitive/pipeline.go"},
+		{"list methods", "list all methods in grounding.go", `func \(`, "internal/cognitive/grounding.go"},
+		{"get interfaces", "get interfaces in intent.go", `type \w+ interface`, "internal/cognitive/intent.go"},
+		{"show types", "show types in client.go", `^type `, "internal/ollama/client.go"},
+		{"extract imports", "extract imports in go.mod", `^import`, "go.mod"},
+		{"find constants", "find all constants in builtin.go", `^const `, "internal/tools/builtin.go"},
+		{"show variables", "show variables in registry.go", `^var `, "internal/tools/registry.go"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actions := ic.Compile(tt.input)
+			if len(actions) == 0 {
+				t.Fatalf("expected action for %q, got none", tt.input)
+			}
+			if actions[0].Tool != "grep" {
+				t.Errorf("tool = %q, want grep", actions[0].Tool)
+			}
+			if actions[0].Args["pattern"] != tt.wantPattern {
+				t.Errorf("pattern = %q, want %q", actions[0].Args["pattern"], tt.wantPattern)
+			}
+			if actions[0].Args["path"] != tt.wantPath {
+				t.Errorf("path = %q, want %q", actions[0].Args["path"], tt.wantPath)
+			}
+			if actions[0].Source != "semantic-grep-pattern" {
+				t.Errorf("source = %q, want semantic-grep-pattern", actions[0].Source)
+			}
+			if actions[0].Confidence < 0.85 {
+				t.Errorf("confidence = %f, want >= 0.85", actions[0].Confidence)
+			}
+		})
+	}
+}
+
 // --- List Intent Tests ---
 
 func TestIntentCompileList(t *testing.T) {
@@ -142,6 +188,11 @@ func TestIntentCompileList(t *testing.T) {
 		{"ls dir", "list files in internal/cognitive", "internal/cognitive"},
 		{"show directory", "show the directory", ""},
 		{"whats in current dir", "what's in the current folder", ""},
+		{"what files in dir", "what files are in internal/cognitive", "internal/cognitive"},
+		{"what files inside dir", "what files are inside internal/tools", "internal/tools"},
+		{"what files under dir", "what files under internal/ollama", "internal/ollama"},
+		{"whats in dir slash", "what's in internal/cognitive/", "internal/cognitive"},
+		{"what is inside dir slash", "what is inside internal/memory/", "internal/memory"},
 	}
 
 	for _, tt := range tests {
@@ -253,6 +304,76 @@ func TestIntentCompileTree(t *testing.T) {
 }
 
 // --- Glob Intent Tests ---
+
+func TestIntentCompileGlobCount(t *testing.T) {
+	ic, _ := setupTestCompiler(t)
+
+	tests := []struct {
+		name        string
+		input       string
+		wantPattern string
+		wantSource  string
+	}{
+		{"how many test files", "how many test files are there?", "**/*_test.go", "glob-count-pattern"},
+		{"count test files", "count test files", "**/*_test.go", "glob-count-pattern"},
+		{"how many files", "how many files are there", "**/*", "glob-count-pattern"},
+		{"how many files exist", "how many files exist", "**/*", "glob-count-pattern"},
+		{"count files", "count files", "**/*", "glob-count-pattern"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actions := ic.Compile(tt.input)
+			if len(actions) == 0 {
+				t.Fatalf("expected action for %q, got none", tt.input)
+			}
+			if actions[0].Tool != "glob" {
+				t.Errorf("tool = %q, want glob", actions[0].Tool)
+			}
+			if actions[0].Args["pattern"] != tt.wantPattern {
+				t.Errorf("pattern = %q, want %q", actions[0].Args["pattern"], tt.wantPattern)
+			}
+			if actions[0].Source != tt.wantSource {
+				t.Errorf("source = %q, want %q", actions[0].Source, tt.wantSource)
+			}
+		})
+	}
+}
+
+func TestIntentCompileGlobSuperlative(t *testing.T) {
+	ic, _ := setupTestCompiler(t)
+
+	tests := []struct {
+		name        string
+		input       string
+		wantPattern string
+		wantSource  string
+	}{
+		{"largest go files", "find the largest go files", "**/*.go", "glob-superlative-pattern"},
+		{"biggest files", "find the biggest files", "**/*", "glob-superlative-pattern"},
+		{"smallest python files", "show the smallest python files", "**/*.py", "glob-superlative-pattern"},
+		{"newest files", "find the newest files", "**/*", "glob-superlative-pattern"},
+		{"oldest rust files", "list oldest rust files", "**/*.rs", "glob-superlative-pattern"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actions := ic.Compile(tt.input)
+			if len(actions) == 0 {
+				t.Fatalf("expected action for %q, got none", tt.input)
+			}
+			if actions[0].Tool != "glob" {
+				t.Errorf("tool = %q, want glob", actions[0].Tool)
+			}
+			if actions[0].Args["pattern"] != tt.wantPattern {
+				t.Errorf("pattern = %q, want %q", actions[0].Args["pattern"], tt.wantPattern)
+			}
+			if actions[0].Source != tt.wantSource {
+				t.Errorf("source = %q, want %q", actions[0].Source, tt.wantSource)
+			}
+		})
+	}
+}
 
 func TestIntentCompileGlob(t *testing.T) {
 	ic, _ := setupTestCompiler(t)

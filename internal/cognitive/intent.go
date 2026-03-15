@@ -78,6 +78,29 @@ var searchPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(?:search|grep|find)\s+(?:for\s+)?(\S+)`),
 }
 
+// Semantic grep intent: user wants to find language constructs (structs, functions, etc.) in a file
+var semanticGrepPattern = regexp.MustCompile(`(?i)(?:show|find|list|extract|get)\s+(?:all\s+)?(?:the\s+)?(structs?|functions?|methods?|interfaces?|types?|constants?|variables?|imports?)\s+(?:in|from|of)\s+(?:the\s+)?(?:file\s+)?["'\x60]?([a-zA-Z0-9_./ -]+\.[a-zA-Z0-9]+)["'\x60]?`)
+
+// semanticGrepMap maps natural language construct names to grep patterns.
+var semanticGrepMap = map[string]string{
+	"struct":    `type \w+ struct`,
+	"structs":   `type \w+ struct`,
+	"function":  `^func `,
+	"functions": `^func `,
+	"method":    `func \(`,
+	"methods":   `func \(`,
+	"interface":  `type \w+ interface`,
+	"interfaces": `type \w+ interface`,
+	"type":      `^type `,
+	"types":     `^type `,
+	"constant":  `^const `,
+	"constants": `^const `,
+	"variable":  `^var `,
+	"variables": `^var `,
+	"import":    `^import`,
+	"imports":   `^import`,
+}
+
 // Search with file filter extraction
 var searchFilterPattern = regexp.MustCompile(`(?i)in\s+(?:all\s+)?(?:the\s+)?((?:\*\.)?[a-z]+)\s+files`)
 var searchDirPattern = regexp.MustCompile(`(?i)in\s+(?:the\s+)?(?:directory\s+)?["'\x60]?([a-zA-Z0-9_./ -]+)["'\x60]?`)
@@ -86,6 +109,8 @@ var searchDirPattern = regexp.MustCompile(`(?i)in\s+(?:the\s+)?(?:directory\s+)?
 var listPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(?:list|ls|show)\s+(?:all\s+)?(?:the\s+)?(?:files|contents?)\s+(?:in\s+|of\s+)?(?:the\s+)?(?:directory\s+)?["'\x60]?([a-zA-Z0-9_./ -]+)["'\x60]?`),
 	regexp.MustCompile(`(?i)what\s+(?:files|things)\s+(?:are\s+)?in\s+(?:the\s+)?(?:directory\s+)?(?:["'\x60]?([a-zA-Z0-9_./ -]+)["'\x60]?|(?:current|this)\s+(?:directory|folder|dir))`),
+	regexp.MustCompile(`(?i)what\s+files\s+(?:are\s+)?(?:in|inside|within|under)\s+(?:the\s+)?(?:directory\s+)?([a-zA-Z0-9_./ -]+)`),
+	regexp.MustCompile(`(?i)what(?:'s| is)\s+(?:in|inside)\s+([a-zA-Z0-9_./ -]+/)`),
 	regexp.MustCompile(`(?i)(?:list|ls|show)\s+(?:the\s+)?(?:current\s+)?(?:directory|folder|dir|files)`),
 	regexp.MustCompile(`(?i)what(?:'s| is)\s+(?:in\s+)?(?:the\s+)?(?:current|this)\s+(?:directory|folder|dir)`),
 }
@@ -108,6 +133,12 @@ var globPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(?:find|list|show)\s+(?:all\s+)?(?:files?\s+)?(?:matching|named|called|with\s+(?:extension|ext|name))\s+["'\x60]?([a-zA-Z0-9_.*?/ -]+)["'\x60]?`),
 	regexp.MustCompile(`(?i)(?:find|list|show)\s+(?:all\s+)?(?:\*\.)?([a-z]+)\s+files?`),
 }
+
+// Glob counting intent: user wants to count files
+var globCountPattern = regexp.MustCompile(`(?i)(?:how many|count)\s+(?:the\s+)?(?:test\s+)?(?:files?|tests?)(?:\s+(?:are\s+)?(?:there|exist|do we have))?`)
+
+// Glob superlative intent: user wants to find files by size/age
+var globSuperlativePattern = regexp.MustCompile(`(?i)(?:find|show|list|get)\s+(?:the\s+)?(?:all\s+)?(largest|biggest|smallest|newest|oldest)\s+(?:(go|python|java|rust|javascript|typescript|ruby|c|cpp)\s+)?(?:files?|sources?)`)
 
 // Git intent: user wants git operations
 var gitPatterns = []*regexp.Regexp{
@@ -204,6 +235,26 @@ func (ic *IntentCompiler) tryReadIntent(input string) []CompiledAction {
 }
 
 func (ic *IntentCompiler) trySearchIntent(input string) []CompiledAction {
+	// Try semantic grep first: "show all structs in router.go"
+	if m := semanticGrepPattern.FindStringSubmatch(input); len(m) >= 3 {
+		construct := strings.TrimSpace(strings.ToLower(m[1]))
+		file := strings.TrimSpace(m[2])
+		if grepPat, ok := semanticGrepMap[construct]; ok {
+			args := map[string]string{"pattern": grepPat}
+			if resolved := ic.ResolvePath(file); resolved != "" {
+				args["path"] = resolved
+			} else {
+				args["path"] = file
+			}
+			return []CompiledAction{{
+				Tool:       "grep",
+				Args:       args,
+				Confidence: 0.9,
+				Source:     "semantic-grep-pattern",
+			}}
+		}
+	}
+
 	for _, pat := range searchPatterns {
 		m := pat.FindStringSubmatch(input)
 		if len(m) < 2 {
@@ -323,6 +374,40 @@ func (ic *IntentCompiler) tryTreeIntent(input string) []CompiledAction {
 }
 
 func (ic *IntentCompiler) tryGlobIntent(input string) []CompiledAction {
+	// Check counting pattern: "how many test files are there?"
+	if globCountPattern.MatchString(input) {
+		lower := strings.ToLower(input)
+		pattern := "**/*"
+		if strings.Contains(lower, "test") {
+			pattern = "**/*_test.go"
+		} else if strings.Contains(lower, "go") {
+			pattern = "**/*.go"
+		}
+		return []CompiledAction{{
+			Tool:       "glob",
+			Args:       map[string]string{"pattern": pattern},
+			Confidence: 0.8,
+			Source:     "glob-count-pattern",
+		}}
+	}
+
+	// Check superlative pattern: "find the largest Go files"
+	if m := globSuperlativePattern.FindStringSubmatch(input); m != nil {
+		pattern := "**/*"
+		if len(m) >= 3 && m[2] != "" {
+			lang := strings.ToLower(m[2])
+			if glob, ok := fileExtToGlob[lang]; ok {
+				pattern = "**/" + glob
+			}
+		}
+		return []CompiledAction{{
+			Tool:       "glob",
+			Args:       map[string]string{"pattern": pattern},
+			Confidence: 0.8,
+			Source:     "glob-superlative-pattern",
+		}}
+	}
+
 	for _, pat := range globPatterns {
 		m := pat.FindStringSubmatch(input)
 		if m == nil || len(m) < 2 {
