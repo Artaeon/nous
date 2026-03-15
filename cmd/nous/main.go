@@ -286,6 +286,14 @@ func main() {
 	reasoner.VCtx = cognitive.NewVirtualContext(1500)
 	reasoner.VCtx.AddSource(cognitive.KnowledgeSource(reasoner.Knowledge))
 	reasoner.VCtx.AddSource(cognitive.GrowthSource(reasoner.Growth))
+	reasoner.VCtx.AddSource(cognitive.EpisodicSource(func(query string, limit int) []string {
+		episodes := episodic.SearchKeyword(query, limit)
+		var results []string
+		for _, ep := range episodes {
+			results = append(results, fmt.Sprintf("Q: %s\nA: %s", ep.Input, ep.Output))
+		}
+		return results
+	}))
 
 	// 18. Intent-Cortex Ensemble — two prediction systems voting together
 	reasoner.Ensemble = cognitive.NewToolEnsemble(reasoner.Intent, reasoner.Cortex)
@@ -556,8 +564,8 @@ func main() {
 			var err error
 			answer, err = fastResp.RespondWithPath(reasoner.Conv, input, queryPath)
 			llmSpinner.Stop()
-			if err != nil || strings.TrimSpace(answer) == "" {
-				// Fallback to full pipeline on error or empty response
+			if err != nil {
+				// Fallback to full pipeline on error only (not terse answers)
 				llmSpinner.Start("thinking...")
 				perceiver.Submit(input)
 				answer = waitForAnswerStr(board)

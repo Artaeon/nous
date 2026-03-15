@@ -463,8 +463,9 @@ func toolGlob(workDir string, args map[string]string) (string, error) {
 	}
 
 	if len(matches) > 100 {
+		total := len(matches)
 		matches = matches[:100]
-		return strings.Join(matches, "\n") + "\n... (truncated to 100 results)", nil
+		return strings.Join(matches, "\n") + fmt.Sprintf("\n... (%d more files, %d total)", total-100, total), nil
 	}
 
 	return strings.Join(matches, "\n"), nil

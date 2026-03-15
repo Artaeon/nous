@@ -543,6 +543,46 @@ func GrowthSource(g *PersonalGrowth) ContextSource {
 	}
 }
 
+// EpisodicRecallFunc searches episodic memory and returns formatted past interactions.
+type EpisodicRecallFunc func(query string, limit int) []string
+
+// EpisodicSource creates a ContextSource from an episodic recall function.
+// This enables medium-path queries to recall relevant past interactions.
+func EpisodicSource(recall EpisodicRecallFunc) ContextSource {
+	return ContextSource{
+		Name:     "episodic",
+		Type:     SourceEpisodic,
+		Size:     1000, // estimated
+		Priority: 60,
+		Query: func(query string, budget int) []ContextSlice {
+			maxEpisodes := budget / 80
+			if maxEpisodes < 1 {
+				maxEpisodes = 1
+			}
+			if maxEpisodes > 3 {
+				maxEpisodes = 3
+			}
+			episodes := recall(query, maxEpisodes)
+			if len(episodes) == 0 {
+				return nil
+			}
+			var slices []ContextSlice
+			for _, content := range episodes {
+				if len(content) > 300 {
+					content = content[:300] + "..."
+				}
+				slices = append(slices, ContextSlice{
+					Source:    "episodic",
+					Content:  content,
+					Tokens:   len(content) / 4,
+					Relevance: 0.6,
+				})
+			}
+			return slices
+		},
+	}
+}
+
 // InteractionTimestamp tracks when context was last assembled for staleness detection.
 var lastWeaveTime time.Time
 
