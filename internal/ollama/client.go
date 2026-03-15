@@ -20,6 +20,7 @@ const (
 type Client struct {
 	host       string
 	model      string
+	draftModel string // speculative decoding: small model proposes, main model verifies
 	httpClient *http.Client
 }
 
@@ -31,6 +32,10 @@ func WithHost(host string) Option {
 
 func WithModel(model string) Option {
 	return func(c *Client) { c.model = model }
+}
+
+func WithDraftModel(model string) Option {
+	return func(c *Client) { c.draftModel = model }
 }
 
 func WithTimeout(timeout time.Duration) Option {
@@ -445,11 +450,17 @@ func (c *Client) Host() string {
 	return c.host
 }
 
+// DraftModel returns the configured draft model for speculative decoding, if any.
+func (c *Client) DraftModel() string {
+	return c.draftModel
+}
+
 // Clone creates a new client sharing the same host but targeting a different model.
 func (c *Client) Clone(model string) *Client {
 	return &Client{
 		host:       c.host,
 		model:      model,
+		draftModel: c.draftModel,
 		httpClient: c.httpClient,
 	}
 }

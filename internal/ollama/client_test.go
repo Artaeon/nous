@@ -581,10 +581,29 @@ func TestEnsureNumCtxAlreadySet(t *testing.T) {
 	}
 }
 
+// --- DraftModel ---
+
+func TestWithDraftModel(t *testing.T) {
+	c := New(WithModel("llama3.1:latest"), WithDraftModel("tinyllama:latest"))
+	if c.Model() != "llama3.1:latest" {
+		t.Errorf("Model() = %q, want %q", c.Model(), "llama3.1:latest")
+	}
+	if c.DraftModel() != "tinyllama:latest" {
+		t.Errorf("DraftModel() = %q, want %q", c.DraftModel(), "tinyllama:latest")
+	}
+}
+
+func TestDraftModelDefault(t *testing.T) {
+	c := New()
+	if c.DraftModel() != "" {
+		t.Errorf("DraftModel() = %q, want empty", c.DraftModel())
+	}
+}
+
 // --- Clone ---
 
 func TestClone(t *testing.T) {
-	original := New(WithHost("http://myhost:1234"), WithModel("llama3:8b"))
+	original := New(WithHost("http://myhost:1234"), WithModel("llama3:8b"), WithDraftModel("tinyllama:latest"))
 	cloned := original.Clone("qwen2.5:1.5b")
 
 	if cloned.host != "http://myhost:1234" {
@@ -592,6 +611,9 @@ func TestClone(t *testing.T) {
 	}
 	if cloned.model != "qwen2.5:1.5b" {
 		t.Errorf("cloned model = %q, want %q", cloned.model, "qwen2.5:1.5b")
+	}
+	if cloned.draftModel != "tinyllama:latest" {
+		t.Errorf("cloned draftModel = %q, want %q", cloned.draftModel, "tinyllama:latest")
 	}
 	if cloned.httpClient != original.httpClient {
 		t.Error("cloned should share httpClient")
