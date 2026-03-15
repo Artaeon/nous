@@ -486,3 +486,205 @@ func BenchmarkVirtualContextWeave(b *testing.B) {
 		vc.Weave("test query")
 	}
 }
+
+// --- Context Distillation Tests ---
+
+func TestSetDistiller(t *testing.T) {
+	vc := NewVirtualContext(1500)
+
+	// Initially nil
+	if vc.distiller != nil {
+		t.Error("distiller should be nil initially")
+	}
+
+	called := false
+	vc.SetDistiller(func(chunks []string) (string, error) {
+		called = true
+		return strings.Join(chunks, "; "), nil
+	})
+
+	if vc.distiller == nil {
+		t.Error("distiller should be set")
+	}
+	// Calling the distiller directly
+	result, err := vc.distiller([]string{"a", "b"})
+	if err != nil {
+		t.Fatalf("distiller error: %v", err)
+	}
+	if result != "a; b" {
+		t.Errorf("distiller result = %q", result)
+	}
+	if !called {
+		t.Error("distiller was not called")
+	}
+}
+
+func TestDistillAssemblyNoDistiller(t *testing.T) {
+	vc := NewVirtualContext(1500)
+
+	assembly := &ContextAssembly{
+		Slices: []ContextSlice{
+			{Source: "a", Content: "chunk 1", Tokens: 10, Relevance: 0.9},
+			{Source: "a", Content: "chunk 2", Tokens: 10, Relevance: 0.8},
+		},
+		TotalTokens: 20,
+		SourcesUsed: 1,
+	}
+
+	// Without distiller, should return original
+	result := vc.DistillAssembly(assembly)
+	if result != assembly {
+		t.Error("should return original assembly when no distiller set")
+	}
+}
+
+func TestDistillAssemblyNilAssembly(t *testing.T) {
+	vc := NewVirtualContext(1500)
+	vc.SetDistiller(func(chunks []string) (string, error) {
+		return "compressed", nil
+	})
+
+	result := vc.DistillAssembly(nil)
+	if result != nil {
+		t.Error("should return nil for nil assembly")
+	}
+}
+
+func TestDistillAssemblySingleSlice(t *testing.T) {
+	vc := NewVirtualContext(1500)
+	distillerCalled := false
+	vc.SetDistiller(func(chunks []string) (string, error) {
+		distillerCalled = true
+		return "compressed", nil
+	})
+
+	assembly := &ContextAssembly{
+		Slices: []ContextSlice{
+			{Source: "a", Content: "only one", Tokens: 5, Relevance: 0.9},
+		},
+		TotalTokens: 5,
+		SourcesUsed: 1,
+	}
+
+	// Single slice — should skip distillation entirely
+	result := vc.DistillAssembly(assembly)
+	if result != assembly {
+		t.Error("should return original for single-slice assembly")
+	}
+	if distillerCalled {
+		t.Error("distiller should not be called for single slice")
+	}
+}
+
+func TestDistillAssemblyCompresses(t *testing.T) {
+	vc := NewVirtualContext(1500)
+
+	vc.SetDistiller(func(chunks []string) (string, error) {
+		// Simulate compression: join with semicolons (shorter than originals)
+		return "compressed: " + strings.Join(chunks, "; "), nil
+	})
+
+	assembly := &ContextAssembly{
+		Slices: []ContextSlice{
+			{Source: "knowledge", Content: "The sky is blue because of Rayleigh scattering", Tokens: 20, Relevance: 0.9},
+			{Source: "knowledge", Content: "Rayleigh scattering affects shorter wavelengths more", Tokens: 20, Relevance: 0.85},
+			{Source: "personal", Content: "User is a physics student", Tokens: 10, Relevance: 0.7},
+		},
+		TotalTokens: 50,
+		SourcesUsed: 2,
+		VirtualSize: 100000,
+	}
+
+	result := vc.DistillAssembly(assembly)
+
+	// Should have 2 slices: compressed knowledge + original personal
+	if len(result.Slices) != 2 {
+		t.Fatalf("expected 2 slices, got %d", len(result.Slices))
+	}
+
+	// Find the knowledge slice (compressed)
+	var knowledgeSlice *ContextSlice
+	var personalSlice *ContextSlice
+	for i := range result.Slices {
+		if result.Slices[i].Source == "knowledge" {
+			knowledgeSlice = &result.Slices[i]
+		} else if result.Slices[i].Source == "personal" {
+			personalSlice = &result.Slices[i]
+		}
+	}
+
+	if knowledgeSlice == nil {
+		t.Fatal("missing knowledge slice")
+	}
+	if !strings.HasPrefix(knowledgeSlice.Content, "compressed: ") {
+		t.Errorf("knowledge slice should be compressed, got %q", knowledgeSlice.Content)
+	}
+
+	// Personal slice should be unchanged (only 1 slice, no distillation)
+	if personalSlice == nil {
+		t.Fatal("missing personal slice")
+	}
+	if personalSlice.Content != "User is a physics student" {
+		t.Errorf("personal slice should be unchanged, got %q", personalSlice.Content)
+	}
+
+	// Total tokens should be less (compressed)
+	if result.TotalTokens >= assembly.TotalTokens {
+		t.Errorf("distilled tokens (%d) should be less than original (%d)", result.TotalTokens, assembly.TotalTokens)
+	}
+
+	// VirtualSize should be preserved
+	if result.VirtualSize != assembly.VirtualSize {
+		t.Errorf("VirtualSize = %d, want %d", result.VirtualSize, assembly.VirtualSize)
+	}
+}
+
+func TestWeaveDistilled(t *testing.T) {
+	vc := NewVirtualContext(1500)
+
+	vc.AddSource(ContextSource{
+		Name: "src1", Size: 1000, Priority: 80,
+		Query: func(query string, budget int) []ContextSlice {
+			return []ContextSlice{
+				{Source: "src1", Content: "first chunk", Tokens: 30, Relevance: 0.9},
+				{Source: "src1", Content: "second chunk", Tokens: 30, Relevance: 0.8},
+			}
+		},
+	})
+
+	distillerCalled := false
+	vc.SetDistiller(func(chunks []string) (string, error) {
+		distillerCalled = true
+		return "distilled", nil
+	})
+
+	result := vc.WeaveDistilled("test query")
+	if !distillerCalled {
+		t.Error("distiller should be called by WeaveDistilled")
+	}
+	if len(result.Slices) != 1 {
+		t.Errorf("expected 1 distilled slice, got %d", len(result.Slices))
+	}
+	if result.Slices[0].Content != "distilled" {
+		t.Errorf("content = %q, want 'distilled'", result.Slices[0].Content)
+	}
+}
+
+func TestWeaveDistilledNoDistiller(t *testing.T) {
+	vc := NewVirtualContext(1500)
+
+	vc.AddSource(ContextSource{
+		Name: "src", Size: 1000, Priority: 80,
+		Query: func(query string, budget int) []ContextSlice {
+			return []ContextSlice{
+				{Source: "src", Content: "data", Tokens: 10, Relevance: 0.9},
+			}
+		},
+	})
+
+	// Without distiller, WeaveDistilled should work like Weave
+	result := vc.WeaveDistilled("test")
+	if len(result.Slices) != 1 {
+		t.Errorf("expected 1 slice, got %d", len(result.Slices))
+	}
+}

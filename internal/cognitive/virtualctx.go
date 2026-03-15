@@ -42,6 +42,9 @@ type VirtualContext struct {
 	// Source health: per-source quality tracking with exponential moving average
 	sourceQuality map[string]float64 // source name → EMA of relevance (0.0-1.0)
 	sourceTokens  map[string]int     // source name → cumulative tokens allocated
+
+	// Context distillation
+	distiller Distiller // compresses verbose chunks into dense summaries
 }
 
 // ContextSource represents one source of context that can be queried.
@@ -542,6 +545,98 @@ func GrowthSource(g *PersonalGrowth) ContextSource {
 
 // InteractionTimestamp tracks when context was last assembled for staleness detection.
 var lastWeaveTime time.Time
+
+// Distiller compresses verbose context chunks into dense summaries.
+// This is set externally (typically to a fast model wrapper).
+type Distiller func(chunks []string) (string, error)
+
+// SetDistiller configures the context distillation function.
+// The distiller receives multiple context chunks and returns a single
+// compressed paragraph containing the key information from all of them.
+func (vc *VirtualContext) SetDistiller(d Distiller) {
+	vc.mu.Lock()
+	defer vc.mu.Unlock()
+	vc.distiller = d
+}
+
+// DistillAssembly compresses a context assembly using the configured distiller.
+// Returns a new assembly with fewer, denser slices. Falls back to the
+// original assembly if no distiller is set or distillation fails.
+func (vc *VirtualContext) DistillAssembly(assembly *ContextAssembly) *ContextAssembly {
+	vc.mu.RLock()
+	distiller := vc.distiller
+	vc.mu.RUnlock()
+
+	if distiller == nil || assembly == nil || len(assembly.Slices) < 2 {
+		return assembly
+	}
+
+	// Group slices by source for coherent distillation
+	groups := make(map[string][]ContextSlice)
+	for _, s := range assembly.Slices {
+		groups[s.Source] = append(groups[s.Source], s)
+	}
+
+	var distilled []ContextSlice
+	for source, slices := range groups {
+		if len(slices) < 2 {
+			// Single slice — keep as-is, no benefit from distillation
+			distilled = append(distilled, slices...)
+			continue
+		}
+
+		// Collect content for distillation
+		var chunks []string
+		var totalRelevance float64
+		for _, s := range slices {
+			chunks = append(chunks, s.Content)
+			totalRelevance += s.Relevance
+		}
+		avgRelevance := totalRelevance / float64(len(slices))
+
+		compressed, err := distiller(chunks)
+		if err != nil || compressed == "" {
+			// Distillation failed — keep originals
+			distilled = append(distilled, slices...)
+			continue
+		}
+
+		distilled = append(distilled, ContextSlice{
+			Source:    source,
+			Content:   compressed,
+			Tokens:    len(compressed) / 4,
+			Relevance: avgRelevance,
+		})
+	}
+
+	// Calculate new totals
+	totalTokens := 0
+	sourcesUsed := make(map[string]bool)
+	for _, s := range distilled {
+		totalTokens += s.Tokens
+		sourcesUsed[s.Source] = true
+	}
+
+	utilization := 0.0
+	if vc.budget > 0 {
+		utilization = float64(totalTokens) / float64(vc.budget)
+	}
+
+	return &ContextAssembly{
+		Slices:      distilled,
+		TotalTokens: totalTokens,
+		SourcesUsed: len(sourcesUsed),
+		VirtualSize: assembly.VirtualSize,
+		Utilization: utilization,
+	}
+}
+
+// WeaveDistilled assembles context and then distills it for maximum density.
+// This combines Weave + DistillAssembly in a single call.
+func (vc *VirtualContext) WeaveDistilled(query string) *ContextAssembly {
+	assembly := vc.Weave(query)
+	return vc.DistillAssembly(assembly)
+}
 
 // UpdateSourceSize updates the size of a named source (call when data changes).
 func (vc *VirtualContext) UpdateSourceSize(name string, newSize int) {

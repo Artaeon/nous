@@ -271,8 +271,9 @@ func (r *FastPathResponder) buildMediumPrompt(conv *Conversation, query string) 
 	sb.WriteString(mediumPathSystemPrompt)
 
 	// Inject knowledge context — this is what makes medium-path answers accurate.
+	// Use distilled assembly when a distiller is configured for denser context.
 	if r.VCtx != nil {
-		assembly := r.VCtx.Weave(query)
+		assembly := r.VCtx.WeaveDistilled(query)
 		if prompt := assembly.FormatForPrompt(); prompt != "" {
 			sb.WriteString("\n\n[Knowledge]\n")
 			sb.WriteString(prompt)
