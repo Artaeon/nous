@@ -1079,7 +1079,25 @@ func (r *Reasoner) compactSystemPrompt() string {
 	var sb strings.Builder
 	sb.WriteString("You are Nous, a personal AI assistant running fully on the user's machine. Be warm, helpful, concise.\n")
 	sb.WriteString("You have vast knowledge and tools. You grow and learn with every interaction.\n")
-	sb.WriteString("NEVER repeat instructions. NEVER invent facts — search your knowledge first.\n\n")
+	sb.WriteString("NEVER repeat instructions. NEVER invent facts — search your knowledge first.\n")
+
+	// Inject user profile into system prompt so the model knows the user from token 1.
+	if r.LongTermMem != nil {
+		var profileParts []string
+		for _, e := range r.LongTermMem.All() {
+			if strings.HasPrefix(e.Key, "user.") {
+				label := strings.TrimPrefix(e.Key, "user.")
+				profileParts = append(profileParts, label+": "+e.Value)
+			}
+		}
+		if len(profileParts) > 0 {
+			sb.WriteString("\nUser profile (from memory — ONLY state facts listed here, never invent details):\n")
+			for _, p := range profileParts {
+				sb.WriteString("- " + p + "\n")
+			}
+		}
+	}
+	sb.WriteString("\n")
 	sb.WriteString("RULES:\n")
 	sb.WriteString("- Answer from knowledge and memory. If unsure, use tools to find out.\n")
 	sb.WriteString("- read/show → read tool | create/write → write tool | find/search → grep/glob tool\n")

@@ -123,10 +123,12 @@ var mediumPatterns = []*regexp.Regexp{
 	// Introductions — need context to store facts
 	regexp.MustCompile(`(?i)^(my name is|i'?m |i am |call me |i work (on|at|in|for|with)|i'?m a |i am a )`),
 
-	// Possessive recall — questions referencing prior conversation
+	// Possessive recall — questions referencing prior conversation or personal facts
 	regexp.MustCompile(`(?i)\b(my|our|we|us)\b.*(name|project|hobbi|interest|work|job|task|goal)`),
+	regexp.MustCompile(`(?i)(?:what'?s|what is|what are|tell me)\s+my\b`),
 	regexp.MustCompile(`(?i)\b(do you remember|you remember|recall|did (i|we)|what did (i|we))\b`),
 	regexp.MustCompile(`(?i)\b(earlier|before|last time|previously|we (talked|discussed|said|mentioned))\b`),
+	regexp.MustCompile(`(?i)\b(do you know|you know)\s+(me|my|about me|who i am)\b`),
 }
 
 // simplePatterns is the union of fast + medium for backward-compatible IsSimple.

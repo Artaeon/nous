@@ -505,9 +505,10 @@ func main() {
 		return
 	}
 
-	// --- First-run onboarding ---
-	// If LTM is empty, ask the user a few questions to personalize Nous.
-	cognitive.RunOnboarding(os.Stdin, ltm, wm)
+	// --- First-run onboarding or welcome-back ---
+	if !cognitive.RunOnboarding(os.Stdin, ltm, wm) {
+		cognitive.WelcomeBack(ltm)
+	}
 
 	// --- REPL Mode ---
 	fmt.Print(cognitive.Panel("Quick start", []string{

@@ -102,3 +102,33 @@ func TestOnboardingNilLTM(t *testing.T) {
 		t.Fatal("onboarding should not run with nil LTM")
 	}
 }
+
+func TestWelcomeBackReturningUser(t *testing.T) {
+	ltm := memory.NewLongTermMemory(t.TempDir())
+	ltm.Store("user.name", "Raphael", "personal")
+	ltm.Store("user.current_work", "building Nous", "work")
+
+	shown := WelcomeBack(ltm)
+	if !shown {
+		t.Fatal("expected welcome-back for returning user")
+	}
+}
+
+func TestWelcomeBackEmptyLTM(t *testing.T) {
+	ltm := memory.NewLongTermMemory(t.TempDir())
+
+	shown := WelcomeBack(ltm)
+	if shown {
+		t.Fatal("should not show welcome-back with empty LTM")
+	}
+}
+
+func TestWelcomeBackNoName(t *testing.T) {
+	ltm := memory.NewLongTermMemory(t.TempDir())
+	ltm.Store("user.role", "engineer", "personal")
+
+	shown := WelcomeBack(ltm)
+	if shown {
+		t.Fatal("should not show welcome-back without user.name")
+	}
+}

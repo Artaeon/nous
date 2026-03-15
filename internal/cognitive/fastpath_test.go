@@ -147,6 +147,15 @@ func TestClassifyQuery_Medium(t *testing.T) {
 		"can you help me understand monads in Haskell",
 		"summarize the main ideas of machine learning algorithms",
 		"why is Rust considered memory safe compared to C",
+		// Possessive recall patterns
+		"what's my favorite food?",
+		"what is my name?",
+		"what are my interests?",
+		"do you remember my name?",
+		"do you know who I am?",
+		"do you know about me?",
+		"tell me my name",
+		"we talked about this before",
 	}
 
 	for _, q := range medium {

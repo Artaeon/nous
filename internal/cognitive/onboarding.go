@@ -113,3 +113,27 @@ func RunOnboarding(r io.Reader, ltm *memory.LongTermMemory, wm *memory.WorkingMe
 
 	return true
 }
+
+// WelcomeBack prints a personalized greeting for returning users.
+// Returns true if a greeting was printed.
+func WelcomeBack(ltm *memory.LongTermMemory) bool {
+	if ltm == nil || ltm.Size() == 0 {
+		return false
+	}
+
+	name, hasName := ltm.Retrieve("user.name")
+	if !hasName {
+		return false
+	}
+
+	// Build a context-aware greeting
+	parts := []string{fmt.Sprintf("Welcome back, %s%s%s!", ColorBold, name, ColorReset)}
+
+	if work, ok := ltm.Retrieve("user.current_work"); ok {
+		parts = append(parts, Styled(ColorDim, "Last project: ")+work)
+	}
+
+	fmt.Println()
+	fmt.Print(Panel("", parts))
+	return true
+}
