@@ -406,6 +406,173 @@ func (em *EpisodicMemory) load() {
 	_ = json.Unmarshal(data, &em.episodes)
 }
 
+// SuccessPattern represents a recurring successful tool sequence mined from episodes.
+type SuccessPattern struct {
+	Tools     []string // ordered tool sequence
+	Count     int      // how many episodes used this sequence successfully
+	AvgDurMs  int64    // average duration in ms
+	Keywords  []string // common keywords across matching episodes
+}
+
+// SuccessPatterns mines episodic memory for recurring successful tool sequences.
+// Returns patterns sorted by frequency — the most common successful sequences first.
+func (em *EpisodicMemory) SuccessPatterns(minOccurrences int) []SuccessPattern {
+	em.mu.RLock()
+	defer em.mu.RUnlock()
+
+	if minOccurrences < 2 {
+		minOccurrences = 2
+	}
+
+	// Count tool sequence occurrences across successful episodes
+	type seqStats struct {
+		count    int
+		totalDur int64
+		allTags  map[string]int
+	}
+	seqMap := make(map[string]*seqStats)
+
+	for _, ep := range em.episodes {
+		if !ep.Success || len(ep.ToolsUsed) == 0 {
+			continue
+		}
+		key := strings.Join(ep.ToolsUsed, "→")
+		ss, ok := seqMap[key]
+		if !ok {
+			ss = &seqStats{allTags: make(map[string]int)}
+			seqMap[key] = ss
+		}
+		ss.count++
+		ss.totalDur += ep.Duration
+		for _, tag := range ep.Tags {
+			ss.allTags[tag]++
+		}
+	}
+
+	// Filter by minimum occurrences and build result
+	var patterns []SuccessPattern
+	for key, ss := range seqMap {
+		if ss.count < minOccurrences {
+			continue
+		}
+		tools := strings.Split(key, "→")
+		avgDur := ss.totalDur / int64(ss.count)
+
+		// Extract top keywords (appearing in >50% of episodes)
+		var keywords []string
+		threshold := ss.count / 2
+		if threshold < 1 {
+			threshold = 1
+		}
+		for tag, cnt := range ss.allTags {
+			if cnt >= threshold {
+				keywords = append(keywords, tag)
+			}
+		}
+
+		patterns = append(patterns, SuccessPattern{
+			Tools:    tools,
+			Count:    ss.count,
+			AvgDurMs: avgDur,
+			Keywords: keywords,
+		})
+	}
+
+	// Sort by count descending
+	for i := 0; i < len(patterns); i++ {
+		for j := i + 1; j < len(patterns); j++ {
+			if patterns[j].Count > patterns[i].Count {
+				patterns[i], patterns[j] = patterns[j], patterns[i]
+			}
+		}
+	}
+
+	return patterns
+}
+
+// SuccessfulToolEpisodes returns successful episodes that used a specific tool.
+func (em *EpisodicMemory) SuccessfulToolEpisodes(tool string, limit int) []Episode {
+	em.mu.RLock()
+	defer em.mu.RUnlock()
+
+	var results []Episode
+	// Iterate backwards (most recent first)
+	for i := len(em.episodes) - 1; i >= 0 && len(results) < limit; i-- {
+		ep := em.episodes[i]
+		if !ep.Success {
+			continue
+		}
+		for _, t := range ep.ToolsUsed {
+			if t == tool {
+				results = append(results, ep)
+				break
+			}
+		}
+	}
+	return results
+}
+
+// FailurePatterns returns the most common failure scenarios for learning.
+func (em *EpisodicMemory) FailurePatterns(limit int) []SuccessPattern {
+	em.mu.RLock()
+	defer em.mu.RUnlock()
+
+	seqMap := make(map[string]*struct {
+		count    int
+		totalDur int64
+		allTags  map[string]int
+	})
+
+	for _, ep := range em.episodes {
+		if ep.Success || len(ep.ToolsUsed) == 0 {
+			continue
+		}
+		key := strings.Join(ep.ToolsUsed, "→")
+		ss, ok := seqMap[key]
+		if !ok {
+			ss = &struct {
+				count    int
+				totalDur int64
+				allTags  map[string]int
+			}{allTags: make(map[string]int)}
+			seqMap[key] = ss
+		}
+		ss.count++
+		ss.totalDur += ep.Duration
+		for _, tag := range ep.Tags {
+			ss.allTags[tag]++
+		}
+	}
+
+	var patterns []SuccessPattern
+	for key, ss := range seqMap {
+		tools := strings.Split(key, "→")
+		avgDur := int64(0)
+		if ss.count > 0 {
+			avgDur = ss.totalDur / int64(ss.count)
+		}
+		patterns = append(patterns, SuccessPattern{
+			Tools:    tools,
+			Count:    ss.count,
+			AvgDurMs: avgDur,
+		})
+	}
+
+	// Sort by count descending
+	for i := 0; i < len(patterns); i++ {
+		for j := i + 1; j < len(patterns); j++ {
+			if patterns[j].Count > patterns[i].Count {
+				patterns[i], patterns[j] = patterns[j], patterns[i]
+			}
+		}
+	}
+
+	if len(patterns) > limit {
+		patterns = patterns[:limit]
+	}
+	return patterns
+}
+
 // --- helpers ---
 
 func episodeID(t time.Time) string {

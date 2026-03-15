@@ -308,3 +308,117 @@ func TestEpisodicMemoryHybridSearch(t *testing.T) {
 		t.Error("hybrid search should fall back to keyword")
 	}
 }
+
+func TestSuccessPatterns(t *testing.T) {
+	em := NewEpisodicMemory("", nil)
+
+	// Record the same successful tool sequence 5 times
+	for i := 0; i < 5; i++ {
+		em.Record(Episode{
+			Timestamp: time.Now().Add(time.Duration(i) * time.Second),
+			Input:     "show me the code",
+			ToolsUsed: []string{"grep", "read"},
+			Success:   true,
+			Duration:  100,
+		})
+	}
+	// Record a different sequence 3 times
+	for i := 0; i < 3; i++ {
+		em.Record(Episode{
+			Timestamp: time.Now().Add(time.Duration(10+i) * time.Second),
+			Input:     "list directory",
+			ToolsUsed: []string{"ls"},
+			Success:   true,
+			Duration:  50,
+		})
+	}
+	// Record a failure (should not appear in success patterns)
+	em.Record(Episode{
+		Timestamp: time.Now(),
+		Input:     "broken query",
+		ToolsUsed: []string{"shell"},
+		Success:   false,
+	})
+
+	patterns := em.SuccessPatterns(2)
+	if len(patterns) != 2 {
+		t.Fatalf("expected 2 patterns, got %d", len(patterns))
+	}
+	// Most frequent first
+	if patterns[0].Count != 5 {
+		t.Errorf("first pattern count = %d, want 5", patterns[0].Count)
+	}
+	if patterns[0].Tools[0] != "grep" || patterns[0].Tools[1] != "read" {
+		t.Errorf("first pattern tools = %v, want [grep read]", patterns[0].Tools)
+	}
+	if patterns[1].Count != 3 {
+		t.Errorf("second pattern count = %d, want 3", patterns[1].Count)
+	}
+}
+
+func TestSuccessPatternsMinOccurrences(t *testing.T) {
+	em := NewEpisodicMemory("", nil)
+
+	// Only 1 occurrence — should not be returned
+	em.Record(Episode{
+		Timestamp: time.Now(),
+		Input:     "rare query",
+		ToolsUsed: []string{"read"},
+		Success:   true,
+	})
+
+	patterns := em.SuccessPatterns(2)
+	if len(patterns) != 0 {
+		t.Errorf("expected 0 patterns with min 2 occurrences, got %d", len(patterns))
+	}
+}
+
+func TestSuccessfulToolEpisodes(t *testing.T) {
+	em := NewEpisodicMemory("", nil)
+
+	em.Record(Episode{Timestamp: time.Now(), ToolsUsed: []string{"grep"}, Success: true, Input: "a"})
+	em.Record(Episode{Timestamp: time.Now(), ToolsUsed: []string{"read"}, Success: true, Input: "b"})
+	em.Record(Episode{Timestamp: time.Now(), ToolsUsed: []string{"grep"}, Success: false, Input: "c"})
+	em.Record(Episode{Timestamp: time.Now(), ToolsUsed: []string{"grep", "read"}, Success: true, Input: "d"})
+
+	results := em.SuccessfulToolEpisodes("grep", 10)
+	if len(results) != 2 {
+		t.Errorf("expected 2 successful grep episodes, got %d", len(results))
+	}
+	// Most recent first
+	if results[0].Input != "d" {
+		t.Errorf("most recent grep episode should be 'd', got %q", results[0].Input)
+	}
+}
+
+func TestFailurePatterns(t *testing.T) {
+	em := NewEpisodicMemory("", nil)
+
+	// Record failures
+	for i := 0; i < 3; i++ {
+		em.Record(Episode{
+			Timestamp: time.Now(),
+			Input:     "failing query",
+			ToolsUsed: []string{"shell"},
+			Success:   false,
+		})
+	}
+	// Record a success (should not appear in failure patterns)
+	em.Record(Episode{
+		Timestamp: time.Now(),
+		Input:     "good query",
+		ToolsUsed: []string{"read"},
+		Success:   true,
+	})
+
+	patterns := em.FailurePatterns(5)
+	if len(patterns) != 1 {
+		t.Fatalf("expected 1 failure pattern, got %d", len(patterns))
+	}
+	if patterns[0].Tools[0] != "shell" {
+		t.Errorf("failure pattern tool = %s, want shell", patterns[0].Tools[0])
+	}
+	if patterns[0].Count != 3 {
+		t.Errorf("failure count = %d, want 3", patterns[0].Count)
+	}
+}
