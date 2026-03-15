@@ -244,3 +244,143 @@ func TestReflectionGateEmptyResetOnContent(t *testing.T) {
 		t.Error("non-empty result should reset consecutive empty counter")
 	}
 }
+
+// --- Extended edge case tests ---
+
+func TestContextBudgetZeroCharsPerToken(t *testing.T) {
+	b := &ContextBudget{MaxTokens: 1000, CharsPerToken: 0}
+	// Should fall back to default (len/4)
+	got := b.EstimateTokens("1234567890") // 10 chars / 4 = 2
+	if got != 2 {
+		t.Errorf("zero CharsPerToken should fallback to 4, got %d", got)
+	}
+}
+
+func TestContextBudgetZeroMaxTokens(t *testing.T) {
+	b := &ContextBudget{MaxTokens: 0, CharsPerToken: 4.0}
+	// UsagePercent with 0 MaxTokens should return 1.0 (full)
+	msgs := []ollama.Message{{Role: "user", Content: "test"}}
+	if pct := b.UsagePercent(msgs); pct != 1.0 {
+		t.Errorf("UsagePercent with 0 MaxTokens = %f, want 1.0", pct)
+	}
+}
+
+func TestContextBudgetRemainingOverflow(t *testing.T) {
+	b := &ContextBudget{MaxTokens: 10, CharsPerToken: 1.0}
+	msgs := []ollama.Message{{Role: "user", Content: strings.Repeat("x", 100)}}
+	// Usage exceeds max → remaining should be 0
+	remaining := b.Remaining(msgs)
+	if remaining != 0 {
+		t.Errorf("Remaining with overflow = %d, want 0", remaining)
+	}
+}
+
+func TestSmartTruncateTree(t *testing.T) {
+	var lines []string
+	for i := 0; i < 40; i++ {
+		lines = append(lines, fmt.Sprintf("entry_%d", i))
+	}
+	result := SmartTruncate("tree", strings.Join(lines, "\n"))
+	if !strings.Contains(result, "10 more entries") {
+		t.Errorf("tree with 40 lines should be capped at 30, got: %s", result[:100])
+	}
+}
+
+func TestSmartTruncateGlob(t *testing.T) {
+	var lines []string
+	for i := 0; i < 25; i++ {
+		lines = append(lines, fmt.Sprintf("file_%d.go", i))
+	}
+	result := SmartTruncate("glob", strings.Join(lines, "\n"))
+	if !strings.Contains(result, "5 more") {
+		t.Errorf("glob with 25 matches should cap at 20, got: %s", result[:100])
+	}
+}
+
+func TestSmartTruncateReadWithLandmarks(t *testing.T) {
+	var lines []string
+	for i := 0; i < 100; i++ {
+		if i == 50 {
+			lines = append(lines, "func ImportantFunction() error {")
+		} else {
+			lines = append(lines, fmt.Sprintf("// line %d", i))
+		}
+	}
+	result := SmartTruncate("read", strings.Join(lines, "\n"))
+
+	// Should contain landmark from middle
+	if !strings.Contains(result, "[line") {
+		t.Error("read truncation should include landmark line numbers")
+	}
+	// Should preserve head
+	if !strings.Contains(result, "// line 0") {
+		t.Error("read truncation should preserve head")
+	}
+}
+
+func TestValidateToolResultPermissionDenied(t *testing.T) {
+	_, hint := ValidateToolResult("write", "", errors.New("permission denied"))
+	if !strings.Contains(hint, "Permission") {
+		t.Errorf("permission error should hint about permissions, got: %s", hint)
+	}
+}
+
+func TestValidateToolResultIsDirectory(t *testing.T) {
+	_, hint := ValidateToolResult("read", "", errors.New("is a directory"))
+	if !strings.Contains(hint, "directory") {
+		t.Errorf("directory error should hint about ls, got: %s", hint)
+	}
+}
+
+func TestValidateToolResultGenericError(t *testing.T) {
+	_, hint := ValidateToolResult("shell", "", errors.New("something went wrong"))
+	if !strings.Contains(hint, "different approach") {
+		t.Errorf("generic error should suggest different approach, got: %s", hint)
+	}
+}
+
+func TestValidateToolResultEmptyGlob(t *testing.T) {
+	result, _ := ValidateToolResult("glob", "", nil)
+	if result != "No files matched the pattern." {
+		t.Errorf("empty glob = %q, want 'No files matched the pattern.'", result)
+	}
+}
+
+func TestReflectionGateErrorSkipped(t *testing.T) {
+	g := &ReflectionGate{}
+	cr := g.Check("read", "", errors.New("some error"))
+	// Errors are handled by ValidateToolResult, gate returns empty
+	if cr.Hint != "" || cr.ForceStop {
+		t.Error("gate should not add hints for errors (handled elsewhere)")
+	}
+}
+
+func TestReflectionGateCircularBuffer(t *testing.T) {
+	g := &ReflectionGate{}
+	// Fill the circular buffer with 4 unique calls
+	g.Check("read", "a", nil)
+	g.Check("ls", "b", nil)
+	g.Check("grep", "c", nil)
+	g.Check("glob", "d", nil)
+	// 5th call should overwrite the oldest in the buffer
+	cr := g.Check("tree", "e", nil)
+	if cr.ForceStop {
+		t.Error("5 unique calls should not force stop (buffer wraps)")
+	}
+}
+
+func TestShortHash(t *testing.T) {
+	h1 := shortHash("hello")
+	h2 := shortHash("hello")
+	h3 := shortHash("world")
+
+	if h1 != h2 {
+		t.Error("same input should produce same hash")
+	}
+	if h1 == h3 {
+		t.Error("different inputs should produce different hashes")
+	}
+	if len(h1) != 8 { // 4 bytes = 8 hex chars
+		t.Errorf("hash length = %d, want 8", len(h1))
+	}
+}
