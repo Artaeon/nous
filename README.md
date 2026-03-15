@@ -13,7 +13,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/version-0.6.0-blue?style=flat-square" alt="v0.6.0">
   <img src="https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.22+">
-  <img src="https://img.shields.io/badge/tests-316_passing-brightgreen?style=flat-square" alt="316 tests">
+  <img src="https://img.shields.io/badge/tests-1161_passing-brightgreen?style=flat-square" alt="1161 tests">
   <img src="https://img.shields.io/badge/binary-~10_MB-blue?style=flat-square" alt="~10 MB binary">
   <img src="https://img.shields.io/badge/deps-zero-brightgreen?style=flat-square" alt="Zero deps">
   <img src="https://img.shields.io/badge/cloud-not_required-green?style=flat-square" alt="No Cloud">
@@ -50,6 +50,22 @@ The result is a **single ~10 MB Go binary** with zero external dependencies that
 - Deploy anywhere with Docker, systemd, or a one-line install
 
 All running on CPU with a 1.5B parameter model.
+
+### Quality at a Glance
+
+| Metric | Value |
+|--------|-------|
+| Production code | **23,843 lines** of Go |
+| Test code | **19,643 lines** |
+| Passing tests | **1,161** |
+| Benchmarks | **25** (all hot paths <1μs) |
+| Fuzz targets | **7** (200K+ executions, 0 crashes) |
+| Race conditions | **0** (`go test -race` clean) |
+| `go vet` warnings | **0** |
+| External dependencies | **0** |
+| Cognitive overhead per step | **~150μs** (0.03% of LLM time) |
+
+See [TESTING.md](TESTING.md), [BENCHMARKS.md](BENCHMARKS.md), and [ARCHITECTURE.md](ARCHITECTURE.md) for details.
 
 ---
 
@@ -517,6 +533,19 @@ As local models improve, Nous's architecture amplifies those gains. A 7B model i
 - **Linux** (for inotify sentinel; rest works on macOS/Windows)
 - **~2 GB RAM** (for qwen2.5:1.5b)
 - GPU optional (CPU works fine)
+
+---
+
+## Documentation
+
+| Document | What it covers |
+|----------|---------------|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Deep dive into cognitive architecture, 7 key innovations, system diagrams |
+| [TESTING.md](TESTING.md) | Test methodology: 1,161 tests, 25 benchmarks, 7 fuzz targets, coverage |
+| [BENCHMARKS.md](BENCHMARKS.md) | Performance analysis: all operations profiled, 0.03% overhead vs LLM inference |
+| [SECURITY.md](SECURITY.md) | Security model: 7 defense layers, privacy guarantees, threat model |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines |
+| [CHANGELOG.md](CHANGELOG.md) | Version history |
 
 ---
 
