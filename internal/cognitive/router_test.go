@@ -222,6 +222,88 @@ func TestModelsReturnsDiscoveredProfiles(t *testing.T) {
 	}
 }
 
+// --- ClientForQuery tests ---
+
+func TestClientForQueryRouting(t *testing.T) {
+	r := NewModelRouter("http://localhost:11434", "qwen2.5:1.5b")
+
+	r.DiscoverFromList([]ModelProfile{
+		{Name: "tinyllama:latest", SizeBytes: 637_000_000, Family: "tinyllama", Available: true},
+		{Name: "qwen2.5:1.5b", SizeBytes: 986_000_000, Family: "qwen", Available: true},
+	})
+
+	tests := []struct {
+		query     string
+		wantModel string
+		desc      string
+	}{
+		// Fast queries → smallest model (perception/tinyllama)
+		{"hello", "tinyllama:latest", "greeting is fast"},
+		{"thanks", "tinyllama:latest", "thanks is fast"},
+		{"hi there", "tinyllama:latest", "short greeting is fast"},
+
+		// Medium queries → mid-tier model (compression/tinyllama in 2-model setup)
+		{"explain why the sky is blue", "tinyllama:latest", "explanation is medium"},
+		{"what is quantum entanglement", "tinyllama:latest", "definitional question is medium"},
+
+		// Full queries → reasoning model (qwen)
+		{"read the file go.mod and tell me the version", "qwen2.5:1.5b", "file read is full"},
+		{"search for TODO comments in all go files", "qwen2.5:1.5b", "code search is full"},
+		{"run the tests and show me failures", "qwen2.5:1.5b", "test execution is full"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			client := r.ClientForQuery(tt.query)
+			if client == nil {
+				t.Fatal("ClientForQuery returned nil")
+			}
+			if client.Model() != tt.wantModel {
+				t.Errorf("ClientForQuery(%q) model = %q, want %q", tt.query, client.Model(), tt.wantModel)
+			}
+		})
+	}
+}
+
+func TestQueryRoute(t *testing.T) {
+	r := NewModelRouter("http://localhost:11434", "qwen2.5:1.5b")
+
+	r.DiscoverFromList([]ModelProfile{
+		{Name: "tinyllama:latest", SizeBytes: 637_000_000, Family: "tinyllama", Available: true},
+		{Name: "qwen2.5:1.5b", SizeBytes: 986_000_000, Family: "qwen", Available: true},
+		{Name: "llama3.1:latest", SizeBytes: 4_900_000_000, Family: "llama", Available: true},
+	})
+
+	// Simple query should route to fast model
+	fast := r.QueryRoute("hello")
+	if fast != "tinyllama:latest" {
+		t.Errorf("QueryRoute(hello) = %q, want tinyllama", fast)
+	}
+
+	// Complex query should route to reasoning model
+	full := r.QueryRoute("search for all error handling patterns in the codebase")
+	if full != "qwen2.5:1.5b" {
+		t.Errorf("QueryRoute(complex) = %q, want qwen2.5:1.5b", full)
+	}
+}
+
+func TestClientForQuerySingleModel(t *testing.T) {
+	r := NewModelRouter("http://localhost:11434", "qwen2.5:1.5b")
+
+	// Single model — everything routes to it regardless of query
+	r.DiscoverFromList([]ModelProfile{
+		{Name: "qwen2.5:1.5b", SizeBytes: 986_000_000, Family: "qwen", Available: true},
+	})
+
+	queries := []string{"hello", "explain quantum physics", "read go.mod"}
+	for _, q := range queries {
+		client := r.ClientForQuery(q)
+		if client.Model() != "qwen2.5:1.5b" {
+			t.Errorf("ClientForQuery(%q) = %q with single model, want qwen2.5:1.5b", q, client.Model())
+		}
+	}
+}
+
 func TestClientForCreatesClients(t *testing.T) {
 	r := NewModelRouter("http://localhost:11434", "qwen2.5:1.5b")
 

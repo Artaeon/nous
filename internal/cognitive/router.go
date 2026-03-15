@@ -311,6 +311,39 @@ func shortModelName(name string) string {
 	return name
 }
 
+// ClientForQuery classifies a query by complexity and routes to the best model.
+// Fast queries (greetings, short chat) use the smallest available model.
+// Medium queries (explanations, discussions) use the mid-tier model.
+// Full queries (tool use, reasoning) use the largest reasoning model.
+func (r *ModelRouter) ClientForQuery(query string) *ollama.Client {
+	classifier := &FastPathClassifier{}
+	path := classifier.ClassifyQuery(query)
+
+	switch path {
+	case PathFast:
+		return r.ClientFor(TaskPerception) // smallest model
+	case PathMedium:
+		return r.ClientFor(TaskCompression) // mid-tier model
+	default:
+		return r.ClientFor(TaskReasoning) // largest model
+	}
+}
+
+// QueryRoute returns the model name that would handle a given query.
+func (r *ModelRouter) QueryRoute(query string) string {
+	classifier := &FastPathClassifier{}
+	path := classifier.ClassifyQuery(query)
+
+	switch path {
+	case PathFast:
+		return r.Route(TaskPerception)
+	case PathMedium:
+		return r.Route(TaskCompression)
+	default:
+		return r.Route(TaskReasoning)
+	}
+}
+
 // Probe sends a minimal prompt to a model and measures the response latency.
 func (r *ModelRouter) Probe(ctx context.Context, model string) (time.Duration, error) {
 	c := ollama.New(
