@@ -439,6 +439,101 @@ func TestCrystalTemporalDecayFormula(t *testing.T) {
 	}
 }
 
+// --- Seed Dev Workflows Tests ---
+
+func TestSeedDevWorkflows(t *testing.T) {
+	cb := NewCrystalBook("")
+	count := cb.SeedDevWorkflows()
+
+	if count == 0 {
+		t.Fatal("should seed at least one workflow")
+	}
+	if cb.Size() != count {
+		t.Errorf("Size() = %d, want %d", cb.Size(), count)
+	}
+
+	// All seeded crystals should have valid triggers
+	cb.mu.RLock()
+	for _, c := range cb.crystals {
+		if c.Trigger == nil {
+			t.Errorf("crystal %q has nil trigger", c.ID)
+		}
+		if len(c.Steps) == 0 {
+			t.Errorf("crystal %q has no steps", c.ID)
+		}
+		if c.ResponseTmpl == "" {
+			t.Errorf("crystal %q has empty response template", c.ID)
+		}
+	}
+	cb.mu.RUnlock()
+}
+
+func TestSeedDevWorkflowsOnlyWhenEmpty(t *testing.T) {
+	cb := NewCrystalBook("")
+
+	// Seed once
+	first := cb.SeedDevWorkflows()
+	if first == 0 {
+		t.Fatal("first seed should populate")
+	}
+
+	// Seed again — should be no-op
+	second := cb.SeedDevWorkflows()
+	if second != 0 {
+		t.Errorf("second seed should return 0, got %d", second)
+	}
+
+	// Size should be unchanged
+	if cb.Size() != first {
+		t.Errorf("Size() = %d after second seed, want %d", cb.Size(), first)
+	}
+}
+
+func TestSeedDevWorkflowsMatchable(t *testing.T) {
+	cb := NewCrystalBook("")
+	cb.SeedDevWorkflows()
+
+	// Should match common queries
+	queries := []string{
+		"read go.mod",
+		"show git status",
+		"list go files",
+		"show recent commits",
+	}
+
+	matched := 0
+	for _, q := range queries {
+		if m := cb.Match(q); m != nil {
+			matched++
+		}
+	}
+
+	if matched == 0 {
+		t.Error("seeded crystals should match at least one common query")
+	}
+}
+
+func TestSeedDevWorkflowsPersistence(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "crystals.json")
+
+	// Seed and save
+	cb1 := NewCrystalBook(path)
+	count := cb1.SeedDevWorkflows()
+
+	// Load from disk — should have the seeds
+	cb2 := NewCrystalBook(path)
+	if cb2.Size() != count {
+		t.Errorf("loaded size = %d, want %d", cb2.Size(), count)
+	}
+
+	// Should NOT re-seed since book is non-empty
+	reseeded := cb2.SeedDevWorkflows()
+	if reseeded != 0 {
+		t.Errorf("should not re-seed loaded book, got %d", reseeded)
+	}
+}
+
 func TestCrystalValueLog2Scaling(t *testing.T) {
 	now := time.Now()
 

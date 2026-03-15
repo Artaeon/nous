@@ -208,6 +208,9 @@ func main() {
 
 	// 5. Thought Crystallization — JIT compile reasoning chains into rules
 	reasoner.Crystals = cognitive.NewCrystalBook(filepath.Join(nousDir, "crystals.json"))
+	if seeded := reasoner.Crystals.SeedDevWorkflows(); seeded > 0 {
+		fmt.Fprintf(os.Stderr, "  seeded %d dev workflow crystals\n", seeded)
+	}
 
 	// 6. Self-Distillation Loop — learn from the model's own failures
 	reasoner.Distiller = cognitive.NewSelfDistiller(filepath.Join(nousDir, "distill.json"))

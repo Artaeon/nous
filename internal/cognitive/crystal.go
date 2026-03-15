@@ -492,6 +492,174 @@ func (cb *CrystalBook) TopCrystals(n int) []Crystal {
 	return sorted[:n]
 }
 
+// SeedDevWorkflows pre-populates the crystal book with common developer
+// workflow patterns. These crystals provide instant-from-day-1 responses
+// for frequent queries without needing the model to learn them first.
+// Only seeds if the book is currently empty to avoid polluting learned crystals.
+func (cb *CrystalBook) SeedDevWorkflows() int {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	if len(cb.crystals) > 0 {
+		return 0
+	}
+
+	seeds := devWorkflowSeeds()
+	now := time.Now()
+
+	for _, s := range seeds {
+		trigger := &CrystalTrigger{
+			Pattern:  buildLoosePattern(s.query),
+			Keywords: filterCrystalKeywords(strings.Fields(strings.ToLower(s.query))),
+			MinWords: 1,
+			MaxWords: 20,
+		}
+
+		crystal := Crystal{
+			ID:           crystalID(s.query),
+			Trigger:      trigger,
+			Steps:        s.steps,
+			ResponseTmpl: s.responseTmpl,
+			Uses:         1,
+			Successes:    1,
+			CreatedAt:    now,
+			LastUsed:     now,
+		}
+		cb.crystals = append(cb.crystals, crystal)
+	}
+
+	cb.save()
+	return len(seeds)
+}
+
+// seedEntry defines a pre-built crystal for common dev workflows.
+type seedEntry struct {
+	query        string
+	steps        []CrystalStep
+	responseTmpl string
+}
+
+// devWorkflowSeeds returns the pre-built crystal definitions.
+func devWorkflowSeeds() []seedEntry {
+	return []seedEntry{
+		// --- File reading patterns ---
+		{
+			query: "read go.mod",
+			steps: []CrystalStep{{Tool: "read", Args: map[string]string{"path": "go.mod"}, ResultVar: "result_read"}},
+			responseTmpl: "{result_read}",
+		},
+		{
+			query: "show me the readme",
+			steps: []CrystalStep{{Tool: "read", Args: map[string]string{"path": "README.md"}, ResultVar: "result_read"}},
+			responseTmpl: "{result_read}",
+		},
+		{
+			query: "read the main file",
+			steps: []CrystalStep{{Tool: "read", Args: map[string]string{"path": "cmd/nous/main.go"}, ResultVar: "result_read"}},
+			responseTmpl: "{result_read}",
+		},
+		{
+			query: "show the dockerfile",
+			steps: []CrystalStep{{Tool: "read", Args: map[string]string{"path": "Dockerfile"}, ResultVar: "result_read"}},
+			responseTmpl: "{result_read}",
+		},
+		{
+			query: "read the makefile",
+			steps: []CrystalStep{{Tool: "read", Args: map[string]string{"path": "Makefile"}, ResultVar: "result_read"}},
+			responseTmpl: "{result_read}",
+		},
+
+		// --- Project structure ---
+		{
+			query: "list files in the project",
+			steps: []CrystalStep{{Tool: "ls", Args: map[string]string{"path": "."}, ResultVar: "result_ls"}},
+			responseTmpl: "{result_ls}",
+		},
+		{
+			query: "show project structure",
+			steps: []CrystalStep{{Tool: "tree", Args: map[string]string{"path": "."}, ResultVar: "result_tree"}},
+			responseTmpl: "{result_tree}",
+		},
+		{
+			query: "list go files",
+			steps: []CrystalStep{{Tool: "glob", Args: map[string]string{"pattern": "**/*.go"}, ResultVar: "result_glob"}},
+			responseTmpl: "{result_glob}",
+		},
+		{
+			query: "find all test files",
+			steps: []CrystalStep{{Tool: "glob", Args: map[string]string{"pattern": "**/*_test.go"}, ResultVar: "result_glob"}},
+			responseTmpl: "{result_glob}",
+		},
+
+		// --- Code search patterns ---
+		{
+			query: "search for TODO comments",
+			steps: []CrystalStep{{Tool: "grep", Args: map[string]string{"pattern": "TODO", "glob": "*.go"}, ResultVar: "result_grep"}},
+			responseTmpl: "{result_grep}",
+		},
+		{
+			query: "find error handling",
+			steps: []CrystalStep{{Tool: "grep", Args: map[string]string{"pattern": "if err != nil", "glob": "*.go"}, ResultVar: "result_grep"}},
+			responseTmpl: "{result_grep}",
+		},
+		{
+			query: "search for main function",
+			steps: []CrystalStep{{Tool: "grep", Args: map[string]string{"pattern": "func main", "glob": "*.go"}, ResultVar: "result_grep"}},
+			responseTmpl: "{result_grep}",
+		},
+
+		// --- Git workflows ---
+		{
+			query: "show git status",
+			steps: []CrystalStep{{Tool: "git", Args: map[string]string{"command": "status"}, ResultVar: "result_git"}},
+			responseTmpl: "{result_git}",
+		},
+		{
+			query: "show recent commits",
+			steps: []CrystalStep{{Tool: "git", Args: map[string]string{"command": "log --oneline -10"}, ResultVar: "result_git"}},
+			responseTmpl: "{result_git}",
+		},
+		{
+			query: "show git diff",
+			steps: []CrystalStep{{Tool: "git", Args: map[string]string{"command": "diff"}, ResultVar: "result_git"}},
+			responseTmpl: "{result_git}",
+		},
+		{
+			query: "what branch am i on",
+			steps: []CrystalStep{{Tool: "git", Args: map[string]string{"command": "branch --show-current"}, ResultVar: "result_git"}},
+			responseTmpl: "You are on branch {result_git}",
+		},
+		{
+			query: "show all branches",
+			steps: []CrystalStep{{Tool: "git", Args: map[string]string{"command": "branch -a"}, ResultVar: "result_git"}},
+			responseTmpl: "{result_git}",
+		},
+
+		// --- Multi-step patterns ---
+		{
+			query: "what go version does this project use",
+			steps: []CrystalStep{
+				{Tool: "read", Args: map[string]string{"path": "go.mod"}, ExtractRe: `go\s+\d+\.\d+`, ResultVar: "result_read"},
+			},
+			responseTmpl: "This project uses Go {result_read}",
+		},
+		{
+			query: "how many go files are there",
+			steps: []CrystalStep{
+				{Tool: "glob", Args: map[string]string{"pattern": "**/*.go"}, ResultVar: "result_glob"},
+			},
+			responseTmpl: "Go files in the project:\n{result_glob}",
+		},
+		{
+			query: "show dependencies",
+			steps: []CrystalStep{
+				{Tool: "read", Args: map[string]string{"path": "go.mod"}, ResultVar: "result_read"},
+			},
+			responseTmpl: "Project dependencies from go.mod:\n{result_read}",
+		},
+	}
+}
+
 // --- Persistence ---
 
 func (cb *CrystalBook) load() {
