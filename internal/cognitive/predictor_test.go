@@ -279,6 +279,8 @@ func TestDirOf(t *testing.T) {
 		{"internal/cognitive/reasoner.go", "internal/cognitive"},
 		{"main.go", ""},
 		{"a/b/c/d.go", "a/b/c"},
+		{"", ""},
+		{"/root.go", ""},
 	}
 
 	for _, tt := range tests {
@@ -286,5 +288,158 @@ func TestDirOf(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("dirOf(%q) = %q, want %q", tt.input, got, tt.want)
 		}
+	}
+}
+
+// --- Concurrent access tests ---
+
+func TestPredictorConcurrentLookup(t *testing.T) {
+	p := NewPredictor(mockRegistry())
+
+	// Pre-populate
+	p.mu.Lock()
+	for i := 0; i < 10; i++ {
+		key := cacheKey("read", map[string]string{"path": string(rune('a' + i))})
+		p.cache[key] = Prediction{
+			ToolName:  "read",
+			Result:    "content",
+			CreatedAt: time.Now(),
+		}
+	}
+	p.mu.Unlock()
+
+	// Concurrent lookups should not race
+	done := make(chan struct{})
+	for i := 0; i < 10; i++ {
+		i := i
+		go func() {
+			defer func() { done <- struct{}{} }()
+			p.Lookup("read", map[string]string{"path": string(rune('a' + i))})
+		}()
+	}
+	for i := 0; i < 10; i++ {
+		<-done
+	}
+}
+
+func TestPredictorConcurrentPredictAndLookup(t *testing.T) {
+	reg := mockRegistry()
+	p := NewPredictor(reg)
+
+	done := make(chan struct{})
+	// Predict in one goroutine
+	go func() {
+		defer func() { done <- struct{}{} }()
+		p.Predict("read", map[string]string{"path": "test.go"}, "content")
+	}()
+	// Lookup in another
+	go func() {
+		defer func() { done <- struct{}{} }()
+		time.Sleep(50 * time.Millisecond)
+		p.Lookup("read", map[string]string{"path": "test_test.go"})
+	}()
+
+	<-done
+	<-done
+}
+
+func TestPredictorPredictFromGlob(t *testing.T) {
+	reg := mockRegistry()
+	p := NewPredictor(reg)
+
+	p.Predict("glob", map[string]string{"pattern": "*.go"}, "main.go\nserver.go")
+	time.Sleep(100 * time.Millisecond)
+
+	// Should have pre-read some of the matched files
+	size := p.CacheSize()
+	if size == 0 {
+		t.Error("expected predictions from glob results")
+	}
+}
+
+func TestPredictorDoesNotCacheWriteTools(t *testing.T) {
+	reg := mockRegistry()
+	reg.Register(tools.Tool{
+		Name:        "write",
+		Description: "Write a file",
+		Execute: func(args map[string]string) (string, error) {
+			return "written", nil
+		},
+	})
+	_ = NewPredictor(reg)
+
+	// write is not read-only, so predictions for write should not execute
+	if isReadOnly("write") {
+		t.Error("write should not be read-only")
+	}
+}
+
+func TestCacheKeyDeterministic(t *testing.T) {
+	args := map[string]string{"path": "a.go", "pattern": "func"}
+	key1 := cacheKey("grep", args)
+	key2 := cacheKey("grep", args)
+	if key1 != key2 {
+		t.Error("cacheKey should be deterministic for same args")
+	}
+}
+
+func TestCacheKeyArgOrdering(t *testing.T) {
+	// Different insertion order, same keys
+	args1 := map[string]string{"a": "1", "b": "2", "c": "3"}
+	args2 := map[string]string{"c": "3", "a": "1", "b": "2"}
+	if cacheKey("tool", args1) != cacheKey("tool", args2) {
+		t.Error("cacheKey should be order-independent")
+	}
+}
+
+func TestPredictorStatsAfterMixedOps(t *testing.T) {
+	p := NewPredictor(mockRegistry())
+
+	// 3 misses
+	for i := 0; i < 3; i++ {
+		p.Lookup("read", map[string]string{"path": "miss.go"})
+	}
+
+	// Insert and hit
+	p.mu.Lock()
+	p.cache[cacheKey("read", map[string]string{"path": "hit.go"})] = Prediction{
+		ToolName: "read", Result: "data", CreatedAt: time.Now(),
+	}
+	p.mu.Unlock()
+	p.Lookup("read", map[string]string{"path": "hit.go"})
+
+	hits, misses := p.Stats()
+	if hits != 1 {
+		t.Errorf("hits = %d, want 1", hits)
+	}
+	if misses != 3 {
+		t.Errorf("misses = %d, want 3", misses)
+	}
+	if p.HitRate() != 0.25 {
+		t.Errorf("hit rate = %f, want 0.25", p.HitRate())
+	}
+}
+
+func TestPredictorDoesNotExceedMaxSize(t *testing.T) {
+	p := NewPredictor(mockRegistry())
+	p.maxSize = 5
+
+	// Insert more than maxSize
+	for i := 0; i < 10; i++ {
+		p.mu.Lock()
+		key := cacheKey("read", map[string]string{"path": string(rune('A' + i))})
+		if len(p.cache) >= p.maxSize {
+			p.evictOldest()
+		}
+		p.cache[key] = Prediction{
+			ToolName:  "read",
+			Result:    "data",
+			CreatedAt: time.Now().Add(time.Duration(i) * time.Millisecond),
+		}
+		p.mu.Unlock()
+	}
+
+	if p.CacheSize() > 5 {
+		t.Errorf("cache size %d exceeds maxSize 5", p.CacheSize())
 	}
 }
