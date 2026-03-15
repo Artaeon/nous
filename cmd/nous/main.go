@@ -28,7 +28,7 @@ import (
 	"github.com/artaeon/nous/internal/training"
 )
 
-const version = "0.6.0"
+const version = "0.7.0"
 
 func main() {
 	// Flags
