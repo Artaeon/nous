@@ -336,6 +336,39 @@ func TestSchemaMatchesOllamaFormat(t *testing.T) {
 	}
 }
 
+// --- ToolCallSchema for all available tools ---
+
+func TestToolCallSchemaForAvailableTools(t *testing.T) {
+	// All tools that toolSchemaSpec knows about should produce valid schemas
+	knownTools := []string{"read", "grep", "glob", "ls", "tree", "write", "edit", "git"}
+
+	for _, tool := range knownTools {
+		schema := ToolCallSchema(tool)
+		if schema.Type != "object" {
+			t.Errorf("%s: type = %q, want object", tool, schema.Type)
+		}
+		if len(schema.Properties) == 0 {
+			t.Errorf("%s: should have at least 1 property", tool)
+		}
+
+		// Verify it serializes to valid JSON
+		data, err := json.Marshal(schema)
+		if err != nil {
+			t.Errorf("%s: marshal error: %v", tool, err)
+		}
+		var parsed map[string]any
+		if err := json.Unmarshal(data, &parsed); err != nil {
+			t.Errorf("%s: invalid JSON: %v", tool, err)
+		}
+	}
+
+	// Unknown tool should produce empty schema
+	unknown := ToolCallSchema("nonexistent_tool")
+	if len(unknown.Properties) != 0 {
+		t.Errorf("unknown tool should have 0 properties, got %d", len(unknown.Properties))
+	}
+}
+
 // --- Benchmark ---
 
 func BenchmarkToolCallSchema(b *testing.B) {

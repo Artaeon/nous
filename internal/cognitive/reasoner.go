@@ -389,6 +389,14 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 					}
 				}
 			}
+			if len(toolCalls) == 0 && r.Grammar != nil {
+				// Grammar-constrained resolution: uses per-tool JSON Schema
+				// to force the model to output valid tool calls.
+				resolved := r.grammarToolResolve(percept.Raw)
+				if len(resolved) > 0 {
+					toolCalls = resolved
+				}
+			}
 			if len(toolCalls) == 0 {
 				// Check if the response looks like a failed tool call attempt
 				// (contains JSON-like patterns but couldn't be parsed)
@@ -2025,6 +2033,40 @@ func looksLikeFailedToolCall(response string) bool {
 		strings.Contains(r, `"action"`) || strings.Contains(r, `"function"`)
 	hasBrace := strings.Contains(response, "{") && strings.Contains(response, "}")
 	return hasToolHint && hasBrace
+}
+
+// grammarToolResolve uses schema-constrained decoding to classify the query,
+// select a tool, and extract arguments — each step enforced by a JSON Schema.
+// More reliable than structuredToolRetry because it uses exact per-tool schemas
+// instead of generic format:"json".
+func (r *Reasoner) grammarToolResolve(userQuery string) []toolCall {
+	if r.Grammar == nil {
+		return nil
+	}
+
+	toolNames := r.availableToolNames()
+	if toolNames == "" {
+		return nil
+	}
+
+	available := strings.Split(toolNames, ", ")
+	result, err := r.Grammar.Resolve(userQuery, available)
+	if err != nil {
+		return nil
+	}
+
+	if result.Tool == "" || result.Tool == "chat" || result.Tool == "explain" {
+		return nil
+	}
+
+	r.emitStatus(fmt.Sprintf("  %s↳ grammar-resolved: %s%s", ColorDim, result.Tool, ColorReset))
+
+	args := make(map[string]string)
+	for k, v := range result.Args {
+		args[k] = v
+	}
+
+	return []toolCall{{Name: result.Tool, Args: args}}
 }
 
 // structuredToolRetry uses format:"json" to force a clean tool call when
