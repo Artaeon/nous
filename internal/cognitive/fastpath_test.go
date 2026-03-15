@@ -191,3 +191,116 @@ func TestClassifyQuery_Empty(t *testing.T) {
 		t.Errorf("whitespace query should be full, got %q", path)
 	}
 }
+
+// --- Edge case and stress tests ---
+
+func TestClassifyQuery_LanguageVariants(t *testing.T) {
+	c := &FastPathClassifier{}
+
+	// Greetings in different styles
+	greetings := []string{"Hi!", "HELLO", "Hey.", "howdy", "Yo", "sup", "Greetings!", "Hola", "Bonjour", "Guten Tag", "Hallo"}
+	for _, q := range greetings {
+		if path := c.ClassifyQuery(q); path != PathFast {
+			t.Errorf("greeting %q should be fast, got %q", q, path)
+		}
+	}
+}
+
+func TestClassifyQuery_YesNoVariants(t *testing.T) {
+	c := &FastPathClassifier{}
+
+	yesNo := []string{"yes", "no", "y", "n", "absolutely", "definitely", "of course", "nah", "nope", "maybe"}
+	for _, q := range yesNo {
+		if path := c.ClassifyQuery(q); path != PathFast {
+			t.Errorf("yes/no %q should be fast, got %q", q, path)
+		}
+	}
+}
+
+func TestClassifyQuery_ComplexPatternPriority(t *testing.T) {
+	c := &FastPathClassifier{}
+
+	// Complex patterns should take priority even if query is short
+	mustBeComplex := []string{
+		"run tests",
+		"git diff",
+		"git status",
+		"compile the project",
+		"build a container",
+	}
+	for _, q := range mustBeComplex {
+		if path := c.ClassifyQuery(q); path != PathFull {
+			t.Errorf("complex query %q should be full, got %q", q, path)
+		}
+	}
+}
+
+func TestClassifyQuery_MathExpressions(t *testing.T) {
+	c := &FastPathClassifier{}
+
+	math := []string{"what is 100 + 200?", "42 * 7?", "100 / 5?", "99 - 1"}
+	for _, q := range math {
+		if path := c.ClassifyQuery(q); path != PathFast {
+			t.Errorf("math %q should be fast, got %q", q, path)
+		}
+	}
+}
+
+func TestClassifyQuery_FollowUp(t *testing.T) {
+	c := &FastPathClassifier{}
+
+	followups := []string{
+		"tell me more about that topic please",
+		"go on and continue explaining that idea",
+		"can you explain that in more detail please",
+		"what about the performance implications of this approach",
+	}
+	for _, q := range followups {
+		if path := c.ClassifyQuery(q); path != PathMedium {
+			t.Errorf("follow-up %q should be medium, got %q", q, path)
+		}
+	}
+}
+
+func TestClassifyQuery_SecurityTools(t *testing.T) {
+	c := &FastPathClassifier{}
+
+	// Docker/sandbox queries should be full pipeline
+	security := []string{
+		"start a docker container for the test environment",
+		"kill the running process on port 8080",
+		"restart the sandbox environment for testing",
+	}
+	for _, q := range security {
+		if path := c.ClassifyQuery(q); path != PathFull {
+			t.Errorf("security/system query %q should be full, got %q", q, path)
+		}
+	}
+}
+
+func TestIsSimpleBackwardCompat(t *testing.T) {
+	c := &FastPathClassifier{}
+
+	// IsSimple should return true for both fast and medium
+	if !c.IsSimple("hi") {
+		t.Error("'hi' (fast) should be simple")
+	}
+	if !c.IsSimple("explain how TCP works in detail for networking") {
+		t.Error("explanatory query (medium) should be simple")
+	}
+	if c.IsSimple("read file main.go") {
+		t.Error("tool query (full) should not be simple")
+	}
+}
+
+func TestPathConstants(t *testing.T) {
+	if PathFast != "fast" {
+		t.Errorf("PathFast = %q, want 'fast'", PathFast)
+	}
+	if PathMedium != "medium" {
+		t.Errorf("PathMedium = %q, want 'medium'", PathMedium)
+	}
+	if PathFull != "full" {
+		t.Errorf("PathFull = %q, want 'full'", PathFull)
+	}
+}
