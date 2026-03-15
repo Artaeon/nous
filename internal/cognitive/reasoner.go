@@ -47,6 +47,7 @@ type Reasoner struct {
 	Predictor        *Predictor
 	Learner          *Learner
 	Router           *ModelRouter
+	Intent           *IntentCompiler
 	OnToken          func(token string, done bool)
 	OnStatus         func(status string)
 	Confirm          ConfirmFunc
@@ -120,6 +121,48 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 		r.publishAnswer(answer)
 		r.finishReasoning(percept, NewPipeline(percept.Raw), answer)
 		return nil
+	}
+
+	// 0. Intent Compiler — deterministic tool resolution for common patterns.
+	// This bypasses the LLM for tool selection entirely, using regex-based intent
+	// parsing and filesystem-grounded path resolution. A 1.5B model struggles with
+	// JSON tool call generation but understands intent perfectly — so we compile
+	// the intent into a tool call deterministically.
+	if r.Intent != nil {
+		if actions := r.Intent.Compile(percept.Raw); len(actions) > 0 && actions[0].Confidence >= 0.8 {
+			pipe := NewPipeline(percept.Raw)
+			r.emitStatus(fmt.Sprintf("  %s↳ intent-compiled: %s(%s)%s", ColorDim, actions[0].Tool, actions[0].Source, ColorReset))
+
+			// Execute the compiled action(s)
+			for _, action := range actions {
+				tc := toolCall{Name: action.Tool, Args: action.Args}
+				start := time.Now()
+				result, toolErr := r.executeTool(tc)
+				duration := time.Since(start)
+				r.emitStatus(ToolStatus(tc.Name, formatArgs(tc.Args), duration))
+
+				if toolErr == nil {
+					result = SmartTruncate(tc.Name, result)
+				}
+				result, _ = ValidateToolResult(tc.Name, result, toolErr)
+				pipe.AddStep(tc.Name, result)
+			}
+
+			// Ask LLM only for response generation (easy for any model)
+			memoryFacts := r.recallKeyFacts(percept.Raw)
+			answer, ok, err := r.finalAnswerFromEvidence(percept.Raw, "", memoryFacts, pipe,
+				"[System: Tools have been executed. Summarize the results for the user. Be direct and helpful.]",
+			)
+			if err != nil {
+				return err
+			}
+			if ok {
+				r.publishAnswer(answer)
+				r.finishReasoning(percept, pipe, answer)
+				return nil
+			}
+			// If final answer generation failed, fall through to normal reasoning
+		}
 	}
 
 	// 1. Progressive Tool Disclosure — select relevant tools based on intent
@@ -254,6 +297,18 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 			parsed := r.parseResponse(fullResponse)
 			toolCalls = parsed.ToolCalls
 
+			if len(toolCalls) == 0 {
+				// Intent Compiler recovery: parse the model's natural language
+				// response to extract tool calls it failed to express as JSON.
+				if r.Intent != nil {
+					if actions := r.Intent.CompileResponse(fullResponse, percept.Raw); len(actions) > 0 {
+						r.emitStatus(fmt.Sprintf("  %s↳ intent-recovered: %s%s", ColorDim, actions[0].Tool, ColorReset))
+						for _, a := range actions {
+							toolCalls = append(toolCalls, toolCall{Name: a.Tool, Args: a.Args})
+						}
+					}
+				}
+			}
 			if len(toolCalls) == 0 {
 				// Check if the response looks like a failed tool call attempt
 				// (contains JSON-like patterns but couldn't be parsed)
