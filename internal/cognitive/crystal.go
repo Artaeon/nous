@@ -335,12 +335,23 @@ func crystalValue(c *Crystal) float64 {
 	// Usage frequency
 	value += float64(c.Uses) * 0.1
 
-	// Recency
-	hoursSinceUse := time.Since(c.LastUsed).Hours()
-	if hoursSinceUse < 24 {
+	// Temporal decay: crystals lose value exponentially over time.
+	// Half-life of 14 days — unused crystals fade, frequently used ones stay.
+	daysSinceUse := time.Since(c.LastUsed).Hours() / 24
+	recencyFactor := 1.0 / (1.0 + daysSinceUse/14.0)
+	value *= recencyFactor
+
+	// Recency bonus (stacks with decay)
+	if daysSinceUse < 1 {
 		value += 1.0
-	} else if hoursSinceUse < 168 { // 1 week
+	} else if daysSinceUse < 7 {
 		value += 0.5
+	}
+
+	// Age penalty: very old crystals (>90 days) with low usage are likely stale
+	daysSinceCreation := time.Since(c.CreatedAt).Hours() / 24
+	if daysSinceCreation > 90 && c.Uses < 5 {
+		value *= 0.5
 	}
 
 	return value

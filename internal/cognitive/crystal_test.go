@@ -297,6 +297,51 @@ func TestCrystalValueZeroUses(t *testing.T) {
 	}
 }
 
+func TestCrystalTemporalDecay(t *testing.T) {
+	now := time.Now()
+
+	fresh := Crystal{
+		Uses: 5, Successes: 5,
+		LastUsed: now, CreatedAt: now,
+	}
+	stale := Crystal{
+		Uses: 5, Successes: 5,
+		LastUsed: now.Add(-30 * 24 * time.Hour), CreatedAt: now.Add(-60 * 24 * time.Hour),
+	}
+
+	freshVal := crystalValue(&fresh)
+	staleVal := crystalValue(&stale)
+
+	if staleVal >= freshVal {
+		t.Errorf("stale crystal (val=%f) should be worth less than fresh (val=%f)", staleVal, freshVal)
+	}
+}
+
+func TestCrystalAgePenalty(t *testing.T) {
+	now := time.Now()
+
+	// Old crystal with low usage — should be penalized
+	oldLowUse := Crystal{
+		Uses: 3, Successes: 3,
+		LastUsed: now.Add(-7 * 24 * time.Hour),
+		CreatedAt: now.Add(-100 * 24 * time.Hour), // >90 days, <5 uses
+	}
+
+	// Old crystal with high usage — should NOT be penalized
+	oldHighUse := Crystal{
+		Uses: 10, Successes: 9,
+		LastUsed: now.Add(-7 * 24 * time.Hour),
+		CreatedAt: now.Add(-100 * 24 * time.Hour), // >90 days, >=5 uses
+	}
+
+	lowVal := crystalValue(&oldLowUse)
+	highVal := crystalValue(&oldHighUse)
+
+	if lowVal >= highVal {
+		t.Errorf("old low-use crystal (val=%f) should be worth less than old high-use (val=%f)", lowVal, highVal)
+	}
+}
+
 // --- Benchmark ---
 
 func BenchmarkCrystalMatch(b *testing.B) {
