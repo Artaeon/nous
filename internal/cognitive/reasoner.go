@@ -55,6 +55,7 @@ type Reasoner struct {
 	Grammar          *GrammarDecoder
 	Distiller        *SelfDistiller
 	EmbedGround      *EmbedGrounder
+	Exo              *Exocortex
 	OnToken          func(token string, done bool)
 	OnStatus         func(status string)
 	Confirm          ConfirmFunc
@@ -130,17 +131,18 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 		return nil
 	}
 
-	// 0. Intent Compiler — deterministic tool resolution for common patterns.
-	// This bypasses the LLM for tool selection entirely, using regex-based intent
-	// parsing and filesystem-grounded path resolution. A 1.5B model struggles with
-	// JSON tool call generation but understands intent perfectly — so we compile
-	// the intent into a tool call deterministically.
+	// 0. Cognitive Exocortex — deterministic tool resolution AND response synthesis.
+	// The LLM is not called at all for tool-based queries. Intent compiler resolves
+	// the tool call, tools execute, and the response is synthesized from facts.
+	// Zero hallucination possible — the response IS the data, formatted for humans.
 	if r.Intent != nil {
 		if actions := r.Intent.Compile(percept.Raw); len(actions) > 0 && actions[0].Confidence >= 0.8 {
 			pipe := NewPipeline(percept.Raw)
-			r.emitStatus(fmt.Sprintf("  %s↳ intent-compiled: %s(%s)%s", ColorDim, actions[0].Tool, actions[0].Source, ColorReset))
+			synth := NewResponseSynthesizer()
+			r.emitStatus(fmt.Sprintf("  %s↳ exo-bypass: %s(%s)%s", ColorDim, actions[0].Tool, actions[0].Source, ColorReset))
 
-			// Execute the compiled action(s)
+			// Execute compiled actions and collect results for synthesis
+			var steps []synthStep
 			for _, action := range actions {
 				tc := toolCall{Name: action.Tool, Args: action.Args}
 				start := time.Now()
@@ -153,22 +155,55 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 				}
 				result, _ = ValidateToolResult(tc.Name, result, toolErr)
 				pipe.AddStep(tc.Name, result)
+
+				steps = append(steps, synthStep{
+					Tool:   action.Tool,
+					Args:   action.Args,
+					Result: result,
+					Err:    toolErr,
+				})
+
+				// Track neuroplastic stats
+				if r.Neuroplastic != nil {
+					r.Neuroplastic.RecordAttempt(action.Tool)
+					if toolErr == nil && strings.TrimSpace(result) != "" {
+						r.Neuroplastic.RecordSuccess(action.Tool)
+					}
+				}
 			}
 
-			// Ask LLM only for response generation (easy for any model)
+			// Tier 1: Synthesize response WITHOUT LLM — zero hallucination
+			if synth.CanSynthesize(actions[0].Tool) {
+				answer := synth.SynthesizeMulti(percept.Raw, steps)
+				if answer != "" {
+					r.Conv.User(percept.Raw)
+					r.Conv.Assistant(answer)
+					r.publishAnswer(answer)
+					r.finishReasoning(percept, pipe, answer)
+					return nil
+				}
+			}
+
+			// Tier 2 fallback: use LLM with neural scaffolding (facts pre-filled)
+			scaffold := NewNeuralScaffold()
+			sp := scaffold.BuildFromMultipleResults(percept.Raw, steps)
+
 			memoryFacts := r.recallKeyFacts(percept.Raw)
 			answer, ok, err := r.finalAnswerFromEvidence(percept.Raw, "", memoryFacts, pipe,
-				"[System: Tools have been executed. Summarize the results for the user. Be direct and helpful.]",
+				sp.ResponseSeed+"\n\n[Continue from the text above. Add detail from the evidence. Be direct.]",
 			)
 			if err != nil {
 				return err
 			}
 			if ok {
+				// Validate: catch hallucinations
+				answer = scaffold.ValidateResponse(answer, sp.ResponseSeed, actions[0].Tool,
+					pipe.LastResult())
 				r.publishAnswer(answer)
 				r.finishReasoning(percept, pipe, answer)
 				return nil
 			}
-			// If final answer generation failed, fall through to normal reasoning
+			// Fall through to normal reasoning
 		}
 	}
 

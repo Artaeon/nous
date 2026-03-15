@@ -236,6 +236,12 @@ func main() {
 		reasoner.Neuroplastic.RegisterDefault(tool.Name, tool.Description)
 	}
 
+	// 9. Cognitive Exocortex — the external brain that bypasses the LLM
+	reasoner.Exo = cognitive.NewExocortex(
+		intentCompiler, toolReg, reasoner.Distiller,
+		reasoner.Neuroplastic, embedGrounder, reasoner.Crystals,
+	)
+
 	reasoner.AssistantContext = func(input string, recent string) string {
 		return buildAssistantContext(assistantStore, input, recent, time.Now())
 	}
