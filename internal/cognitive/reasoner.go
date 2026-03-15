@@ -48,6 +48,13 @@ type Reasoner struct {
 	Learner          *Learner
 	Router           *ModelRouter
 	Intent           *IntentCompiler
+	Crystals         *CrystalBook
+	Speculator       *SpeculativeExecutor
+	MicroInfer       *MicroInference
+	Neuroplastic     *NeuroplasticDescriptions
+	Grammar          *GrammarDecoder
+	Distiller        *SelfDistiller
+	EmbedGround      *EmbedGrounder
 	OnToken          func(token string, done bool)
 	OnStatus         func(status string)
 	Confirm          ConfirmFunc

@@ -190,6 +190,52 @@ func main() {
 	reasoner.Learner = learner
 	reasoner.EpisodicMem = episodic
 	reasoner.Router = router
+
+	// --- Cognitive Prosthetics: 8 innovations for small-model enhancement ---
+
+	// 1. Intent-to-Action Compiler — deterministic NLP-to-tool-call translation
+	intentCompiler := cognitive.NewIntentCompiler(workDir)
+	reasoner.Intent = intentCompiler
+
+	// 2. Grammar-Constrained Decoding — dynamic JSON schemas for structured output
+	reasoner.Grammar = cognitive.NewGrammarDecoder(llm)
+
+	// 3. Decomposed Micro-Inference — break complex LLM calls into micro-steps
+	reasoner.MicroInfer = cognitive.NewMicroInference(llm)
+
+	// 4. Speculative Multi-Tool Execution — fire plausible tools in parallel
+	reasoner.Speculator = cognitive.NewSpeculativeExecutor(toolReg, intentCompiler)
+
+	// 5. Thought Crystallization — JIT compile reasoning chains into rules
+	reasoner.Crystals = cognitive.NewCrystalBook(filepath.Join(nousDir, "crystals.json"))
+
+	// 6. Self-Distillation Loop — learn from the model's own failures
+	reasoner.Distiller = cognitive.NewSelfDistiller(filepath.Join(nousDir, "distill.json"))
+
+	// 7. Embedding-Driven Grounding — semantic secondary brain
+	embedGrounder := cognitive.NewEmbedGrounder(func(text string) ([]float64, error) {
+		// Use nomic-embed-text if available, fallback to current model
+		embedClient := llm.Clone("nomic-embed-text")
+		vec, err := embedClient.Embed(text)
+		if err != nil {
+			// Fallback to main model's embeddings
+			return llm.Embed(text)
+		}
+		return vec, nil
+	})
+	reasoner.EmbedGround = embedGrounder
+
+	// Index tools for semantic matching
+	for _, tool := range toolReg.List() {
+		embedGrounder.IndexTool(tool.Name, tool.Description)
+	}
+
+	// 8. Neuroplastic Tool Descriptions — evolve descriptions based on success rates
+	reasoner.Neuroplastic = cognitive.NewNeuroplasticDescriptions(*model, filepath.Join(nousDir, "neuroplastic.json"))
+	for _, tool := range toolReg.List() {
+		reasoner.Neuroplastic.RegisterDefault(tool.Name, tool.Description)
+	}
+
 	reasoner.AssistantContext = func(input string, recent string) string {
 		return buildAssistantContext(assistantStore, input, recent, time.Now())
 	}
