@@ -117,7 +117,7 @@ type GenerateRequest struct {
 	Stream    bool          `json:"stream"`
 	Options   *ModelOptions `json:"options,omitempty"`
 	Tools     []Tool        `json:"tools,omitempty"`
-	Format    string        `json:"format,omitempty"` // "json" constrains output to valid JSON
+	Format    any           `json:"format,omitempty"` // "json" or JSON Schema object for structured output
 	KeepAlive string        `json:"keep_alive,omitempty"`
 }
 
@@ -205,6 +205,44 @@ func (c *Client) ChatJSON(messages []Message, opts *ModelOptions) (*GenerateResp
 		Stream:    false,
 		Options:   opts,
 		Format:    "json",
+		KeepAlive: "30m",
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	resp, err := c.httpClient.Post(c.host+"/api/chat", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("ollama request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("ollama returned %d: %s", resp.StatusCode, string(b))
+	}
+
+	var result GenerateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	return &result, nil
+}
+
+// ChatWithSchema sends a message sequence with a JSON Schema constraint.
+// The model is forced to output JSON matching the provided schema exactly.
+// The schema parameter should be a struct or map that marshals to a valid JSON Schema.
+func (c *Client) ChatWithSchema(messages []Message, schema any, opts *ModelOptions) (*GenerateResponse, error) {
+	opts = ensureNumCtx(opts)
+	req := GenerateRequest{
+		Model:     c.model,
+		Messages:  messages,
+		Stream:    false,
+		Options:   opts,
+		Format:    schema,
 		KeepAlive: "30m",
 	}
 

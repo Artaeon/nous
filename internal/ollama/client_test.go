@@ -159,8 +159,8 @@ func TestChatJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ChatJSON error: %v", err)
 	}
-	if receivedReq.Format != "json" {
-		t.Errorf("Format = %q, want %q", receivedReq.Format, "json")
+	if fmt.Sprintf("%v", receivedReq.Format) != "json" {
+		t.Errorf("Format = %v, want %q", receivedReq.Format, "json")
 	}
 	if resp.Message.Content != `{"key":"value"}` {
 		t.Errorf("Content = %q", resp.Message.Content)

@@ -125,7 +125,7 @@ func (p *openaiProxy) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if ollamaReq.Format == "json" {
+	if fmt.Sprintf("%v", ollamaReq.Format) == "json" {
 		// OpenAI supports response_format for JSON mode, but we handle
 		// it by adding an instruction since not all compatible APIs support it.
 		// The model should already be instructed to output JSON.
