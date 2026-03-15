@@ -540,6 +540,11 @@ func main() {
 		classifier := &cognitive.FastPathClassifier{}
 		queryPath := classifier.ClassifyQuery(input)
 
+		// Extract personal facts from user input (name, role, interests, etc.)
+		// Runs on every message — stores facts in long-term + working memory.
+		factExtractor := &cognitive.FactExtractor{LTM: ltm, WorkingMem: wm}
+		factExtractor.Extract(input)
+
 		fmt.Println()
 		firstToken = true
 		responseStarted = false

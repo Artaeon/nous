@@ -116,10 +116,6 @@ func TestClassifyQuery_Fast(t *testing.T) {
 		"cool",
 		"great",
 		"got it",
-		"my name is Raphael",
-		"I'm a developer",
-		"I work on distributed systems",
-		"call me Raph",
 		"who are you?",
 		"what's your name?",
 		"how are you?",
@@ -139,6 +135,10 @@ func TestClassifyQuery_Medium(t *testing.T) {
 	c := &FastPathClassifier{}
 
 	medium := []string{
+		"my name is Raphael",
+		"I'm a developer",
+		"I work on distributed systems",
+		"call me Raph",
 		"explain how garbage collection works in Go",
 		"what is a neural network and how does it learn",
 		"tell me more about that topic please",
