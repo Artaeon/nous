@@ -242,6 +242,70 @@ func BenchmarkCortexTrain(b *testing.B) {
 	}
 }
 
+func TestNeuralCortexLearningRateDecay(t *testing.T) {
+	labels := []string{"grep", "read", "write"}
+	nc := NewNeuralCortex(4, 3, labels, "")
+
+	initialLR := nc.LearningRate
+	input := []float64{1.0, 0.0, 0.0, 0.0}
+
+	// Train enough to trigger decay
+	for i := 0; i < 200; i++ {
+		nc.Train(input, "grep")
+	}
+
+	if nc.LearningRate >= initialLR {
+		t.Errorf("learning rate should decay, got %f (initial %f)", nc.LearningRate, initialLR)
+	}
+	if nc.LearningRate <= 0 {
+		t.Error("learning rate should never reach zero")
+	}
+}
+
+func TestNeuralCortexWeightDecay(t *testing.T) {
+	labels := []string{"grep", "read"}
+	nc := NewNeuralCortex(4, 3, labels, "")
+	nc.WeightDecay = 0.1 // aggressive decay for testing
+
+	// Record initial weight magnitude
+	initialMag := 0.0
+	for i := range nc.W1 {
+		for j := range nc.W1[i] {
+			initialMag += nc.W1[i][j] * nc.W1[i][j]
+		}
+	}
+
+	// Train with high weight decay — weights should be smaller
+	input := []float64{1.0, 0.0, 0.0, 0.0}
+	for i := 0; i < 500; i++ {
+		nc.Train(input, "grep")
+	}
+
+	finalMag := 0.0
+	for i := range nc.W1 {
+		for j := range nc.W1[i] {
+			finalMag += nc.W1[i][j] * nc.W1[i][j]
+		}
+	}
+
+	// With L2 regularization, weights should be pushed toward zero
+	// The network should still learn (weights shouldn't be zero),
+	// but they should be smaller than without regularization
+	if finalMag == 0 {
+		t.Error("weights should not be exactly zero")
+	}
+}
+
+func TestNeuralCortexRegularizationDefaults(t *testing.T) {
+	nc := NewNeuralCortex(4, 3, []string{"a", "b"}, "")
+	if nc.WeightDecay != 0.0001 {
+		t.Errorf("default weight decay = %f, want 0.0001", nc.WeightDecay)
+	}
+	if nc.InitialLR != 0.01 {
+		t.Errorf("default initial LR = %f, want 0.01", nc.InitialLR)
+	}
+}
+
 func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }

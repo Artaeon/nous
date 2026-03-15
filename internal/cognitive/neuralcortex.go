@@ -47,6 +47,10 @@ type NeuralCortex struct {
 	TrainCount   int     `json:"train_count"`
 	LearningRate float64 `json:"learning_rate"`
 
+	// Regularization
+	WeightDecay float64 `json:"weight_decay"` // L2 regularization strength
+	InitialLR   float64 `json:"initial_lr"`   // for learning rate decay
+
 	// Persistence
 	path string
 
@@ -73,6 +77,8 @@ func NewNeuralCortex(inputSize, hiddenSize int, labels []string, path string) *N
 		OutputSize:   outputSize,
 		Labels:       labels,
 		LearningRate: 0.01,
+		InitialLR:    0.01,
+		WeightDecay:  0.0001, // L2 regularization prevents overfitting
 		path:         path,
 	}
 
@@ -215,8 +221,17 @@ func (nc *NeuralCortex) forward(input []float64) []float64 {
 }
 
 // backward performs backpropagation and updates weights.
+// Includes L2 regularization (weight decay) and learning rate decay to
+// prevent overfitting as the cortex accumulates training data over time.
 func (nc *NeuralCortex) backward(input, output, target []float64) {
+	// Learning rate decay: halve every 500 training steps (asymptotes, never hits zero)
 	lr := nc.LearningRate
+	if nc.InitialLR > 0 && nc.TrainCount > 0 {
+		lr = nc.InitialLR / (1.0 + float64(nc.TrainCount)/500.0)
+		nc.LearningRate = lr
+	}
+
+	wd := nc.WeightDecay
 
 	// Output layer gradients: dL/dlogits = output - target (cross-entropy + softmax)
 	dOutput := make([]float64, nc.OutputSize)
@@ -224,11 +239,11 @@ func (nc *NeuralCortex) backward(input, output, target []float64) {
 		dOutput[i] = output[i] - target[i]
 	}
 
-	// Update W2 and B2
+	// Update W2 and B2 (with L2 regularization on weights)
 	dHidden := make([]float64, nc.HiddenSize)
 	for i := 0; i < nc.HiddenSize; i++ {
 		for j := 0; j < nc.OutputSize; j++ {
-			grad := nc.lastHidden[i] * dOutput[j]
+			grad := nc.lastHidden[i]*dOutput[j] + wd*nc.W2[i][j]
 			nc.W2[i][j] -= lr * grad
 			dHidden[i] += nc.W2[i][j] * dOutput[j]
 		}
@@ -244,10 +259,10 @@ func (nc *NeuralCortex) backward(input, output, target []float64) {
 		}
 	}
 
-	// Update W1 and B1
+	// Update W1 and B1 (with L2 regularization on weights)
 	for i := 0; i < nc.InputSize; i++ {
 		for j := 0; j < nc.HiddenSize; j++ {
-			grad := input[i] * dHidden[j]
+			grad := input[i]*dHidden[j] + wd*nc.W1[i][j]
 			nc.W1[i][j] -= lr * grad
 		}
 	}
@@ -279,6 +294,8 @@ func (nc *NeuralCortex) saveLocked() error {
 		B2           []float64   `json:"b2"`
 		TrainCount   int         `json:"train_count"`
 		LearningRate float64     `json:"learning_rate"`
+		InitialLR    float64     `json:"initial_lr"`
+		WeightDecay  float64     `json:"weight_decay"`
 	}{
 		InputSize:    nc.InputSize,
 		HiddenSize:   nc.HiddenSize,
@@ -290,6 +307,8 @@ func (nc *NeuralCortex) saveLocked() error {
 		B2:           nc.B2,
 		TrainCount:   nc.TrainCount,
 		LearningRate: nc.LearningRate,
+		InitialLR:    nc.InitialLR,
+		WeightDecay:  nc.WeightDecay,
 	}
 
 	b, err := json.Marshal(data)
@@ -321,6 +340,8 @@ func (nc *NeuralCortex) Load() error {
 		B2           []float64   `json:"b2"`
 		TrainCount   int         `json:"train_count"`
 		LearningRate float64     `json:"learning_rate"`
+		InitialLR    float64     `json:"initial_lr"`
+		WeightDecay  float64     `json:"weight_decay"`
 	}
 
 	if err := json.Unmarshal(b, &data); err != nil {
@@ -337,6 +358,14 @@ func (nc *NeuralCortex) Load() error {
 	nc.B2 = data.B2
 	nc.TrainCount = data.TrainCount
 	nc.LearningRate = data.LearningRate
+	nc.InitialLR = data.InitialLR
+	nc.WeightDecay = data.WeightDecay
+	if nc.InitialLR == 0 {
+		nc.InitialLR = 0.01
+	}
+	if nc.WeightDecay == 0 {
+		nc.WeightDecay = 0.0001
+	}
 
 	return nil
 }
