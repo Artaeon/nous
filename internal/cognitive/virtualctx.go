@@ -36,7 +36,12 @@ type VirtualContext struct {
 
 	// Allocation learning
 	successCounts map[string]int // source name → times its context led to good answers
+	failureCounts map[string]int // source name → times its context was irrelevant/wrong
 	totalQueries  int
+
+	// Source health: per-source quality tracking with exponential moving average
+	sourceQuality map[string]float64 // source name → EMA of relevance (0.0-1.0)
+	sourceTokens  map[string]int     // source name → cumulative tokens allocated
 }
 
 // ContextSource represents one source of context that can be queried.
@@ -84,6 +89,9 @@ func NewVirtualContext(budgetTokens int) *VirtualContext {
 	return &VirtualContext{
 		budget:        budgetTokens,
 		successCounts: make(map[string]int),
+		failureCounts: make(map[string]int),
+		sourceQuality: make(map[string]float64),
+		sourceTokens:  make(map[string]int),
 	}
 }
 
@@ -153,6 +161,76 @@ func (vc *VirtualContext) RecordSuccess(sourceName string) {
 	vc.mu.Lock()
 	defer vc.mu.Unlock()
 	vc.successCounts[sourceName]++
+	vc.updateQuality(sourceName, 1.0)
+}
+
+// RecordFailure records that a source's context was irrelevant or unhelpful.
+func (vc *VirtualContext) RecordFailure(sourceName string) {
+	vc.mu.Lock()
+	defer vc.mu.Unlock()
+	vc.failureCounts[sourceName]++
+	vc.updateQuality(sourceName, 0.0)
+}
+
+// RecordQuality records a graded quality score (0.0-1.0) for a source's contribution.
+func (vc *VirtualContext) RecordQuality(sourceName string, quality float64) {
+	vc.mu.Lock()
+	defer vc.mu.Unlock()
+	vc.updateQuality(sourceName, quality)
+}
+
+// updateQuality updates the exponential moving average for a source.
+// EMA with alpha=0.1 means recent observations matter more but old ones still count.
+func (vc *VirtualContext) updateQuality(sourceName string, observation float64) {
+	const alpha = 0.1
+	if current, ok := vc.sourceQuality[sourceName]; ok {
+		vc.sourceQuality[sourceName] = alpha*observation + (1-alpha)*current
+	} else {
+		vc.sourceQuality[sourceName] = observation
+	}
+}
+
+// SourceROI returns the return-on-investment for each source:
+// quality-per-token-allocated. Higher ROI = more efficient source.
+type SourceROI struct {
+	Name         string
+	Quality      float64 // EMA quality score (0.0-1.0)
+	TotalTokens  int     // cumulative tokens allocated
+	Successes    int
+	Failures     int
+	ROI          float64 // quality / tokens-per-query (higher = better)
+}
+
+// SourceHealthReport returns ROI metrics for all sources.
+func (vc *VirtualContext) SourceHealthReport() []SourceROI {
+	vc.mu.RLock()
+	defer vc.mu.RUnlock()
+
+	var report []SourceROI
+	for _, s := range vc.sources {
+		roi := SourceROI{
+			Name:      s.Name,
+			Successes: vc.successCounts[s.Name],
+			Failures:  vc.failureCounts[s.Name],
+		}
+		if q, ok := vc.sourceQuality[s.Name]; ok {
+			roi.Quality = q
+		} else {
+			roi.Quality = 0.5 // default: unknown quality
+		}
+		if t, ok := vc.sourceTokens[s.Name]; ok {
+			roi.TotalTokens = t
+		}
+		// ROI = quality normalized by average tokens consumed
+		if vc.totalQueries > 0 && roi.TotalTokens > 0 {
+			avgTokens := float64(roi.TotalTokens) / float64(vc.totalQueries)
+			if avgTokens > 0 {
+				roi.ROI = roi.Quality / (avgTokens / 100.0) // normalize to reasonable scale
+			}
+		}
+		report = append(report, roi)
+	}
+	return report
 }
 
 // Stats returns virtual context statistics.
@@ -168,12 +246,17 @@ func (vc *VirtualContext) Stats() VirtualContextStats {
 
 	for _, s := range vc.sources {
 		stats.VirtualTokens += s.Size
-		stats.SourceDetails = append(stats.SourceDetails, SourceDetail{
-			Name:     s.Name,
-			Type:     s.Type,
-			Tokens:   s.Size,
+		detail := SourceDetail{
+			Name:      s.Name,
+			Type:      s.Type,
+			Tokens:    s.Size,
 			Successes: vc.successCounts[s.Name],
-		})
+			Failures:  vc.failureCounts[s.Name],
+		}
+		if q, ok := vc.sourceQuality[s.Name]; ok {
+			detail.Quality = q
+		}
+		stats.SourceDetails = append(stats.SourceDetails, detail)
 	}
 
 	return stats
@@ -194,6 +277,8 @@ type SourceDetail struct {
 	Type      SourceType
 	Tokens    int
 	Successes int
+	Failures  int
+	Quality   float64 // EMA quality score
 }
 
 // FormatStats returns a human-readable summary of virtual context stats.
@@ -221,10 +306,12 @@ func (s VirtualContextStats) FormatStats() string {
 // --- Internal ---
 
 // allocateBudgets distributes the token budget across sources.
+// Uses source quality EMA for dynamic rebalancing — high-ROI sources
+// get more budget, low-ROI sources shrink over time.
 func (vc *VirtualContext) allocateBudgets(sources []ContextSource) []int {
 	budgets := make([]int, len(sources))
 
-	// Calculate weighted priorities (base priority + learned success bonus)
+	// Calculate weighted priorities (base priority + learned success + quality EMA)
 	totalWeight := 0.0
 	weights := make([]float64, len(sources))
 
@@ -238,6 +325,14 @@ func (vc *VirtualContext) allocateBudgets(sources []ContextSource) []int {
 		if successes, ok := vc.successCounts[s.Name]; ok && vc.totalQueries > 0 {
 			successRate := float64(successes) / float64(vc.totalQueries)
 			w *= (1.0 + successRate*2.0) // up to 3x boost for consistently useful sources
+		}
+		// Quality-based rebalancing: multiply by EMA quality score.
+		// Sources with quality < 0.3 get heavily penalized.
+		// Sources with quality > 0.7 get boosted.
+		if quality, ok := vc.sourceQuality[s.Name]; ok {
+			// Map quality 0-1 to multiplier 0.3-1.5
+			qualityMult := 0.3 + quality*1.2
+			w *= qualityMult
 		}
 		weights[i] = w
 		totalWeight += w
@@ -324,6 +419,13 @@ func (vc *VirtualContext) assembleContext(slices []ContextSlice) *ContextAssembl
 	if vc.budget > 0 {
 		utilization = float64(totalTokens) / float64(vc.budget)
 	}
+
+	// Track per-source token allocation for ROI analysis
+	vc.mu.Lock()
+	for source := range sourcesUsed {
+		vc.sourceTokens[source] += totalTokens / len(sourcesUsed)
+	}
+	vc.mu.Unlock()
 
 	return &ContextAssembly{
 		Slices:      selected,

@@ -235,6 +235,118 @@ func TestUpdateSourceSize(t *testing.T) {
 	}
 }
 
+func TestVirtualContextRecordFailure(t *testing.T) {
+	vc := NewVirtualContext(1500)
+	vc.AddSource(ContextSource{Name: "bad", Size: 100, Priority: 50})
+
+	vc.RecordFailure("bad")
+	vc.RecordFailure("bad")
+
+	stats := vc.Stats()
+	if stats.SourceDetails[0].Failures != 2 {
+		t.Errorf("failures = %d, want 2", stats.SourceDetails[0].Failures)
+	}
+}
+
+func TestVirtualContextQualityEMA(t *testing.T) {
+	vc := NewVirtualContext(1500)
+	vc.AddSource(ContextSource{Name: "test", Size: 100, Priority: 50})
+
+	// Initial success → quality should be 1.0
+	vc.RecordSuccess("test")
+	quality := vc.sourceQuality["test"]
+	if quality != 1.0 {
+		t.Errorf("initial quality = %f, want 1.0", quality)
+	}
+
+	// Then a failure → quality should drop but not to 0
+	vc.RecordFailure("test")
+	quality = vc.sourceQuality["test"]
+	if quality >= 1.0 {
+		t.Error("quality should drop after failure")
+	}
+	if quality <= 0 {
+		t.Error("quality should not reach zero after one failure")
+	}
+
+	// Many failures → quality should approach 0
+	for i := 0; i < 50; i++ {
+		vc.RecordFailure("test")
+	}
+	quality = vc.sourceQuality["test"]
+	if quality > 0.1 {
+		t.Errorf("quality should be very low after many failures, got %f", quality)
+	}
+}
+
+func TestVirtualContextQualityAffectsBudget(t *testing.T) {
+	vc := NewVirtualContext(1500)
+
+	vc.AddSource(ContextSource{Name: "good", Size: 10000, Priority: 50,
+		Query: func(q string, b int) []ContextSlice {
+			return []ContextSlice{{Source: "good", Content: "good stuff", Tokens: 10, Relevance: 0.8}}
+		},
+	})
+	vc.AddSource(ContextSource{Name: "bad", Size: 10000, Priority: 50,
+		Query: func(q string, b int) []ContextSlice {
+			return []ContextSlice{{Source: "bad", Content: "bad stuff", Tokens: 10, Relevance: 0.8}}
+		},
+	})
+
+	// Make "good" high quality and "bad" low quality
+	for i := 0; i < 20; i++ {
+		vc.RecordSuccess("good")
+		vc.RecordFailure("bad")
+	}
+
+	// Check that budgets reflect quality
+	sources := make([]ContextSource, len(vc.sources))
+	copy(sources, vc.sources)
+	budgets := vc.allocateBudgets(sources)
+
+	if budgets[0] <= budgets[1] {
+		t.Errorf("good source (budget=%d) should get more than bad source (budget=%d)", budgets[0], budgets[1])
+	}
+}
+
+func TestSourceHealthReport(t *testing.T) {
+	vc := NewVirtualContext(1500)
+	vc.AddSource(ContextSource{Name: "knowledge", Size: 50000, Priority: 70})
+
+	vc.RecordSuccess("knowledge")
+	vc.RecordSuccess("knowledge")
+	vc.RecordFailure("knowledge")
+
+	report := vc.SourceHealthReport()
+	if len(report) != 1 {
+		t.Fatalf("expected 1 source in report, got %d", len(report))
+	}
+	if report[0].Successes != 2 {
+		t.Errorf("successes = %d, want 2", report[0].Successes)
+	}
+	if report[0].Failures != 1 {
+		t.Errorf("failures = %d, want 1", report[0].Failures)
+	}
+	if report[0].Quality <= 0 {
+		t.Error("quality should be positive")
+	}
+}
+
+func TestRecordQuality(t *testing.T) {
+	vc := NewVirtualContext(1500)
+	vc.RecordQuality("test", 0.8)
+	if vc.sourceQuality["test"] != 0.8 {
+		t.Errorf("initial quality = %f, want 0.8", vc.sourceQuality["test"])
+	}
+	vc.RecordQuality("test", 0.6)
+	// EMA: 0.1*0.6 + 0.9*0.8 = 0.06 + 0.72 = 0.78
+	expected := 0.78
+	actual := vc.sourceQuality["test"]
+	if actual < expected-0.01 || actual > expected+0.01 {
+		t.Errorf("EMA quality = %f, want ~%f", actual, expected)
+	}
+}
+
 // --- Benchmark ---
 
 func BenchmarkVirtualContextWeave(b *testing.B) {
