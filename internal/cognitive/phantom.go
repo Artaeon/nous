@@ -1,8 +1,12 @@
 package cognitive
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 )
 
 // PhantomReasoner pre-computes entire reasoning chains from tool results,
@@ -32,7 +36,21 @@ import (
 // The model cannot hallucinate the count because it's pre-filled. It
 // cannot claim different files because they're listed. Its ONLY job is
 // to write a grammatically correct concluding sentence.
-type PhantomReasoner struct{}
+//
+// Chain Caching: Deterministic chains from identical inputs produce identical
+// outputs. The cache stores recent chains keyed on query+tool_results hash,
+// so repeated/similar queries return instantly without rebuilding.
+type PhantomReasoner struct {
+	cache    map[string]*phantomCacheEntry
+	cacheOrder []string // LRU order (oldest first)
+	maxCache int
+	mu       sync.RWMutex
+}
+
+type phantomCacheEntry struct {
+	chain   *PhantomChain
+	created time.Time
+}
 
 // PhantomChain holds a pre-computed reasoning chain.
 type PhantomChain struct {
@@ -61,9 +79,12 @@ type PhantomStep struct {
 	Fact        string // the extracted fact
 }
 
-// NewPhantomReasoner creates a new phantom reasoner.
+// NewPhantomReasoner creates a new phantom reasoner with LRU chain cache.
 func NewPhantomReasoner() *PhantomReasoner {
-	return &PhantomReasoner{}
+	return &PhantomReasoner{
+		cache:    make(map[string]*phantomCacheEntry),
+		maxCache: 200,
+	}
 }
 
 // BuildChain constructs a phantom reasoning chain from synthesis steps.
@@ -130,6 +151,67 @@ func (pr *PhantomReasoner) BuildChainFromPipeline(query string, pipe *Pipeline) 
 		})
 	}
 	return pr.BuildChain(query, steps)
+}
+
+// BuildChainCached returns a cached chain if available, otherwise builds and caches.
+// Cache key is hash(query + all tool results). TTL is 60 seconds.
+func (pr *PhantomReasoner) BuildChainCached(query string, steps []synthStep) *PhantomChain {
+	key := pr.cacheKey(query, steps)
+
+	// Check cache
+	pr.mu.RLock()
+	if entry, ok := pr.cache[key]; ok && time.Since(entry.created) < 60*time.Second {
+		pr.mu.RUnlock()
+		return entry.chain
+	}
+	pr.mu.RUnlock()
+
+	// Build and cache
+	chain := pr.BuildChain(query, steps)
+	pr.putCache(key, chain)
+	return chain
+}
+
+// CacheStats returns cache size and hit-rate info.
+func (pr *PhantomReasoner) CacheStats() (size int, maxSize int) {
+	pr.mu.RLock()
+	defer pr.mu.RUnlock()
+	return len(pr.cache), pr.maxCache
+}
+
+// InvalidateCache clears all cached chains (e.g. after filesystem changes).
+func (pr *PhantomReasoner) InvalidateCache() {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+	pr.cache = make(map[string]*phantomCacheEntry)
+	pr.cacheOrder = nil
+}
+
+func (pr *PhantomReasoner) cacheKey(query string, steps []synthStep) string {
+	h := sha256.New()
+	h.Write([]byte(query))
+	for _, s := range steps {
+		h.Write([]byte(s.Tool))
+		h.Write([]byte(s.Result))
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+func (pr *PhantomReasoner) putCache(key string, chain *PhantomChain) {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+
+	if _, exists := pr.cache[key]; !exists {
+		pr.cacheOrder = append(pr.cacheOrder, key)
+	}
+	pr.cache[key] = &phantomCacheEntry{chain: chain, created: time.Now()}
+
+	// LRU eviction
+	for len(pr.cache) > pr.maxCache && len(pr.cacheOrder) > 0 {
+		oldest := pr.cacheOrder[0]
+		pr.cacheOrder = pr.cacheOrder[1:]
+		delete(pr.cache, oldest)
+	}
 }
 
 // buildPhantomStep creates one reasoning step from a tool execution.

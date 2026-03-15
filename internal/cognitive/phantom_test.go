@@ -324,7 +324,95 @@ var errNotFound = &testError{"not found"}
 type testError struct{ msg string }
 func (e *testError) Error() string { return e.msg }
 
+// --- Cache Tests ---
+
+func TestPhantomCacheHit(t *testing.T) {
+	pr := NewPhantomReasoner()
+	steps := []synthStep{
+		{Tool: "glob", Args: map[string]string{"pattern": "*.go"}, Result: "a.go\nb.go\nc.go"},
+	}
+
+	// First call — cache miss, builds chain
+	chain1 := pr.BuildChainCached("how many Go files", steps)
+	if chain1 == nil || len(chain1.Steps) == 0 {
+		t.Fatal("first call should build chain")
+	}
+	size1, _ := pr.CacheStats()
+	if size1 != 1 {
+		t.Errorf("cache should have 1 entry, got %d", size1)
+	}
+
+	// Second call — should be cache hit (same pointer)
+	chain2 := pr.BuildChainCached("how many Go files", steps)
+	if chain2 != chain1 {
+		t.Error("second call should return cached chain (same pointer)")
+	}
+}
+
+func TestPhantomCacheMiss(t *testing.T) {
+	pr := NewPhantomReasoner()
+
+	steps1 := []synthStep{{Tool: "glob", Args: map[string]string{"pattern": "*.go"}, Result: "a.go"}}
+	steps2 := []synthStep{{Tool: "glob", Args: map[string]string{"pattern": "*.go"}, Result: "a.go\nb.go"}}
+
+	chain1 := pr.BuildChainCached("files", steps1)
+	chain2 := pr.BuildChainCached("files", steps2) // different results → different key
+
+	if chain1 == chain2 {
+		t.Error("different tool results should produce different chains")
+	}
+	size, _ := pr.CacheStats()
+	if size != 2 {
+		t.Errorf("cache should have 2 entries, got %d", size)
+	}
+}
+
+func TestPhantomCacheEviction(t *testing.T) {
+	pr := NewPhantomReasoner()
+	pr.maxCache = 3
+
+	for i := 0; i < 5; i++ {
+		steps := []synthStep{{Tool: "glob", Result: strings.Repeat("x", i+1)}}
+		pr.BuildChainCached("query", steps)
+	}
+
+	size, max := pr.CacheStats()
+	if size > max {
+		t.Errorf("cache size %d should not exceed max %d", size, max)
+	}
+}
+
+func TestPhantomCacheInvalidate(t *testing.T) {
+	pr := NewPhantomReasoner()
+	steps := []synthStep{{Tool: "glob", Result: "a.go"}}
+	pr.BuildChainCached("test", steps)
+
+	if size, _ := pr.CacheStats(); size != 1 {
+		t.Fatal("should have 1 cached entry")
+	}
+
+	pr.InvalidateCache()
+	size, _ := pr.CacheStats()
+	if size != 0 {
+		t.Errorf("after invalidation, cache size = %d, want 0", size)
+	}
+}
+
 // --- Benchmark ---
+
+func BenchmarkPhantomChainCached(b *testing.B) {
+	pr := NewPhantomReasoner()
+	steps := []synthStep{
+		{Tool: "grep", Args: map[string]string{"pattern": "Pipeline"}, Result: "a.go:5:type Pipeline\nb.go:10:NewPipeline"},
+	}
+	// Warm cache
+	pr.BuildChainCached("find Pipeline", steps)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		pr.BuildChainCached("find Pipeline", steps)
+	}
+}
 
 func BenchmarkPhantomChainBuild(b *testing.B) {
 	pr := NewPhantomReasoner()
