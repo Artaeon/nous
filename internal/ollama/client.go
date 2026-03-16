@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"strings"
 	"time"
 )
 
 const (
 	DefaultHost    = "http://localhost:11434"
-	DefaultModel   = "qwen2.5:1.5b"
+	DefaultModel   = "qwen3:4b"
 	DefaultTimeout = 300 * time.Second
 )
 
@@ -21,7 +23,26 @@ type Client struct {
 	host       string
 	model      string
 	draftModel string // speculative decoding: small model proposes, main model verifies
+	noThink    bool   // disable extended thinking for qwen3 and similar models
 	httpClient *http.Client
+}
+
+// thinkTagRe strips <think>...</think> blocks from model output.
+var thinkTagRe = regexp.MustCompile(`(?s)<think>.*?</think>\s*`)
+
+// stripThinkTags removes thinking blocks from content.
+// Handles three cases:
+//  1. <think>...</think> paired tags
+//  2. Content ending in </think> (everything before is thinking)
+//  3. Content starting with thinking text followed by </think>
+func stripThinkTags(s string) string {
+	// Case 1: paired tags
+	s = thinkTagRe.ReplaceAllString(s, "")
+	// Case 2: closing tag only — strip everything up to and including </think>
+	if idx := strings.LastIndex(s, "</think>"); idx >= 0 {
+		s = s[idx+len("</think>"):]
+	}
+	return strings.TrimSpace(s)
 }
 
 type Option func(*Client)
@@ -40,6 +61,12 @@ func WithDraftModel(model string) Option {
 
 func WithTimeout(timeout time.Duration) Option {
 	return func(c *Client) { c.httpClient.Timeout = timeout }
+}
+
+// WithNoThink disables extended thinking mode for models like qwen3.
+// This dramatically speeds up CPU inference by avoiding hidden reasoning tokens.
+func WithNoThink() Option {
+	return func(c *Client) { c.noThink = true }
 }
 
 func New(opts ...Option) *Client {
@@ -124,6 +151,7 @@ type GenerateRequest struct {
 	Tools     []Tool        `json:"tools,omitempty"`
 	Format    any           `json:"format,omitempty"` // "json" or JSON Schema object for structured output
 	KeepAlive string        `json:"keep_alive,omitempty"`
+	Think     *bool         `json:"think,omitempty"` // false to disable extended thinking (qwen3, etc.)
 }
 
 type ModelOptions struct {
@@ -169,6 +197,10 @@ func (c *Client) ChatCtx(ctx context.Context, messages []Message, opts *ModelOpt
 		Options:   opts,
 		KeepAlive: "30m",
 	}
+	if c.noThink {
+		f := false
+		req.Think = &f
+	}
 
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -197,6 +229,7 @@ func (c *Client) ChatCtx(ctx context.Context, messages []Message, opts *ModelOpt
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
+	result.Message.Content = stripThinkTags(result.Message.Content)
 	return &result, nil
 }
 
@@ -288,6 +321,12 @@ func (c *Client) ChatWithTools(messages []Message, tools []Tool, opts *ModelOpti
 		KeepAlive: "30m",
 	}
 
+	// Disable thinking for CPU-optimized inference
+	if c.noThink {
+		f := false
+		req.Think = &f
+	}
+
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -308,6 +347,9 @@ func (c *Client) ChatWithTools(messages []Message, tools []Tool, opts *ModelOpti
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
+
+	// Strip any <think>...</think> tags that leaked into content
+	result.Message.Content = stripThinkTags(result.Message.Content)
 
 	return &result, nil
 }
@@ -386,15 +428,16 @@ func (c *Client) ChatStreamWithTools(messages []Message, tools []Tool, opts *Mod
 // This ensures Ollama allocates enough context window for long conversations.
 func ensureNumCtx(opts *ModelOptions) *ModelOptions {
 	if opts == nil {
-		return &ModelOptions{NumCtx: 8192}
+		return &ModelOptions{NumCtx: 8192, NumPredict: 1024}
 	}
-	if opts.NumCtx == 0 {
-		// Copy to avoid mutating caller's struct
-		copy := *opts
+	copy := *opts
+	if copy.NumCtx == 0 {
 		copy.NumCtx = 8192
-		return &copy
 	}
-	return opts
+	if copy.NumPredict == 0 {
+		copy.NumPredict = 1024 // cap output to prevent runaway generation
+	}
+	return &copy
 }
 
 // --- Server Methods ---

@@ -134,6 +134,7 @@ func main() {
 	llm := ollama.New(
 		ollama.WithHost(*host),
 		ollama.WithModel(*model),
+		ollama.WithNoThink(), // disable thinking mode for CPU-optimized inference
 	)
 
 	// Check Ollama connectivity with spinner
