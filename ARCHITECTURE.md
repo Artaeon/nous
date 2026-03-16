@@ -1,231 +1,447 @@
-# Nous Architecture
+# Nous (νοῦς) — Architecture Reference
 
-A deep dive into the cognitive architecture that makes Nous work with small local models.
+**Native Orchestration of Unified Streams**
+Version 0.9.0 | Go 1.22+ | Zero External Dependencies | ~11MB Static Binary
 
-## The Core Problem
+---
 
-Large language models (GPT-4, Claude) can reason over long contexts and self-correct. Small models (1.5B-7B parameters) cannot. They hallucinate, lose track of context, repeat themselves, and fail at multi-step reasoning. Nous solves this architecturally rather than by throwing more parameters at the problem.
+## Overview
 
-## Design Philosophy
-
-**1. Fresh context beats accumulated context.**
-Small models degrade severely when >70% of their context window is consumed. Instead of accumulating messages like a chatbot, Nous gives each reasoning step a fresh context with compressed summaries of prior steps. This is the single most important architectural decision.
-
-**2. Architecture compensates for model limitations.**
-Where large models can self-correct, Nous uses explicit systems: a reflection gate catches repetition, a grounding system validates tool results, and a context budget prevents overflow.
-
-**3. Zero dependencies, zero cloud.**
-The entire system is pure Go stdlib. No external packages, no API keys, no network calls beyond the local Ollama server. This is an ideological choice: Nous runs entirely on your hardware.
-
-## System Overview
+Nous is a fully local AI assistant that treats the LLM as a peripheral device, not the brain. Deterministic code handles 70-95% of queries without any LLM call. The system gets faster the more you use it — every LLM response teaches Nous to answer that type of question instantly next time.
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                     User Input                          │
-└──────────────────────┬──────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                           USER INPUT                             │
+│                    (Terminal / Telegram / Web UI)                 │
+└──────────────────────┬───────────────────────────────────────────┘
                        │
-              ┌────────▼────────┐
-              │  Query Classifier│ ← 3-tier: fast/medium/full
-              └────────┬────────┘
-                       │
-        ┌──────────────┼──────────────┐
-        │              │              │
-   ┌────▼────┐  ┌──────▼──────┐  ┌───▼───────────┐
-   │Fast Path│  │Medium Path  │  │Full Pipeline  │
-   │(1 call) │  │(1 call+mem) │  │(6 streams)    │
-   └─────────┘  └─────────────┘  └───┬───────────┘
-                                     │
-                       ┌─────────────┼─────────────┐
-                       │             │             │
-                  ┌────▼────┐  ┌────▼────┐  ┌────▼────┐
-                  │Perceiver│  │Reasoner │  │Planner  │
-                  │(intent) │  │(tools)  │  │(goals)  │
-                  └────┬────┘  └────┬────┘  └────┬────┘
-                       │            │            │
-                  ┌────▼────┐  ┌────▼────┐  ┌────▼────┐
-                  │Executor │  │Reflector│  │Learner  │
-                  │(actions)│  │(quality)│  │(patterns│
-                  └─────────┘  └─────────┘  └─────────┘
-                       │
-              ┌────────▼────────┐
-              │   Blackboard    │ ← Shared pub/sub workspace
-              └─────────────────┘
+                       ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                     QUERY CLASSIFICATION                         │
+│              FastPathClassifier (51 regex patterns)               │
+│                                                                  │
+│  PathFast ──── greetings, yes/no, simple math, identity          │
+│  PathMedium ── explanations, opinions, recall, introductions     │
+│  PathFull ──── file ops, git, search, code, multi-step           │
+└──────┬──────────────┬────────────────────────┬───────────────────┘
+       │              │                        │
+       ▼              ▼                        ▼
+   FAST PATH      MEDIUM PATH              FULL PATH
+   (0-5s)         (0ms-10s)                (200ms-40s)
+       │              │                        │
+       │              │                        │
+       ▼              ▼                        ▼
+┌─────────────┐ ┌──────────────┐  ┌────────────────────────────┐
+│ Canned      │ │ Response     │  │ Exocortex 3-Tier Engine    │
+│ Greetings   │ │ Crystals     │  │                            │
+│ (22 entries)│ │ (semantic    │  │ Tier 1: Intent Compiler    │
+│             │ │  cache, 0ms) │  │   33 patterns → tool call  │
+│ 0ms         │ │              │  │   → Response Synthesizer   │
+│             │ │ HIT? → done  │  │   → 0ms, no LLM           │
+│             │ │ MISS → LLM   │  │                            │
+│             │ │ → Learn      │  │ Tier 2: Neural Scaffold    │
+└─────────────┘ └──────────────┘  │   Facts pre-filled         │
+                                  │   LLM fills gaps only      │
+                                  │   → 1 LLM call             │
+                                  │                            │
+                                  │ Tier 3: Full Reasoning     │
+                                  │   Up to 6 tool iterations  │
+                                  │   Native tool calling API  │
+                                  │   → 1-7 LLM calls          │
+                                  └────────────────────────────┘
 ```
 
-## Key Innovations
+---
 
-### 1. Fresh-Context Pipeline
+## Core Architecture: 6 Cognitive Streams
 
-**Problem**: At step 8+, small models have consumed so much context that they start hallucinating or repeating previous tool calls.
-
-**Solution**: Each reasoning step gets a fresh LLM call containing only:
-1. A compact system prompt with tool definitions
-2. The original user question
-3. One-line compressed summaries of all previous steps
-4. The current tool result
-
-Previous step results are compressed using either:
-- **Thought distillation**: A fast model (tinyllama) summarizes the result in one sentence
-- **Rule-based compression**: Deterministic heuristics per tool type (e.g., read→"Read file.go: first line... (N lines)")
-
-This keeps context usage under 30% even at step 10+, compared to 90%+ for accumulated-message approaches.
-
-**Benchmark**: Pipeline context build takes 1.9μs — negligible vs LLM inference.
-
-### 2. 5-Layer Cognitive Grounding
-
-Each layer prevents a different class of hallucination:
-
-| Layer | What it prevents | How |
-|-------|-----------------|-----|
-| **Context Budget** | Token overflow | Tracks chars-per-token estimation; triggers compression at 75%, forced answer at 85% |
-| **Smart Truncation** | Information overload | Tool-specific truncation preserving navigability (landmarks from middle of files, line numbers) |
-| **Result Validation** | Acting on errors | Checks for empty/error results, provides corrective hints ("Path not found. Use ls to find the correct path.") |
-| **Reflection Gate** | Repetition loops | SHA256 hash of results in 4-entry circular buffer; detects repeated tool calls and escalates: nudge→warn→force stop |
-| **Iteration Cap** | Runaway reasoning | Hard stop at 6 iterations with forced answer from accumulated evidence |
-
-**Benchmark**: Reflection gate check takes 418ns — zero perceptible overhead.
-
-### 3. 3-Tier Query Classification
-
-Not every query needs the full cognitive pipeline. Nous classifies queries in <3μs using compiled regex patterns:
-
-| Tier | Latency | Context | Examples |
-|------|---------|---------|----------|
-| **Fast** | ~50ms | System prompt + query | "hi", "thanks", "who are you?", "42+7?" |
-| **Medium** | ~200ms | + conversation history + memory | "explain how GC works", "tell me more", "what do you think?" |
-| **Full** | ~2-10s | Full 6-stream pipeline with tools | "read file main.go", "find all TODOs", "refactor the server" |
-
-This saves 2-10 seconds on simple queries while still handling complex tasks.
-
-### 4. Predictive Pre-computation
-
-After each tool execution, Nous speculatively caches likely follow-up results:
-
-| Last Action | Prediction | Hit Rate |
-|------------|-----------|----------|
-| Read `X.go` | Pre-read `X_test.go` | ~40% |
-| Read file | Pre-list its directory | ~25% |
-| Grep for symbol | Pre-read first matched file | ~60% |
-| List directory | Pre-read README.md, main.go | ~30% |
-| Glob for pattern | Pre-read first 2 matched files | ~35% |
-
-Predictions run in background goroutines, are read-only (safe), expire after 30 seconds, and the cache is capped at 20 entries with LRU eviction.
-
-**Benchmark**: Cache lookup takes 519ns. On a hit, this saves 50-500ms of tool execution.
-
-### 5. Tool Choreography (Recipes)
-
-Nous learns successful multi-step tool sequences and replays them:
-
-1. **Record**: After a successful 2+ step pipeline, extract the tool sequence
-2. **Parameterize**: Replace concrete paths with `$FILE`, `$DIR` placeholders
-3. **Match**: On new queries, score recipes by intent + keyword overlap + confidence
-4. **Replay**: Substitute parameters and execute the learned sequence
-
-Example learned recipe:
-```
-Trigger: "find function definition"
-Sequence: grep($PATTERN) → read($FILE)
-Confidence: 0.87 (successes/uses)
-```
-
-Recipes are persisted to disk and pruned to keep the top 40 by confidence.
-
-### 6. Multi-Model Routing
-
-Different cognitive tasks have different requirements:
-
-| Task | Model | Why |
-|------|-------|-----|
-| Perception | tinyllama | Fast, simple intent extraction |
-| Compression | tinyllama | Quick summarization |
-| Reasoning | qwen2.5:1.5b | Best accuracy for tool selection |
-| Reflection | qwen2.5:1.5b | Needs judgment |
-
-The router auto-discovers available models via the Ollama API, classifies them by family (size, capabilities), and routes tasks accordingly. Falls back to the default model if specialized models aren't available.
-
-### 7. Self-Improvement Pipeline
-
-Nous collects every successful interaction as training data:
+Six goroutines running concurrently on a shared blackboard (pub/sub):
 
 ```
-Interaction → Quality Score (0-1) → Filter (≥0.6) → Collect → Export
-                                                         ↓
-                                              JSONL / Alpaca / ChatML
-                                                         ↓
-                                              LoRA fine-tuning (unsloth)
-                                                         ↓
-                                              Enhanced Modelfile
-                                                         ↓
-                                              ollama create nous-tuned
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│  Perceiver  │    │  Reasoner   │    │  Planner    │
+│  (input     │───►│  (tool      │───►│  (goal      │
+│   parsing)  │    │   calling)  │    │   decomp)   │
+└─────────────┘    └─────────────┘    └─────────────┘
+       │                  │                  │
+       ▼                  ▼                  ▼
+  ┌──────────────── BLACKBOARD ─────────────────┐
+  │  Shared state, percepts, goals, answers     │
+  └──────────────────────────────────────────────┘
+       │                  │                  │
+       ▼                  ▼                  ▼
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│  Executor   │    │  Reflector  │    │  Learner    │
+│  (tool      │    │  (quality   │    │  (pattern   │
+│   dispatch) │    │   eval)     │    │   mining)   │
+└─────────────┘    └─────────────┘    └─────────────┘
 ```
 
-Auto-tuning triggers when: 50+ pairs collected, average quality ≥0.7, and 1-hour cooldown since last tune. The tuned model embeds learned patterns into its system prompt.
+---
 
-## Memory Architecture
-
-```
-┌──────────────────────────────────────────┐
-│              Working Memory               │
-│  64 slots, decay-based (τ=0.95/step)     │
-│  Semantic embeddings for relevance       │
-└──────────────┬───────────────────────────┘
-               │ promotes
-┌──────────────▼───────────────────────────┐
-│            Long-Term Memory               │
-│  Persistent JSON key-value store         │
-│  Categorized entries (facts, prefs)      │
-└──────────────────────────────────────────┘
-┌──────────────────────────────────────────┐
-│            Project Memory                 │
-│  Per-project facts in .nous/ directory   │
-│  Language, framework, conventions        │
-└──────────────────────────────────────────┘
-┌──────────────────────────────────────────┐
-│           Episodic Memory                 │
-│  Every interaction with embeddings       │
-│  Hybrid search: semantic + keyword       │
-│  Auto-prune at 10K episodes              │
-└──────────────────────────────────────────┘
-```
-
-## Concurrency Model
-
-All cognitive streams run as independent goroutines communicating through the blackboard (pub/sub). The blackboard uses `sync.RWMutex` for thread-safe access. Each stream:
-
-1. Subscribes to specific blackboard topics
-2. Processes events independently
-3. Publishes results back to the blackboard
-4. Can be cancelled via context
-
-The predictor cache, recipe book, episodic memory, and training collector all use `RWMutex` for concurrent read/write safety. All pass Go's race detector (`-race` flag).
-
-## File Organization
+## Memory Architecture: 6 Layers
 
 ```
-cmd/nous/main.go          → Entry point, REPL, server, slash commands (2,756 lines)
-internal/
-  cognitive/
-    reasoner.go            → Core agent: tool calling, reasoning loop (1,886 lines)
-    pipeline.go            → Fresh-context step management (350 lines)
-    grounding.go           → 5-layer anti-hallucination (242 lines)
-    fastpath.go            → 3-tier query classification (275 lines)
-    predictor.go           → Speculative pre-computation (315 lines)
-    recipes.go             → Tool choreography learning (428 lines)
-    router.go              → Multi-model task routing (336 lines)
-    diffpreview.go         → LCS-based colored diffs (298 lines)
-    confirm.go             → Tool safety classification (53 lines)
-    persona.go             → Identity and prompts (66 lines)
-    + 15 more files
-  ollama/client.go         → Ollama HTTP client with native tool calling (498 lines)
-  memory/                  → 4-layer memory system (1,468 lines)
-  tools/                   → 18 built-in tools + browser (2,618 lines)
-  server/                  → HTTP API + web UI (931 lines)
-  training/                → LoRA fine-tuning pipeline (719 lines)
-  sentinel/                → inotify filesystem watcher (342 lines)
-  index/                   → Go AST codebase indexer (681 lines)
-  + 8 more packages
+┌─────────────────────────────────────────────────────────────────┐
+│                       MEMORY SYSTEM                              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Working Memory (64 slots)                                       │
+│  ├── Relevance decay (0.01/sec)                                  │
+│  ├── Semantic embeddings for similarity search                   │
+│  └── In-memory only, per-session                                 │
+│                                                                  │
+│  Long-Term Memory (~/.nous/longterm.json)                        │
+│  ├── Persistent key-value facts (user profile, project facts)    │
+│  ├── Category-based retrieval                                    │
+│  └── Auto-backed up (5 timestamped copies)                       │
+│                                                                  │
+│  Episodic Memory (.nous/episodes.json)                           │
+│  ├── Every interaction recorded (10,000 cap)                     │
+│  ├── Semantic search via embeddings (nomic-embed-text)           │
+│  ├── Keyword search fallback                                     │
+│  └── Success rate tracking per tool                              │
+│                                                                  │
+│  Project Memory (.nous/project_memory.json)                      │
+│  ├── Per-project facts with confidence scores                    │
+│  └── Contextual to working directory                             │
+│                                                                  │
+│  Knowledge Vector Store (.nous/knowledge.json)                   │
+│  ├── 660 encyclopedic chunks (10 domains)                        │
+│  ├── Semantic search via nomic-embed-text embeddings             │
+│  └── Custom ingestion via /ingest command                        │
+│                                                                  │
+│  Response Crystal Store (.nous/response_crystals.json)           │
+│  ├── 500-entry semantic cache of LLM responses                   │
+│  ├── Learns from every LLM call (async, non-blocking)            │
+│  ├── 0.82 cosine similarity threshold for cache hits             │
+│  └── Quality-weighted pruning (quality + recency + usage)        │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-Total: **23,843 lines** of production Go code, **19,643 lines** of tests, **zero external dependencies**.
+---
+
+## Speed Architecture: Progressive Compilation
+
+The core insight: **the more you use Nous, the faster it gets.** Every LLM response is "compiled" into a deterministic cache entry. Over weeks of use, the LLM bypass rate grows from 65% toward 95%.
+
+### Response Path Hierarchy (fastest first)
+
+| Layer | What it handles | Speed | Coverage |
+|-------|----------------|-------|----------|
+| 1. Canned greetings | "hello", "thanks", "bye" (22 entries) | **0ms** | 5-10% |
+| 2. Intent compiler | "read file", "show commits" (33 patterns) | **200ms** | 30-40% |
+| 3. Response synthesizer | Tool result formatting (8 tool types) | **instant** | (part of #2) |
+| 4. Response crystals | Previously-answered questions (500 cache) | **28ms** | **grows over time** |
+| 5. Phantom chain cache | Repeated tool chains (200 LRU, 60s TTL) | **instant** | varies |
+| 6. Crystal recipes | Learned tool sequences (50 recipes) | **instant** | varies |
+| 7. Speculative pre-computation | Follow-up predictions (20 LRU, 30s TTL) | **pre-loaded** | varies |
+| 8. Fast-path LLM | New simple questions | **3-10s** | 10-15% |
+| 9. Full pipeline LLM | Complex/creative (up to 6 tool iterations) | **8-40s** | 5-10% |
+
+### Measured Performance
+
+```
+First time:   "what is relativity?"  → LLM → 12 seconds
+Second time:  "explain relativity"   → crystal hit → 28 milliseconds (464x faster)
+
+Greetings:    "hello"                → canned → 0ms
+Tool queries: "show recent commits"  → exo-bypass → 200ms
+File ops:     "read main.go"         → exo-bypass → 200ms
+```
+
+### Projected LLM Bypass Rate Over Time
+
+```
+Day 1:    65% bypass (built-in patterns only)
+Week 1:   75% bypass (50 response crystals learned)
+Week 2:   82% bypass (100 crystals + recipe patterns)
+Month 1:  90% bypass (200 crystals covering daily patterns)
+Month 3:  95% bypass (500 crystals, full vocabulary cached)
+```
+
+---
+
+## Self-Improvement Architecture
+
+Nous has 8 interconnected learning systems:
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                    SELF-IMPROVEMENT LOOP                          │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  1. Response Crystallization                                     │
+│     Every LLM response → semantic cache → future instant hits    │
+│     500 entries, 0.82 similarity threshold                       │
+│                                                                  │
+│  2. Training Pipeline                                            │
+│     Every interaction → JSONL/Alpaca/ChatML training data        │
+│     Auto-triggers LoRA fine-tuning at 50+ quality pairs          │
+│     Quality scoring: success × speed × tool_usage                │
+│                                                                  │
+│  3. Self-Distillation (DPO)                                      │
+│     Failures → contrastive pairs (chosen vs rejected)            │
+│     Model learns what NOT to do from its own mistakes            │
+│                                                                  │
+│  4. Neuroplastic Tool Descriptions                               │
+│     Tool prompts evolve via genetic algorithm                    │
+│     Success rate per description variant → best survive          │
+│                                                                  │
+│  5. Crystal Reasoning (Recipes)                                  │
+│     Successful tool sequences → parameterized recipes            │
+│     High-confidence recipes bypass LLM entirely                  │
+│     Up to 50 recipes, confidence-weighted matching               │
+│                                                                  │
+│  6. Auto-Crystallization                                         │
+│     Mines episodic memory for recurring patterns                 │
+│     Generates instant-match crystals from frequent sequences     │
+│                                                                  │
+│  7. Neural Cortex (Policy Head)                                  │
+│     Lightweight neural network predicting best tool for intent   │
+│     L2 weight decay + learning rate decay prevents overfitting   │
+│     Intent-Cortex ensemble: two systems vote together            │
+│                                                                  │
+│  8. Source Health Monitoring                                      │
+│     Per-source quality EMA for virtual context                   │
+│     Dynamic budget rebalancing — bad sources get less budget     │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Anti-Hallucination Architecture: 5 Layers
+
+```
+Layer 1: Intent Compilation
+  → Deterministic tool calls, zero hallucination possible
+
+Layer 2: Neural Scaffolding
+  → Pre-fill verified facts into response seed
+  → LLM can only write connective tissue between facts
+
+Layer 3: Embedding-Driven Grounding
+  → nomic-embed-text as semantic oracle
+  → Tool/file matching by embedding similarity, not LLM guess
+
+Layer 4: User Profile Grounding
+  → "ONLY state facts listed here, never invent details"
+  → Profile injected into system prompt
+
+Layer 5: Post-Generation Validation
+  → Check LLM response against knowledge store
+  → Flag contradictions before user sees them
+```
+
+---
+
+## Tool System: 18 Built-In Tools
+
+| Tool | Function | Undo |
+|------|----------|------|
+| `read` | Read file contents with offset/limit | — |
+| `write` | Create/overwrite files | ✓ |
+| `edit` | Find-replace in files | ✓ |
+| `patch` | Multi-line before/after edit | ✓ |
+| `find_replace` | Regex find-replace | ✓ |
+| `replace_all` | Bulk replace across files | — |
+| `glob` | Find files by pattern | — |
+| `grep` | Regex search in files | — |
+| `ls` | List directory contents | — |
+| `tree` | Directory tree (depth 3) | — |
+| `mkdir` | Create directory tree | ✓ |
+| `git` | Git operations (safe validated) | — |
+| `diff` | Git diff / staged changes | — |
+| `shell` | Shell execution (requires --trust) | — |
+| `run` | Command execution (60s timeout) | — |
+| `fetch` | Fetch URL content (1MB limit, 30s timeout) | — |
+| `sysinfo` | OS, CPU, disk, hostname | — |
+| `clipboard` | Read/write system clipboard | — |
+
+### Exocortex Bypass
+
+33 intent patterns compile queries directly to tool calls without LLM:
+
+```
+"read main.go"           → read(path="main.go")           → 200ms
+"show recent commits"    → git(args="log --oneline -15")   → 200ms
+"find test files"        → glob(pattern="**/*_test*")      → 200ms
+"how many go files?"     → glob(pattern="**/*.go") + count → 200ms
+"search for TODO"        → grep(pattern="TODO")            → 200ms
+"show project structure" → tree(path=".")                  → 200ms
+```
+
+---
+
+## Personalization Architecture
+
+### First-Run Onboarding (5 questions)
+```
+? What's your name?
+? What do you do?
+? What are you working on? (optional)
+? What are your interests? (optional)
+? How should I help you? (optional)
+```
+
+### User Profile Injection
+- All `user.*` facts from LTM injected into every system prompt
+- Model knows user from first token of every conversation
+- Anti-hallucination: "ONLY state facts listed here, never invent details"
+
+### Fact Extraction
+- Automatic pattern-based extraction from natural conversation
+- Patterns: name, role, interests, current work, location
+- Stored in LTM (persistent) + working memory (immediate)
+
+### Welcome-Back
+- Returning users see personalized greeting with name + last project
+- Onboarding skipped when LTM has data
+
+---
+
+## Access Channels
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        NOUS SERVER                           │
+│                                                              │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
+│  │ Terminal  │  │ Web UI   │  │ Telegram │  │ Discord  │   │
+│  │ (REPL)   │  │ (:3333)  │  │ (bot)    │  │ (bot)    │   │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘   │
+│       │              │              │              │         │
+│       └──────────────┴──────────────┴──────────────┘         │
+│                          │                                   │
+│                          ▼                                   │
+│                 Same Cognitive Pipeline                       │
+│                 Same Memory System                            │
+│                 Same Learning Loop                            │
+│                 Same Response Crystals                        │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+All channels go through identical processing:
+1. Classify query (51 patterns)
+2. Extract personal facts
+3. Check response crystal cache
+4. Route to appropriate path (fast/medium/full)
+5. Record in episodic memory
+6. Collect training data
+7. Learn response crystal (async)
+
+### Web UI (5 tabs)
+- **Chat**: Terminal-style interface with task sidebar and job panel
+- **Dashboard**: 8 metric cards (model, memory, episodes, training, tasks)
+- **Memory**: Tables for LTM, working memory, episodic history
+- **Tools**: Tool catalog + clickable slash command reference
+- **Settings**: Preferences, sessions, conversation history, connection
+
+### HTTP API (20 endpoints)
+```
+POST /api/chat              — Send message, get response
+POST /api/jobs              — Queue background task
+GET  /api/jobs              — List jobs
+GET  /api/jobs/{id}         — Inspect job
+DELETE /api/jobs/{id}       — Cancel job
+GET  /api/status            — System status
+GET  /api/health            — Health check
+GET  /api/dashboard         — Comprehensive system overview
+GET  /api/memory            — Working memory items
+GET  /api/longterm          — Long-term memory entries
+GET  /api/episodes          — Episodic memory
+GET  /api/tools             — Tool catalog
+GET  /api/training          — Training data stats
+GET  /api/sessions          — Saved session list
+GET  /api/conversation      — Current conversation messages
+GET  /api/assistant/today   — Notifications + schedule
+GET  /api/assistant/tasks   — List/create tasks
+POST /api/assistant/tasks/{id}/done — Mark completed
+GET  /api/assistant/preferences     — Preferences
+GET  /api/assistant/routines        — Routines
+```
+
+---
+
+## Deployment Architecture
+
+### Docker (recommended for servers)
+
+```yaml
+services:
+  nous:
+    build: .
+    network_mode: host
+    environment:
+      - NOUS_TELEGRAM_TOKEN=...
+    command: ["--serve", "--port", "3333", "--model", "qwen3:4b",
+              "--trust", "--api-key", "${NOUS_API_KEY}"]
+    volumes:
+      - nous_data:/data
+```
+
+- **Image size**: 41MB (Alpine + 11MB binary + knowledge files)
+- **Startup time**: ~8 seconds
+- **Knowledge**: 660 chunks auto-ingested on first run (background)
+- **Memory**: All backed up (5 timestamped copies per file)
+
+### Resource Requirements
+
+| Component | RAM | Disk | CPU |
+|-----------|-----|------|-----|
+| Nous binary | 30 MB | 11 MB | negligible |
+| Ollama + qwen3:4b | 3 GB | 2.5 GB | moderate |
+| Ollama + nomic-embed-text | 500 MB | 300 MB | light |
+| Memory files | negligible | < 50 MB | — |
+| **Total** | **~3.5 GB** | **~3 GB** | **2+ cores** |
+
+### Security
+
+- API key authentication (Bearer token) on all endpoints
+- Web UI prompts for key, stores in localStorage
+- Telegram allowlist (only specified user IDs)
+- CORS restricted to localhost
+- Atomic file writes with backups
+- No secrets in Docker image
+- HTTPS via Traefik/nginx reverse proxy
+
+---
+
+## Data Persistence
+
+All data stored as plain JSON with atomic writes and automatic backups:
+
+| File | Location | Backups | Content |
+|------|----------|---------|---------|
+| `longterm.json` | `~/.nous/` | 5 copies | User profile, facts |
+| `episodes.json` | `.nous/` | 5 copies | Every interaction |
+| `assistant.json` | `~/.nous/` | 5 copies | Tasks, routines, preferences |
+| `sessions/*.json` | `~/.nous/sessions/` | 5 copies | Conversation history |
+| `training_data.json` | `.nous/` | 5 copies | Fine-tuning data |
+| `knowledge.json` | `.nous/` | — | Knowledge vector store |
+| `response_crystals.json` | `.nous/` | 3 copies | Learned response cache |
+
+---
+
+## What Makes Nous Different
+
+1. **LLM-as-peripheral**: Deterministic code is the brain. LLM is called only when reasoning is needed. No other local assistant does this.
+
+2. **Progressive compilation**: Every LLM response becomes a cached crystal. The system gets faster over time — from 65% bypass on day 1 to 95% after months.
+
+3. **Zero dependencies**: Single Go binary, no Python, no npm, no Docker required for the binary itself.
+
+4. **Self-improving**: 8 learning systems evolve tool descriptions, cache patterns, collect training data, fine-tune models, and learn from failures.
+
+5. **Tiny model effectiveness**: Makes qwen3:4b (2.5GB) genuinely useful through scaffolding, grounding, bypass, and caching.
+
+6. **True personalization**: Onboarding → LTM → system prompt injection → anti-hallucination grounding. Knows your name, interests, and work across sessions.
+
+7. **Multi-channel, single brain**: Terminal, Web UI, Telegram, Discord, Matrix — all access the same memory, learning, and crystals.
+
+---
+
+*Built by Artaeon (raphael.lugmayr@stoicera.com) | MIT License*
