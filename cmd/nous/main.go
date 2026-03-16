@@ -351,6 +351,7 @@ func main() {
 	)
 
 	// Auto-ingest bundled knowledge on first run (when knowledge store is empty).
+	// Runs in background so startup isn't blocked by embedding calls.
 	if reasoner.Knowledge.Size() == 0 {
 		knowledgeDirs := []string{
 			filepath.Join(workDir, "knowledge"),  // repo checkout
@@ -359,17 +360,21 @@ func main() {
 		for _, kdir := range knowledgeDirs {
 			files, _ := filepath.Glob(filepath.Join(kdir, "*.txt"))
 			if len(files) > 0 {
-				total := 0
-				for _, f := range files {
-					n, err := reasoner.Knowledge.Ingest(f)
-					if err == nil {
-						total += n
+				fmt.Printf("  %singesting %d knowledge files in background...%s\n",
+					cognitive.ColorDim, len(files), cognitive.ColorReset)
+				go func(fileList []string) {
+					total := 0
+					for _, f := range fileList {
+						n, err := reasoner.Knowledge.Ingest(f)
+						if err == nil {
+							total += n
+						}
 					}
-				}
-				if total > 0 {
-					fmt.Printf("  %s✓%s Loaded %d knowledge chunks from %d files\n",
-						cognitive.ColorGreen, cognitive.ColorReset, total, len(files))
-				}
+					if total > 0 {
+						fmt.Printf("\n  %s✓%s Knowledge ready: %d chunks loaded\n",
+							cognitive.ColorGreen, cognitive.ColorReset, total)
+					}
+				}(files)
 				break
 			}
 		}

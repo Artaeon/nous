@@ -1,19 +1,17 @@
-version: "3.8"
-
 services:
   ollama:
     image: ollama/ollama
     restart: unless-stopped
     volumes:
       - ollama_data:/root/.ollama
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    # No ports exposed — only accessible within Docker network
+    # Uncomment below for GPU acceleration:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
 
   nous:
     build: .
@@ -26,6 +24,7 @@ services:
       - "--serve"
       - "--port"
       - "3333"
+      - "--public"
       - "--host"
       - "http://ollama:11434"
       - "--memory"
@@ -34,6 +33,8 @@ services:
       - "--allow-shell"
       - "--api-key"
       - "${NOUS_API_KEY:-}"
+    ports:
+      - "3333:3333"
     volumes:
       - nous_data:/data
       - nous_workspace:/workspace
