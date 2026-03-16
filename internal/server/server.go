@@ -509,262 +509,392 @@ func waitForAnswer(board *blackboard.Blackboard, timeout time.Duration, keys ...
 	}
 }
 
-// webUI is the web interface — Apple/Notion-inspired, clean and modern.
+// webUI is the web interface — terminal-style with login, tasks, and full feature access.
 const webUI = `<!DOCTYPE html>
 <html lang="en">
 <head>
-  <title>Nous</title>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    :root {
-      --bg: #fafafa; --bg2: #ffffff; --bg3: #f5f5f5; --bg-hover: #f0f0f0;
-      --fg: #1a1a1a; --fg2: #6b6b6b; --fg3: #999;
-      --accent: #0066ff; --accent-light: #e8f0ff; --accent-hover: #0052cc;
-      --green: #34c759; --yellow: #ff9f0a; --red: #ff3b30; --blue: #007aff;
-      --border: #e5e5e5; --border2: #ebebeb;
-      --radius: 12px; --radius-sm: 8px;
-      --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
-      --shadow-lg: 0 4px 12px rgba(0,0,0,0.08);
-      --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
-      --mono: 'SF Mono', 'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace;
-      --transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-    }
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --bg: #0f0f0f; --bg2: #1a1a1a; --bg3: #242424; --bg-hover: #2a2a2a;
-        --fg: #f0f0f0; --fg2: #999; --fg3: #666;
-        --accent: #3b82f6; --accent-light: #1e293b; --accent-hover: #60a5fa;
-        --green: #4ade80; --yellow: #fbbf24; --red: #f87171; --blue: #60a5fa;
-        --border: #2a2a2a; --border2: #333;
-        --shadow: 0 1px 3px rgba(0,0,0,0.3);
-        --shadow-lg: 0 4px 12px rgba(0,0,0,0.4);
-      }
-    }
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { height: 100%; }
-    body { font-family: var(--font); background: var(--bg); color: var(--fg); display: flex; flex-direction: column; -webkit-font-smoothing: antialiased; }
+<title>Nous</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--bg4:#30363d;--fg:#e6edf3;--fg2:#8b949e;--fg3:#484f58;--accent:#58a6ff;--accent2:#1f6feb;--green:#3fb950;--yellow:#d29922;--red:#f85149;--cyan:#79c0ff;--magenta:#d2a8ff;--border:#30363d;--font:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',system-ui,sans-serif;--mono:'SF Mono','Fira Code','JetBrains Mono','Cascadia Code',Consolas,monospace;--t:0.15s ease}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden}
+body{font-family:var(--mono);background:var(--bg);color:var(--fg);font-size:13px;-webkit-font-smoothing:antialiased}
 
-    /* Header */
-    .header { padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); background: var(--bg2); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
-    .header .brand { display: flex; align-items: center; gap: 10px; }
-    .header .logo { width: 32px; height: 32px; background: var(--accent); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 14px; letter-spacing: 1px; }
-    .header .title { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
-    .header .status-bar { display: flex; gap: 16px; font-size: 12px; color: var(--fg2); }
-    .header .status-bar .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); display: inline-block; margin-right: 4px; animation: pulse 2s ease-in-out infinite; }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+/* Login */
+.login{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:100;animation:fadeIn .3s ease}
+.login.hidden{display:none}
+.login-box{width:360px;text-align:center}
+.login-box h1{font-size:28px;font-weight:300;letter-spacing:8px;color:var(--fg);margin-bottom:4px}
+.login-box p{color:var(--fg2);font-size:12px;margin-bottom:32px;font-family:var(--font)}
+.login-box input{width:100%;padding:12px 16px;background:var(--bg2);border:1px solid var(--border);color:var(--fg);border-radius:8px;font-family:var(--mono);font-size:14px;text-align:center;outline:none;transition:border var(--t)}
+.login-box input:focus{border-color:var(--accent)}
+.login-box input::placeholder{color:var(--fg3)}
+.login-box button{width:100%;margin-top:12px;padding:10px;background:var(--accent2);color:#fff;border:none;border-radius:8px;font-family:var(--font);font-size:14px;font-weight:600;cursor:pointer;transition:background var(--t)}
+.login-box button:hover{background:var(--accent)}
+.login-box .skip{margin-top:12px;font-size:11px;color:var(--fg3);cursor:pointer;font-family:var(--font)}
+.login-box .skip:hover{color:var(--fg2)}
+.login-err{color:var(--red);font-size:12px;margin-top:8px;min-height:18px;font-family:var(--font)}
 
-    /* Layout */
-    .layout { flex: 1; display: flex; min-height: 0; }
-    .chat-container { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-    .chat { flex: 1; overflow-y: auto; padding: 24px; scroll-behavior: smooth; }
-    .chat::-webkit-scrollbar { width: 6px; }
-    .chat::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+/* App shell */
+.app{display:flex;height:100vh;flex-direction:column}
+.app.hidden{display:none}
 
-    /* Messages */
-    .msg { max-width: 720px; margin: 0 auto 16px; animation: fadeUp 0.3s var(--transition); }
-    @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-    .msg .label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--fg3); margin-bottom: 6px; }
-    .msg .bubble { padding: 14px 18px; border-radius: var(--radius); font-size: 14px; line-height: 1.6; }
-    .msg.user .label { text-align: right; }
-    .msg.user .bubble { background: var(--accent); color: #fff; border-radius: var(--radius) var(--radius) 4px var(--radius); margin-left: 60px; }
-    .msg.nous .bubble { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius) var(--radius) var(--radius) 4px; margin-right: 60px; box-shadow: var(--shadow); }
+/* Top bar */
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:0 16px;height:40px;background:var(--bg2);border-bottom:1px solid var(--border);flex-shrink:0}
+.topbar .left{display:flex;align-items:center;gap:12px}
+.topbar .logo{color:var(--green);font-weight:700;font-size:13px;letter-spacing:2px}
+.topbar .sep{color:var(--fg3)}
+.topbar .model{color:var(--fg2);font-size:12px}
+.topbar .right{display:flex;gap:16px;font-size:11px;color:var(--fg3)}
+.topbar .dot{width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;margin-right:4px;animation:pulse 2s ease infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.topbar .tab{padding:4px 10px;border-radius:4px;cursor:pointer;transition:all var(--t);color:var(--fg2)}
+.topbar .tab:hover,.topbar .tab.active{background:var(--bg3);color:var(--fg)}
 
-    /* Thinking indicator */
-    .thinking { display: flex; gap: 4px; padding: 4px 0; }
-    .thinking span { width: 6px; height: 6px; border-radius: 50%; background: var(--fg3); animation: bounce 1.4s ease-in-out infinite; }
-    .thinking span:nth-child(2) { animation-delay: 0.2s; }
-    .thinking span:nth-child(3) { animation-delay: 0.4s; }
-    @keyframes bounce { 0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; } 40% { transform: scale(1); opacity: 1; } }
+/* Main layout */
+.main{flex:1;display:flex;min-height:0}
 
-    /* Input */
-    .input-area { padding: 16px 24px 24px; background: var(--bg2); border-top: 1px solid var(--border); }
-    .input-wrap { max-width: 720px; margin: 0 auto; display: flex; gap: 8px; background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); padding: 4px; transition: border-color var(--transition), box-shadow var(--transition); }
-    .input-wrap:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59,130,246,0.15); }
-    .input-wrap input { flex: 1; padding: 10px 14px; background: transparent; border: none; color: var(--fg); font-family: var(--font); font-size: 15px; outline: none; }
-    .input-wrap input::placeholder { color: var(--fg3); }
-    .input-wrap button { padding: 8px 18px; border: none; border-radius: var(--radius-sm); font-family: var(--font); font-size: 13px; font-weight: 600; cursor: pointer; transition: all var(--transition); white-space: nowrap; }
-    .input-wrap .btn-send { background: var(--accent); color: #fff; }
-    .input-wrap .btn-send:hover { background: var(--accent-hover); transform: scale(1.02); }
-    .input-wrap .btn-send:active { transform: scale(0.98); }
-    .input-wrap .btn-queue { background: transparent; color: var(--fg2); }
-    .input-wrap .btn-queue:hover { background: var(--bg-hover); color: var(--fg); }
-    .input-wrap button:disabled { opacity: 0.4; cursor: wait; transform: none !important; }
+/* Sidebar */
+.side{width:260px;border-right:1px solid var(--border);background:var(--bg2);display:flex;flex-direction:column;overflow:hidden;flex-shrink:0}
+.side-section{padding:12px;border-bottom:1px solid var(--border)}
+.side-section h3{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--fg3);margin-bottom:8px;font-weight:600}
+.side-scroll{flex:1;overflow-y:auto;padding:8px 12px}
+.side-scroll::-webkit-scrollbar{width:4px}
+.side-scroll::-webkit-scrollbar-thumb{background:var(--bg4);border-radius:2px}
+.task-item{display:flex;align-items:flex-start;gap:8px;padding:6px 8px;border-radius:6px;margin-bottom:2px;cursor:pointer;transition:background var(--t);font-size:12px}
+.task-item:hover{background:var(--bg3)}
+.task-item .check{width:14px;height:14px;border:1.5px solid var(--fg3);border-radius:50%;flex-shrink:0;margin-top:1px;cursor:pointer;transition:all var(--t)}
+.task-item .check:hover{border-color:var(--green);background:rgba(63,185,80,.15)}
+.task-item.done .check{background:var(--green);border-color:var(--green)}
+.task-item.done .text{text-decoration:line-through;color:var(--fg3)}
+.task-item .text{flex:1;line-height:1.4}
+.task-item .due{font-size:10px;color:var(--fg3);white-space:nowrap}
+.task-item .due.overdue{color:var(--red)}
+.side-empty{color:var(--fg3);font-size:11px;text-align:center;padding:16px 0}
+.job-card{padding:8px 10px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;background:var(--bg)}
+.job-card .jmeta{display:flex;justify-content:space-between;font-size:10px;color:var(--fg3);margin-bottom:4px}
+.pill{font-size:9px;font-weight:700;text-transform:uppercase;padding:1px 6px;border-radius:8px;letter-spacing:.03em}
+.pill.queued{background:#3d2e00;color:var(--yellow)}.pill.running{background:#0c2d6b;color:var(--cyan)}.pill.completed{background:#0d3117;color:var(--green)}.pill.failed,.pill.canceled{background:#3c1111;color:var(--red)}
+.job-card .jmsg{font-size:11px;line-height:1.3}
 
-    /* Sidebar */
-    .sidebar { width: 320px; border-left: 1px solid var(--border); background: var(--bg2); overflow-y: auto; padding: 20px; }
-    .sidebar::-webkit-scrollbar { width: 4px; }
-    .sidebar::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
-    .sidebar h2 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--fg3); margin-bottom: 12px; }
-    .job { background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 14px; margin-bottom: 8px; transition: all var(--transition); }
-    .job:hover { border-color: var(--border2); box-shadow: var(--shadow); }
-    .job .meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
-    .job .id { font-size: 11px; color: var(--fg3); font-family: var(--mono); }
-    .job .pill { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; padding: 2px 8px; border-radius: 10px; }
-    .job .pill.queued { background: #fef3c7; color: #92400e; }
-    .job .pill.running { background: #dbeafe; color: #1e40af; }
-    .job .pill.completed { background: #d1fae5; color: #065f46; }
-    .job .pill.failed, .job .pill.canceled { background: #fee2e2; color: #991b1b; }
-    @media (prefers-color-scheme: dark) {
-      .job .pill.queued { background: #422006; color: #fbbf24; }
-      .job .pill.running { background: #1e3a5f; color: #60a5fa; }
-      .job .pill.completed { background: #064e3b; color: #4ade80; }
-      .job .pill.failed, .job .pill.canceled { background: #450a0a; color: #f87171; }
-    }
-    .job .message { font-size: 13px; margin-bottom: 4px; line-height: 1.4; }
-    .job .result { font-size: 12px; color: var(--fg2); line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
+/* Chat area */
+.chat-area{flex:1;display:flex;flex-direction:column;min-width:0}
+.output{flex:1;overflow-y:auto;padding:16px 20px;font-size:13px;line-height:1.65}
+.output::-webkit-scrollbar{width:6px}
+.output::-webkit-scrollbar-thumb{background:var(--bg4);border-radius:3px}
 
-    /* Empty state */
-    .empty { text-align: center; padding: 60px 24px; color: var(--fg3); }
-    .empty .icon { font-size: 48px; margin-bottom: 16px; opacity: 0.3; }
-    .empty p { font-size: 14px; line-height: 1.6; }
+/* Terminal-style messages */
+.line{margin-bottom:12px;animation:fadeUp .2s ease;max-width:900px}
+@keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+.line .prompt{color:var(--green);font-weight:600}
+.line .cmd{color:var(--fg)}
+.line .out{color:var(--fg2);white-space:pre-wrap;word-break:break-word;margin-top:4px;padding-left:2px;border-left:2px solid var(--bg4);padding:4px 0 4px 12px}
+.line .out.err{color:var(--red);border-left-color:var(--red)}
+.line .time{color:var(--fg3);font-size:11px;margin-top:2px}
+.line .sys{color:var(--cyan);font-style:italic}
+.thinking-dots{display:inline-flex;gap:3px;margin-left:4px}
+.thinking-dots span{width:5px;height:5px;border-radius:50%;background:var(--fg3);animation:bounce 1.4s ease infinite}
+.thinking-dots span:nth-child(2){animation-delay:.15s}
+.thinking-dots span:nth-child(3){animation-delay:.3s}
+@keyframes bounce{0%,80%,100%{transform:scale(.5);opacity:.3}40%{transform:scale(1);opacity:1}}
 
-    /* Responsive */
-    @media (max-width: 768px) {
-      .sidebar { display: none; }
-      .header .status-bar { display: none; }
-      .msg.user .bubble { margin-left: 20px; }
-      .msg.nous .bubble { margin-right: 20px; }
-    }
-  </style>
+/* Welcome */
+.welcome{text-align:center;padding:80px 20px;color:var(--fg3)}
+.welcome h2{font-size:18px;font-weight:300;letter-spacing:4px;color:var(--fg2);margin-bottom:8px;font-family:var(--font)}
+.welcome p{font-size:12px;line-height:1.8;max-width:400px;margin:0 auto;font-family:var(--font)}
+.welcome .cmds{margin-top:24px;display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
+.welcome .cmds span{padding:4px 10px;border:1px solid var(--border);border-radius:4px;font-size:11px;color:var(--fg2);cursor:pointer;transition:all var(--t)}
+.welcome .cmds span:hover{border-color:var(--accent);color:var(--accent);background:rgba(88,166,255,.08)}
+
+/* Input */
+.input-bar{padding:8px 16px 12px;background:var(--bg2);border-top:1px solid var(--border);display:flex;gap:8px;flex-shrink:0}
+.input-bar input{flex:1;padding:8px 12px;background:var(--bg);border:1px solid var(--border);color:var(--fg);border-radius:6px;font-family:var(--mono);font-size:13px;outline:none;transition:border var(--t)}
+.input-bar input:focus{border-color:var(--accent)}
+.input-bar input::placeholder{color:var(--fg3)}
+.input-bar button{padding:6px 14px;border:none;border-radius:6px;font-family:var(--mono);font-size:12px;font-weight:600;cursor:pointer;transition:all var(--t)}
+.input-bar .btn-go{background:var(--accent2);color:#fff}
+.input-bar .btn-go:hover{background:var(--accent)}
+.input-bar .btn-q{background:var(--bg3);color:var(--fg2)}
+.input-bar .btn-q:hover{background:var(--bg4);color:var(--fg)}
+.input-bar button:disabled{opacity:.3;cursor:wait}
+
+/* Bottom bar */
+.bottombar{height:24px;background:var(--accent2);display:flex;align-items:center;padding:0 12px;font-size:11px;color:rgba(255,255,255,.85);gap:16px;flex-shrink:0;font-family:var(--font)}
+.bottombar .spacer{flex:1}
+
+@media(max-width:768px){.side{display:none}.topbar .right{display:none}}
+</style>
 </head>
 <body>
-  <div class="header">
-    <div class="brand">
-      <div class="logo">N</div>
-      <span class="title">Nous</span>
+
+<!-- Login -->
+<div class="login" id="login">
+<div class="login-box">
+  <h1>NOUS</h1>
+  <p>Your personal AI assistant</p>
+  <input type="password" id="keyInput" placeholder="API Key" autofocus>
+  <button onclick="doLogin()">Connect</button>
+  <div class="skip" onclick="skipLogin()">Connect without key (local mode)</div>
+  <div class="login-err" id="loginErr"></div>
+</div>
+</div>
+
+<!-- App -->
+<div class="app hidden" id="app">
+<div class="topbar">
+  <div class="left">
+    <span class="logo">NOUS</span>
+    <span class="sep">|</span>
+    <span class="model" id="modelInfo">connecting...</span>
+  </div>
+  <div class="right" id="topRight">
+    <span><span class="dot"></span>online</span>
+  </div>
+</div>
+<div class="main">
+  <div class="side">
+    <div class="side-section">
+      <h3>Tasks</h3>
+      <div id="taskList"><div class="side-empty">No tasks</div></div>
     </div>
-    <div class="status-bar" id="status">
-      <span><span class="dot"></span>connecting...</span>
+    <div class="side-section" style="border-bottom:none">
+      <h3>Background Jobs</h3>
+    </div>
+    <div class="side-scroll" id="jobList">
+      <div class="side-empty">No jobs</div>
     </div>
   </div>
-  <div class="layout">
-    <div class="chat-container">
-      <div class="chat" id="chat">
-        <div class="empty">
-          <div class="icon">&#x2728;</div>
-          <p><strong>Your personal AI, running locally.</strong><br>Everything stays on your machine. Ask anything.</p>
-        </div>
-      </div>
-      <div class="input-area">
-        <div class="input-wrap">
-          <input type="text" id="input" placeholder="Message Nous..." autofocus>
-          <button class="btn-send" id="send" onclick="send()">Send</button>
-          <button class="btn-queue" id="queue" onclick="queueJob()">Queue</button>
+  <div class="chat-area">
+    <div class="output" id="output">
+      <div class="welcome">
+        <h2>Welcome</h2>
+        <p>Fully local AI. Everything private. Type a message or try a command.</p>
+        <div class="cmds" id="quickCmds">
+          <span onclick="runCmd('/briefing')">/briefing</span>
+          <span onclick="runCmd('/today')">/today</span>
+          <span onclick="runCmd('/now')">/now</span>
+          <span onclick="runCmd('/tasks')">/tasks</span>
+          <span onclick="runCmd('/compass')">/compass</span>
+          <span onclick="runCmd('/dashboard')">/dashboard</span>
+          <span onclick="runCmd('/help')">/help</span>
         </div>
       </div>
     </div>
-    <aside class="sidebar">
-      <h2>Background Jobs</h2>
-      <div id="jobs">
-        <div class="job"><div class="result" style="color:var(--fg3);text-align:center;padding:8px;">No jobs yet</div></div>
-      </div>
-    </aside>
+    <div class="input-bar">
+      <input type="text" id="chatInput" placeholder="nous >" disabled>
+      <button class="btn-go" id="btnGo" onclick="handleInput()" disabled>Run</button>
+      <button class="btn-q" id="btnQ" onclick="handleQueue()" disabled>Queue</button>
+    </div>
   </div>
-  <script>
-    const chat = document.getElementById('chat');
-    const jobs = document.getElementById('jobs');
-    const input = document.getElementById('input');
-    const btn = document.getElementById('send');
-    const queueBtn = document.getElementById('queue');
-    let firstMsg = true;
+</div>
+<div class="bottombar">
+  <span id="bbVersion">v0.9.0</span>
+  <span id="bbModel">-</span>
+  <span id="bbTools">-</span>
+  <span class="spacer"></span>
+  <span id="bbTasks">0 tasks</span>
+  <span id="bbJobs">0 jobs</span>
+  <span id="bbUptime">-</span>
+</div>
+</div>
 
-    let apiKey = localStorage.getItem('nous_api_key') || '';
-    function authHeaders(extra) {
-      const h = Object.assign({'Content-Type': 'application/json'}, extra || {});
-      if (apiKey) h['Authorization'] = 'Bearer ' + apiKey;
-      return h;
+<script>
+const $ = s => document.getElementById(s);
+let apiKey = localStorage.getItem('nous_api_key') || '';
+let started = false;
+
+// Auth
+function hdr(extra){const h=Object.assign({'Content-Type':'application/json'},extra||{});if(apiKey)h['Authorization']='Bearer '+apiKey;return h}
+async function af(url,opts){opts=opts||{};opts.headers=hdr(opts.headers);return fetch(url,opts)}
+
+// Login
+$('keyInput').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin()});
+async function doLogin(){
+  apiKey=$('keyInput').value.trim();
+  if(!apiKey){$('loginErr').textContent='Please enter an API key';return}
+  try{
+    const r=await af('/api/status');
+    if(r.status===401){$('loginErr').textContent='Invalid API key';return}
+    localStorage.setItem('nous_api_key',apiKey);
+    enterApp();
+  }catch(e){$('loginErr').textContent='Cannot connect: '+e.message}
+}
+function skipLogin(){apiKey='';localStorage.removeItem('nous_api_key');enterApp()}
+
+// Check if already authed
+(async()=>{
+  try{
+    const r=await af('/api/health');
+    if(r.ok){
+      const s=await af('/api/status');
+      if(s.ok){enterApp();return}
     }
-    async function authFetch(url, opts) {
-      opts = opts || {};
-      opts.headers = authHeaders(opts.headers);
-      const res = await fetch(url, opts);
-      if (res.status === 401) {
-        const key = prompt('API key required:');
-        if (key) { apiKey = key; localStorage.setItem('nous_api_key', key); opts.headers = authHeaders(); return fetch(url, opts); }
-      }
-      return res;
-    }
+  }catch(e){}
+  $('login').classList.remove('hidden');
+})();
 
-    input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) send(); });
+function enterApp(){
+  $('login').classList.add('hidden');
+  $('app').classList.remove('hidden');
+  $('chatInput').disabled=false;$('btnGo').disabled=false;$('btnQ').disabled=false;
+  $('chatInput').focus();
+  loadStatus();loadTasks();loadJobs();
+  setInterval(loadJobs,5000);setInterval(loadTasks,10000);setInterval(loadStatus,15000);
+}
 
-    async function send() {
-      const msg = input.value.trim();
-      if (!msg) return;
-      if (firstMsg) { chat.innerHTML = ''; firstMsg = false; }
-      input.value = '';
-      btn.disabled = true; queueBtn.disabled = true;
-      addMsg(msg, 'user');
-      const loading = addMsg('<div class="thinking"><span></span><span></span><span></span></div>', 'nous');
-      try {
-        const res = await authFetch('/api/chat', { method: 'POST', body: JSON.stringify({message: msg}) });
-        const data = await res.json();
-        loading.querySelector('.bubble').innerHTML = escapeHtml(data.answer || '').replace(/\n/g, '<br>');
-      } catch (e) {
-        loading.querySelector('.bubble').innerHTML = '<span style="color:var(--red)">Error: ' + escapeHtml(e.message) + '</span>';
-      }
-      btn.disabled = false; queueBtn.disabled = false;
-      input.focus();
-    }
+// Status
+async function loadStatus(){
+  try{
+    const r=await af('/api/status');const s=await r.json();
+    $('modelInfo').textContent=s.model+' | '+s.tool_count+' tools';
+    $('bbVersion').textContent='v'+s.version;
+    $('bbModel').textContent=s.model;
+    $('bbTools').textContent=s.tool_count+' tools';
+    $('bbUptime').textContent=s.uptime;
+    $('bbJobs').textContent=(s.running_jobs+s.queued_jobs)+' jobs';
+  }catch(e){$('modelInfo').textContent='offline'}
+}
 
-    async function queueJob() {
-      const msg = input.value.trim();
-      if (!msg) return;
-      if (firstMsg) { chat.innerHTML = ''; firstMsg = false; }
-      input.value = '';
-      btn.disabled = true; queueBtn.disabled = true;
-      addMsg(msg, 'user');
-      addMsg('Queued for background execution.', 'nous');
-      try { await authFetch('/api/jobs', { method: 'POST', body: JSON.stringify({message: msg}) }); await refreshJobs(); }
-      catch (e) { addMsg('Queue error: ' + e.message, 'nous'); }
-      btn.disabled = false; queueBtn.disabled = false;
-      input.focus();
-    }
-
-    function addMsg(html, cls) {
-      const wrap = document.createElement('div');
-      wrap.className = 'msg ' + cls;
-      const label = cls === 'user' ? 'You' : 'Nous';
-      wrap.innerHTML = '<div class="label">' + label + '</div><div class="bubble">' + html + '</div>';
-      chat.appendChild(wrap);
-      chat.scrollTop = chat.scrollHeight;
-      return wrap;
-    }
-
-    async function refreshJobs() {
-      try {
-        const res = await authFetch('/api/jobs');
-        const data = await res.json();
-        jobs.innerHTML = '';
-        if (!data.jobs || data.jobs.length === 0) {
-          jobs.innerHTML = '<div class="job"><div class="result" style="color:var(--fg3);text-align:center;padding:8px;">No jobs yet</div></div>';
-          return;
-        }
-        for (const job of data.jobs) {
-          const card = document.createElement('div');
-          card.className = 'job';
-          const preview = (job.result || job.error || '').slice(0, 200);
-          card.innerHTML =
-            '<div class="meta"><span class="id">' + escapeHtml(job.id).slice(0,8) + '</span><span class="pill ' + escapeHtml(job.status) + '">' + escapeHtml(job.status) + '</span></div>' +
-            '<div class="message">' + escapeHtml(job.message) + '</div>' +
-            (preview ? '<div class="result">' + escapeHtml(preview) + '</div>' : '');
-          jobs.appendChild(card);
-        }
-      } catch (e) { jobs.innerHTML = '<div class="job"><div class="result">Unable to load jobs.</div></div>'; }
-    }
-
-    function escapeHtml(t) { return (t||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
-
-    authFetch('/api/status').then(r=>r.json()).then(s=>{
-      document.getElementById('status').innerHTML =
-        '<span><span class="dot"></span>' + escapeHtml(s.model) + '</span>' +
-        '<span>' + s.tool_count + ' tools</span>' +
-        '<span>v' + escapeHtml(s.version) + '</span>';
-    }).catch(()=>{
-      document.getElementById('status').innerHTML = '<span><span class="dot" style="background:var(--red)"></span>offline</span>';
+// Tasks
+async function loadTasks(){
+  try{
+    const r=await af('/api/assistant/tasks');const d=await r.json();
+    const tl=$('taskList');tl.innerHTML='';
+    if(!d.tasks||d.tasks.length===0){tl.innerHTML='<div class="side-empty">No tasks</div>';$('bbTasks').textContent='0 tasks';return}
+    $('bbTasks').textContent=d.tasks.length+' tasks';
+    d.tasks.forEach(t=>{
+      const el=document.createElement('div');
+      el.className='task-item'+(t.status==='done'?' done':'');
+      const due=t.due_at?new Date(t.due_at):null;
+      const overdue=due&&due<new Date()&&t.status!=='done';
+      el.innerHTML='<div class="check" onclick="event.stopPropagation();doneTask(\''+esc(t.id)+'\')"></div>'+
+        '<span class="text">'+esc(t.title)+'</span>'+
+        (due?'<span class="due'+(overdue?' overdue':'')+'">'+fmtDate(due)+'</span>':'');
+      tl.appendChild(el);
     });
-    refreshJobs();
-    setInterval(refreshJobs, 5000);
-  </script>
+  }catch(e){}
+}
+async function doneTask(id){
+  await af('/api/assistant/tasks/'+id+'/done',{method:'POST'});
+  loadTasks();
+  addSys('Task completed.');
+}
+
+// Jobs
+async function loadJobs(){
+  try{
+    const r=await af('/api/jobs');const d=await r.json();
+    const jl=$('jobList');jl.innerHTML='';
+    if(!d.jobs||d.jobs.length===0){jl.innerHTML='<div class="side-empty">No jobs</div>';return}
+    d.jobs.forEach(j=>{
+      const c=document.createElement('div');c.className='job-card';
+      c.innerHTML='<div class="jmeta"><span>'+esc(j.id).slice(0,8)+'</span><span class="pill '+esc(j.status)+'">'+esc(j.status)+'</span></div>'+
+        '<div class="jmsg">'+esc(j.message)+'</div>';
+      jl.appendChild(c);
+    });
+  }catch(e){}
+}
+
+// Input handling
+$('chatInput').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey)handleInput()});
+
+function runCmd(cmd){$('chatInput').value=cmd;handleInput()}
+
+async function handleInput(){
+  const msg=$('chatInput').value.trim();if(!msg)return;
+  $('chatInput').value='';
+  clearWelcome();
+
+  // Local slash commands via API
+  if(msg.startsWith('/')){
+    addPrompt(msg);
+    const handled=await handleSlash(msg);
+    if(handled)return;
+  }
+
+  // Regular chat
+  addPrompt(msg);
+  disable(true);
+  const el=addThinking();
+  try{
+    const r=await af('/api/chat',{method:'POST',body:JSON.stringify({message:msg})});
+    const d=await r.json();
+    el.querySelector('.out').textContent=d.answer||'(no response)';
+    if(d.duration_ms)el.querySelector('.time').textContent=d.duration_ms+'ms';
+  }catch(e){el.querySelector('.out').className='out err';el.querySelector('.out').textContent='Error: '+e.message}
+  disable(false);
+}
+
+async function handleQueue(){
+  const msg=$('chatInput').value.trim();if(!msg)return;
+  $('chatInput').value='';clearWelcome();
+  addPrompt(msg);
+  try{await af('/api/jobs',{method:'POST',body:JSON.stringify({message:msg})});addSys('Queued for background execution.');loadJobs();}
+  catch(e){addOut('Queue error: '+e.message,true)}
+  $('chatInput').focus();
+}
+
+// Slash command handlers (client-side via REST API)
+async function handleSlash(cmd){
+  const parts=cmd.split(/\s+/);const c=parts[0].toLowerCase();
+  try{
+    if(c==='/tasks'){const r=await af('/api/assistant/tasks');const d=await r.json();
+      if(!d.tasks||!d.tasks.length){addOut('No pending tasks.');return true}
+      addOut(d.tasks.map(t=>(t.status==='done'?'[x]':'[ ]')+' '+t.title+(t.due_at?' ('+fmtDate(new Date(t.due_at))+')':'')+' #'+t.id).join('\n'));return true}
+    if(c==='/today'){const r=await af('/api/assistant/today');const d=await r.json();
+      let o='';
+      if(d.notifications&&d.notifications.length)o+='Notifications:\n'+d.notifications.map(n=>'  '+n.message).join('\n')+'\n\n';
+      if(d.today&&d.today.length)o+='Today:\n'+d.today.map(t=>'  '+t.title+(t.due_at?' @ '+new Date(t.due_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'')).join('\n')+'\n\n';
+      if(d.upcoming&&d.upcoming.length)o+='Upcoming:\n'+d.upcoming.map(t=>'  '+t.title+(t.due_at?' - '+fmtDate(new Date(t.due_at)):'')).join('\n');
+      addOut(o||'All clear. No tasks or notifications.');return true}
+    if(c==='/prefs'){const r=await af('/api/assistant/preferences');const d=await r.json();
+      if(!d.preferences||!Object.keys(d.preferences).length){addOut('No preferences set.');return true}
+      addOut(Object.entries(d.preferences).map(([k,v])=>k+': '+v).join('\n'));return true}
+    if(c==='/pref'&&parts.length>=3){await af('/api/assistant/preferences',{method:'POST',body:JSON.stringify({key:parts[1],value:parts.slice(2).join(' ')})});addSys('Preference saved: '+parts[1]);return true}
+    if(c==='/routines'){const r=await af('/api/assistant/routines');const d=await r.json();
+      if(!d.routines||!d.routines.length){addOut('No routines configured.');return true}
+      addOut(d.routines.map(r=>(r.enabled?'ON ':'OFF ')+r.title+' ('+r.schedule+' @ '+r.time_of_day+')').join('\n'));return true}
+    if(c==='/remind'&&parts.length>=2){await af('/api/assistant/tasks',{method:'POST',body:JSON.stringify({title:parts.slice(1).join(' ')})});addSys('Reminder created.');loadTasks();return true}
+    if(c==='/done'&&parts[1]){await af('/api/assistant/tasks/'+parts[1]+'/done',{method:'POST'});addSys('Task completed.');loadTasks();return true}
+    if(c==='/status'){const r=await af('/api/status');const d=await r.json();
+      addOut('Version:  '+d.version+'\nModel:    '+d.model+'\nTools:    '+d.tool_count+'\nUptime:   '+d.uptime+'\nPercepts: '+d.percepts+'\nGoals:    '+d.goals+'\nJobs:     '+d.running_jobs+' running, '+d.queued_jobs+' queued');return true}
+  }catch(e){addOut('Command error: '+e.message,true);return true}
+
+  // Unhandled slash commands — send through chat API as regular message
+  return false;
+}
+
+// Output helpers
+function clearWelcome(){const w=document.querySelector('.welcome');if(w)w.remove()}
+function addPrompt(text){
+  const d=document.createElement('div');d.className='line';
+  d.innerHTML='<span class="prompt">nous &gt;</span> <span class="cmd">'+esc(text)+'</span>';
+  $('output').appendChild(d);$('output').scrollTop=$('output').scrollHeight;
+}
+function addThinking(){
+  const d=document.createElement('div');d.className='line';
+  d.innerHTML='<div class="out"><span class="thinking-dots"><span></span><span></span><span></span></span></div><div class="time"></div>';
+  $('output').appendChild(d);$('output').scrollTop=$('output').scrollHeight;return d;
+}
+function addOut(text,isErr){
+  const d=document.createElement('div');d.className='line';
+  d.innerHTML='<div class="out'+(isErr?' err':'')+'">'+esc(text)+'</div>';
+  $('output').appendChild(d);$('output').scrollTop=$('output').scrollHeight;
+}
+function addSys(text){
+  const d=document.createElement('div');d.className='line';
+  d.innerHTML='<div class="sys">'+esc(text)+'</div>';
+  $('output').appendChild(d);$('output').scrollTop=$('output').scrollHeight;
+}
+function disable(v){$('btnGo').disabled=v;$('btnQ').disabled=v;$('chatInput').disabled=v;if(!v)$('chatInput').focus()}
+function esc(t){return(t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function fmtDate(d){const now=new Date();const diff=d-now;const days=Math.ceil(diff/864e5);
+  if(days===0)return'today';if(days===1)return'tomorrow';if(days===-1)return'yesterday';
+  if(days<-1)return Math.abs(days)+'d ago';if(days<7)return'in '+days+'d';
+  return d.toLocaleDateString([],{month:'short',day:'numeric'})}
+</script>
 </body>
 </html>`

@@ -49,7 +49,7 @@ func TestWaitForAnswerTimesOut(t *testing.T) {
 }
 
 func TestWebUIContainsBackgroundJobsControls(t *testing.T) {
-	checks := []string{"Background Jobs", "/api/jobs", "Queue", "refreshJobs"}
+	checks := []string{"Background Jobs", "/api/jobs", "Queue", "loadJobs"}
 	for _, check := range checks {
 		if !strings.Contains(webUI, check) {
 			t.Fatalf("webUI should contain %q", check)
