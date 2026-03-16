@@ -232,7 +232,7 @@ func (c *Collector) Save() error {
 		return err
 	}
 
-	return safefile.WriteAtomic(filepath.Join(c.storePath, "training_data.json"), data, 0644)
+	return safefile.WriteAtomicWithBackup(filepath.Join(c.storePath, "training_data.json"), data, 0644, safefile.MaxBackups)
 }
 
 func (c *Collector) load() {

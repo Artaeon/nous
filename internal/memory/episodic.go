@@ -390,7 +390,7 @@ func (em *EpisodicMemory) Save() error {
 		return err
 	}
 
-	return safefile.WriteAtomic(filepath.Join(em.storePath, "episodes.json"), data, 0644)
+	return safefile.WriteAtomicWithBackup(filepath.Join(em.storePath, "episodes.json"), data, 0644, safefile.MaxBackups)
 }
 
 func (em *EpisodicMemory) load() {

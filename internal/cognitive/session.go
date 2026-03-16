@@ -43,7 +43,7 @@ func (s *SessionStore) Save(session *Session) error {
 	}
 
 	path := filepath.Join(s.dir, session.ID+".json")
-	return safefile.WriteAtomic(path, data, 0644)
+	return safefile.WriteAtomicWithBackup(path, data, 0644, safefile.MaxBackups)
 }
 
 // Load retrieves a session by ID.

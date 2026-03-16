@@ -383,7 +383,7 @@ func (s *Store) saveLocked() error {
 	if err != nil {
 		return err
 	}
-	return safefile.WriteAtomic(s.path, data, 0o644)
+	return safefile.WriteAtomicWithBackup(s.path, data, 0o644, safefile.MaxBackups)
 }
 
 func (s *Store) load() {
