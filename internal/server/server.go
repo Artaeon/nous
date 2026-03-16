@@ -13,21 +13,32 @@ import (
 	"github.com/artaeon/nous/internal/assistant"
 	"github.com/artaeon/nous/internal/blackboard"
 	"github.com/artaeon/nous/internal/cognitive"
+	"github.com/artaeon/nous/internal/memory"
+	"github.com/artaeon/nous/internal/tools"
+	"github.com/artaeon/nous/internal/training"
 )
 
 // Server exposes Nous as an HTTP API for remote access.
 // This enables deployment on a server where clients connect via HTTP.
 type Server struct {
-	board     *blackboard.Blackboard
-	perceiver *cognitive.Perceiver
-	assistant *assistant.Store
-	fastPath  *cognitive.FastPathResponder
-	conv      *cognitive.Conversation
+	board      *blackboard.Blackboard
+	perceiver  *cognitive.Perceiver
+	assistant  *assistant.Store
+	fastPath   *cognitive.FastPathResponder
+	conv       *cognitive.Conversation
 	classifier *cognitive.FastPathClassifier
-	jobs      *JobManager
-	addr      string
-	apiKey    string
-	server    *http.Server
+	jobs       *JobManager
+	addr       string
+	apiKey     string
+	server     *http.Server
+
+	// Extended data sources for dashboard/memory endpoints
+	workingMem  *memory.WorkingMemory
+	longTermMem *memory.LongTermMemory
+	episodicMem *memory.EpisodicMemory
+	toolReg     *tools.Registry
+	collector   *training.Collector
+	sessions    *cognitive.SessionStore
 }
 
 // ChatRequest is the JSON body for POST /api/chat.
@@ -118,6 +129,17 @@ func New(addr string, board *blackboard.Blackboard, perceiver *cognitive.Perceiv
 func (s *Server) SetFastPath(responder *cognitive.FastPathResponder, conv *cognitive.Conversation) {
 	s.fastPath = responder
 	s.conv = conv
+}
+
+// SetDataSources connects memory, tools, training, and session subsystems
+// for the dashboard and memory API endpoints.
+func (s *Server) SetDataSources(wm *memory.WorkingMemory, ltm *memory.LongTermMemory, em *memory.EpisodicMemory, tr *tools.Registry, col *training.Collector, sess *cognitive.SessionStore) {
+	s.workingMem = wm
+	s.longTermMem = ltm
+	s.episodicMem = em
+	s.toolReg = tr
+	s.collector = col
+	s.sessions = sess
 }
 
 // Start begins listening for HTTP requests.
@@ -450,7 +472,120 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
-	// GET / — simple web UI placeholder
+	// GET /api/dashboard — comprehensive system overview
+	mux.HandleFunc("/api/dashboard", cors(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" { http.Error(w, "method not allowed", http.StatusMethodNotAllowed); return }
+		dash := map[string]interface{}{
+			"version": version, "model": model, "tool_count": toolCount,
+			"uptime": time.Since(startTime).Round(time.Second).String(),
+		}
+		if s.workingMem != nil { dash["working_memory_size"] = s.workingMem.Size() }
+		if s.longTermMem != nil { dash["longterm_memory_size"] = s.longTermMem.Size() }
+		if s.episodicMem != nil { dash["episodes_total"] = s.episodicMem.Size(); dash["success_rate"] = s.episodicMem.SuccessRate() }
+		if s.collector != nil { dash["training_pairs"] = s.collector.Size(); dash["quality_distribution"] = s.collector.QualityDistribution() }
+		if s.conv != nil { dash["conversation_messages"] = len(s.conv.Messages()) }
+		if s.assistant != nil {
+			dash["pending_tasks"] = len(s.assistant.PendingTasks())
+			dash["unread_notifications"] = len(s.assistant.UnreadNotifications())
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(dash)
+	}))
+
+	// GET /api/memory — working memory items
+	mux.HandleFunc("/api/memory", cors(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" { http.Error(w, "method not allowed", http.StatusMethodNotAllowed); return }
+		var items []map[string]interface{}
+		if s.workingMem != nil {
+			for _, slot := range s.workingMem.MostRelevant(20) {
+				items = append(items, map[string]interface{}{"key": slot.Key, "value": slot.Value, "relevance": slot.Relevance})
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"items": items})
+	}))
+
+	// GET /api/longterm — long-term memory entries
+	mux.HandleFunc("/api/longterm", cors(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" { http.Error(w, "method not allowed", http.StatusMethodNotAllowed); return }
+		var entries []map[string]interface{}
+		if s.longTermMem != nil {
+			for _, e := range s.longTermMem.All() {
+				entries = append(entries, map[string]interface{}{"key": e.Key, "value": e.Value, "category": e.Category, "access_count": e.AccessCount})
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"entries": entries})
+	}))
+
+	// GET /api/episodes — episodic memory
+	mux.HandleFunc("/api/episodes", cors(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" { http.Error(w, "method not allowed", http.StatusMethodNotAllowed); return }
+		resp := map[string]interface{}{"total": 0, "success_rate": 0.0, "episodes": []interface{}{}}
+		if s.episodicMem != nil {
+			resp["total"] = s.episodicMem.Size()
+			resp["success_rate"] = s.episodicMem.SuccessRate()
+			var eps []map[string]interface{}
+			for _, ep := range s.episodicMem.Recent(20) {
+				eps = append(eps, map[string]interface{}{"timestamp": ep.Timestamp, "input": ep.Input, "output": ep.Output, "success": ep.Success, "duration_ms": ep.Duration})
+			}
+			resp["episodes"] = eps
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+
+	// GET /api/tools — tool catalog
+	mux.HandleFunc("/api/tools", cors(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" { http.Error(w, "method not allowed", http.StatusMethodNotAllowed); return }
+		var toolList []map[string]string
+		if s.toolReg != nil {
+			for _, t := range s.toolReg.List() {
+				toolList = append(toolList, map[string]string{"name": t.Name, "description": t.Description})
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"tools": toolList})
+	}))
+
+	// GET /api/training — training data stats
+	mux.HandleFunc("/api/training", cors(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" { http.Error(w, "method not allowed", http.StatusMethodNotAllowed); return }
+		resp := map[string]interface{}{"pair_count": 0}
+		if s.collector != nil { resp["pair_count"] = s.collector.Size(); resp["quality_distribution"] = s.collector.QualityDistribution() }
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+
+	// GET /api/sessions — session list
+	mux.HandleFunc("/api/sessions", cors(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" { http.Error(w, "method not allowed", http.StatusMethodNotAllowed); return }
+		var sessionList []map[string]interface{}
+		if s.sessions != nil {
+			if list, err := s.sessions.List(); err == nil {
+				for _, sess := range list {
+					sessionList = append(sessionList, map[string]interface{}{"id": sess.ID, "name": sess.Name, "message_count": len(sess.Messages), "updated_at": sess.UpdatedAt})
+				}
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"sessions": sessionList})
+	}))
+
+	// GET /api/conversation — current conversation messages
+	mux.HandleFunc("/api/conversation", cors(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" { http.Error(w, "method not allowed", http.StatusMethodNotAllowed); return }
+		var msgs []map[string]string
+		if s.conv != nil {
+			for _, m := range s.conv.Messages() {
+				msgs = append(msgs, map[string]string{"role": m.Role, "content": m.Content})
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"messages": msgs})
+	}))
+
+	// GET / — web UI
 	mux.HandleFunc("/", cors(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -509,8 +644,12 @@ func waitForAnswer(board *blackboard.Blackboard, timeout time.Duration, keys ...
 	}
 }
 
-// webUI is the web interface — terminal-style with login, tasks, and full feature access.
-const webUI = `<!DOCTYPE html>
+// webUI is defined in webui.go
+// (moved to separate file for maintainability)
+
+// webUI HTML is in webui.go
+
+const _legacyUI_unused = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <title>Nous</title>

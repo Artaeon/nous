@@ -656,6 +656,7 @@ func main() {
 			VCtx:        reasoner.VCtx,
 			Growth:      reasoner.Growth,
 		}, reasoner.Conv)
+		srv.SetDataSources(wm, ltm, episodic, toolReg, collector, sessionStore)
 		if err := srv.Start(version, *model, len(toolList)); err != nil {
 			fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 			os.Exit(1)
