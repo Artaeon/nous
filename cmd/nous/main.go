@@ -24,9 +24,88 @@ import (
 	"github.com/artaeon/nous/internal/ollama"
 	"github.com/artaeon/nous/internal/sentinel"
 	"github.com/artaeon/nous/internal/server"
+	"github.com/artaeon/nous/internal/channels"
 	"github.com/artaeon/nous/internal/tools"
 	"github.com/artaeon/nous/internal/training"
 )
+
+// channelHandler builds a MessageHandler that routes channel messages through
+// the same cognitive pipeline as the REPL: classify → extract facts → respond → record.
+func channelHandler(
+	llm *ollama.Client,
+	router *cognitive.ModelRouter,
+	reasoner *cognitive.Reasoner,
+	perceiver *cognitive.Perceiver,
+	board *blackboard.Blackboard,
+	wm *memory.WorkingMemory,
+	ltm *memory.LongTermMemory,
+	episodic *memory.EpisodicMemory,
+	collector *training.Collector,
+) channels.MessageHandler {
+	return func(channel, chatID, userID, text string) (string, error) {
+		text = strings.TrimSpace(text)
+		if text == "" {
+			return "", nil
+		}
+
+		// Extract personal facts
+		fe := &cognitive.FactExtractor{LTM: ltm, WorkingMem: wm}
+		fe.Extract(text)
+
+		// Classify and route
+		classifier := &cognitive.FastPathClassifier{}
+		path := classifier.ClassifyQuery(text)
+
+		start := time.Now()
+		var answer string
+
+		if path == cognitive.PathFast || path == cognitive.PathMedium {
+			fastLLM := llm
+			if router != nil {
+				fastLLM = router.ClientForQuery(text)
+			}
+			resp := &cognitive.FastPathResponder{
+				LLM:         fastLLM,
+				WorkingMem:  wm,
+				LongTermMem: ltm,
+				Knowledge:   reasoner.Knowledge,
+				VCtx:        reasoner.VCtx,
+				Growth:      reasoner.Growth,
+			}
+			var err error
+			answer, err = resp.RespondWithPath(reasoner.Conv, text, path)
+			if err != nil {
+				perceiver.Submit(text)
+				answer = waitForAnswerStr(board)
+			}
+		} else {
+			perceiver.Submit(text)
+			answer = waitForAnswerStr(board)
+		}
+
+		duration := time.Since(start)
+
+		// Record in episodic memory
+		go episodic.Record(memory.Episode{
+			Timestamp: time.Now(),
+			Input:     text,
+			Output:    answer,
+			Success:   true,
+			Duration:  duration.Milliseconds(),
+		})
+
+		// Collect training data
+		msgs := reasoner.Conv.Messages()
+		sysPrompt := ""
+		if len(msgs) > 0 {
+			sysPrompt = msgs[0].Content
+		}
+		quality := scoreInteractionQuality(answer, duration, board)
+		go collector.Collect(sysPrompt, text, answer, nil, quality)
+
+		return answer, nil
+	}
+}
 
 const version = "0.9.0"
 
@@ -478,6 +557,54 @@ func main() {
 		cancel()
 		os.Exit(0)
 	}()
+
+	// --- Telegram / Discord / Matrix channels ---
+	// Start channels in the background if configured via ~/.nous/channels.json
+	// or NOUS_TELEGRAM_TOKEN environment variable.
+	channelConfigPath := channels.DefaultConfigPath()
+	if channels.ConfigExists(channelConfigPath) || os.Getenv("NOUS_TELEGRAM_TOKEN") != "" {
+		chCfg, err := channels.LoadConfig(channelConfigPath)
+		if err != nil && os.Getenv("NOUS_TELEGRAM_TOKEN") != "" {
+			// No config file but env var set — create minimal config
+			chCfg = &channels.Config{
+				Telegram: &channels.TelegramConfig{
+					Enabled: true,
+					Token:   os.Getenv("NOUS_TELEGRAM_TOKEN"),
+				},
+			}
+		}
+		if err == nil || chCfg != nil {
+			handler := channelHandler(llm, router, reasoner, perceiver, board, wm, ltm, episodic, collector)
+			chManager := channels.NewManager(handler)
+
+			if chCfg.Telegram != nil && chCfg.Telegram.Enabled && chCfg.Telegram.Token != "" {
+				tg := channels.NewTelegram(chCfg.Telegram.Token, chManager, channels.ChannelConfig{
+					AllowedUsers: chCfg.Telegram.AllowedUsers,
+				})
+				chManager.Register(tg)
+				fmt.Printf("  %s✓%s Telegram channel enabled\n", cognitive.ColorGreen, cognitive.ColorReset)
+			}
+
+			if chCfg.Discord != nil && chCfg.Discord.Enabled && chCfg.Discord.Token != "" {
+				dc := channels.NewDiscord(chCfg.Discord.Token, chManager, channels.ChannelConfig{
+					AllowedUsers: chCfg.Discord.AllowedUsers,
+				})
+				chManager.Register(dc)
+				fmt.Printf("  %s✓%s Discord channel enabled\n", cognitive.ColorGreen, cognitive.ColorReset)
+			}
+
+			if chCfg.Matrix != nil && chCfg.Matrix.Enabled && chCfg.Matrix.Token != "" {
+				mx := channels.NewMatrix(chCfg.Matrix.Token, chCfg.Matrix.Homeserver, chManager, channels.ChannelConfig{
+					AllowedUsers: chCfg.Matrix.AllowedUsers,
+					AllowedRooms: chCfg.Matrix.AllowedRooms,
+				})
+				chManager.Register(mx)
+				fmt.Printf("  %s✓%s Matrix channel enabled\n", cognitive.ColorGreen, cognitive.ColorReset)
+			}
+
+			chManager.Start(ctx)
+		}
+	}
 
 	// --- Server Mode ---
 	if *serveMode {
