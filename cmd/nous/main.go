@@ -41,6 +41,7 @@ func channelHandler(
 	ltm *memory.LongTermMemory,
 	episodic *memory.EpisodicMemory,
 	collector *training.Collector,
+	crystals *cognitive.ResponseCrystalStore,
 ) channels.MessageHandler {
 	return func(channel, chatID, userID, text string) (string, error) {
 		text = strings.TrimSpace(text)
@@ -65,12 +66,13 @@ func channelHandler(
 				fastLLM = router.ClientForQuery(text)
 			}
 			resp := &cognitive.FastPathResponder{
-				LLM:         fastLLM,
-				WorkingMem:  wm,
-				LongTermMem: ltm,
-				Knowledge:   reasoner.Knowledge,
-				VCtx:        reasoner.VCtx,
-				Growth:      reasoner.Growth,
+				LLM:              fastLLM,
+				WorkingMem:        wm,
+				LongTermMem:       ltm,
+				Knowledge:         reasoner.Knowledge,
+				VCtx:              reasoner.VCtx,
+				Growth:            reasoner.Growth,
+				ResponseCrystals:  crystals,
 			}
 			var err error
 			answer, err = resp.RespondWithPath(reasoner.Conv, text, path)
@@ -390,6 +392,15 @@ func main() {
 		}
 	}
 
+	// 14b. Response Crystal Store — semantic cache that learns from every LLM response.
+	// The more you use Nous, the more queries are served instantly (0ms) from cache.
+	responseCrystals := cognitive.NewResponseCrystalStore(knowledgeEmbedFn, nousDir)
+	if responseCrystals.Size() > 0 {
+		size, hits := responseCrystals.Stats()
+		fmt.Printf("  %s✓%s %d response crystals loaded (%d total hits)\n",
+			cognitive.ColorGreen, cognitive.ColorReset, size, hits)
+	}
+
 	// 15. Model Compiler — compile experience into optimized Modelfiles
 	reasoner.Compiler = cognitive.NewModelCompiler(
 		*model, reasoner.Distiller, reasoner.Crystals,
@@ -614,7 +625,7 @@ func main() {
 			}
 		}
 		if err == nil || chCfg != nil {
-			handler := channelHandler(llm, router, reasoner, perceiver, board, wm, ltm, episodic, collector)
+			handler := channelHandler(llm, router, reasoner, perceiver, board, wm, ltm, episodic, collector, responseCrystals)
 			chManager := channels.NewManager(handler)
 
 			if chCfg.Telegram != nil && chCfg.Telegram.Enabled && chCfg.Telegram.Token != "" {
@@ -659,12 +670,13 @@ func main() {
 		fmt.Printf("  serving on http://%s\n\n", addr)
 		srv := server.New(addr, board, perceiver, assistantStore, *apiKey)
 		srv.SetFastPath(&cognitive.FastPathResponder{
-			LLM:         llm,
-			WorkingMem:  wm,
-			LongTermMem: ltm,
-			Knowledge:   reasoner.Knowledge,
-			VCtx:        reasoner.VCtx,
-			Growth:      reasoner.Growth,
+			LLM:              llm,
+			WorkingMem:        wm,
+			LongTermMem:       ltm,
+			Knowledge:         reasoner.Knowledge,
+			VCtx:              reasoner.VCtx,
+			Growth:            reasoner.Growth,
+			ResponseCrystals:  responseCrystals,
 		}, reasoner.Conv)
 		srv.SetDataSources(wm, ltm, episodic, toolReg, collector, sessionStore)
 		if err := srv.Start(version, *model, len(toolList)); err != nil {
@@ -733,12 +745,13 @@ func main() {
 				fastLLM = router.ClientForQuery(input)
 			}
 			fastResp := &cognitive.FastPathResponder{
-				LLM:         fastLLM,
-				WorkingMem:  wm,
-				LongTermMem: ltm,
-				Knowledge:   reasoner.Knowledge,
-				VCtx:        reasoner.VCtx,
-				Growth:      reasoner.Growth,
+				LLM:              fastLLM,
+				WorkingMem:        wm,
+				LongTermMem:       ltm,
+				Knowledge:         reasoner.Knowledge,
+				VCtx:              reasoner.VCtx,
+				Growth:            reasoner.Growth,
+				ResponseCrystals:  responseCrystals,
 			}
 			var err error
 			answer, err = fastResp.RespondWithPath(reasoner.Conv, input, queryPath)

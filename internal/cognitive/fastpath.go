@@ -189,12 +189,13 @@ func (c *FastPathClassifier) IsSimple(query string) bool {
 // FastPathResponder handles simple queries with a single LLM call,
 // using conversation history for context but skipping the full pipeline.
 type FastPathResponder struct {
-	LLM         *ollama.Client
-	WorkingMem  *memory.WorkingMemory
-	LongTermMem *memory.LongTermMemory
-	Knowledge   *KnowledgeVec
-	VCtx        *VirtualContext
-	Growth      *PersonalGrowth
+	LLM              *ollama.Client
+	WorkingMem       *memory.WorkingMemory
+	LongTermMem      *memory.LongTermMemory
+	Knowledge        *KnowledgeVec
+	VCtx             *VirtualContext
+	Growth           *PersonalGrowth
+	ResponseCrystals *ResponseCrystalStore // semantic cache — learns from every LLM response
 }
 
 const fastPathSystemPrompt = `You are Nous (νοῦς), a personal AI running fully on the user's machine. Be warm, friendly, and natural. You have vast knowledge and grow with the user over time. Always respond warmly to greetings — you are a companion, not just a tool. If you don't know something, say so honestly.`
@@ -298,6 +299,15 @@ func (r *FastPathResponder) RespondWithPath(conv *Conversation, query string, pa
 	// Add the current query.
 	msgs = append(msgs, ollama.Message{Role: "user", Content: query})
 
+	// Check response crystal cache — instant if semantically similar query was answered before.
+	if r.ResponseCrystals != nil && path == PathMedium {
+		if cached, ok := r.ResponseCrystals.Lookup(query); ok {
+			conv.User(query)
+			conv.Assistant(cached)
+			return cached, nil
+		}
+	}
+
 	// Medium path gets more tokens for knowledge-rich answers.
 	// Fast path stays brief for greetings/acknowledgments.
 	numPredict := 512
@@ -316,6 +326,11 @@ func (r *FastPathResponder) RespondWithPath(conv *Conversation, query string, pa
 	}
 
 	answer := strings.TrimSpace(resp.Message.Content)
+
+	// Learn from this response — cache it for future similar queries.
+	if r.ResponseCrystals != nil && path == PathMedium && len(answer) > 20 {
+		go r.ResponseCrystals.Learn(query, answer, 0.7)
+	}
 
 	// Post-generation fact-checking: verify answer against knowledge store.
 	// This catches hallucinations AFTER generation but BEFORE the user sees them.
