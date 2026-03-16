@@ -21,4 +21,4 @@ EXPOSE 3333
 
 # Default: server mode with memory in /data
 ENTRYPOINT ["./nous"]
-CMD ["--serve", "--port", "3333", "--memory", "/data", "--host", "http://ollama:11434", "--trust"]
+CMD ["--serve", "--port", "3333", "--model", "qwen3:4b", "--memory", "/data", "--host", "http://ollama:11434", "--trust"]

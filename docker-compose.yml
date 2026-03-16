@@ -25,6 +25,8 @@ services:
       - "--port"
       - "3333"
       - "--public"
+      - "--model"
+      - "${NOUS_MODEL:-qwen3:4b}"
       - "--host"
       - "http://ollama:11434"
       - "--memory"

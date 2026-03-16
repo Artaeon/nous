@@ -345,8 +345,17 @@ func main() {
 	)
 
 	// 14. Knowledge Vector Store — unlimited knowledge via vector search
+	// Knowledge embedding uses nomic-embed-text (fast, purpose-built for embeddings)
+	knowledgeEmbedFn := func(text string) ([]float64, error) {
+		ec := llm.Clone("nomic-embed-text")
+		vec, err := ec.Embed(text)
+		if err != nil {
+			return llm.Embed(text) // fallback to main model
+		}
+		return vec, nil
+	}
 	reasoner.Knowledge = cognitive.NewKnowledgeVec(
-		llm.Embed,
+		knowledgeEmbedFn,
 		filepath.Join(nousDir, "knowledge.json"),
 	)
 
