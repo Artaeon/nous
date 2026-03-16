@@ -122,7 +122,7 @@ func (ltm *LongTermMemory) Flush() error {
 	}
 
 	ltm.dirty = false
-	return safefile.WriteAtomic(ltm.path, data, 0644)
+	return safefile.WriteAtomicWithBackup(ltm.path, data, 0644, safefile.MaxBackups)
 }
 
 func (ltm *LongTermMemory) load() {

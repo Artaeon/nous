@@ -26,6 +26,7 @@ type Server struct {
 	classifier *cognitive.FastPathClassifier
 	jobs      *JobManager
 	addr      string
+	apiKey    string
 	server    *http.Server
 }
 
@@ -100,7 +101,7 @@ type CreateRoutineRequest struct {
 }
 
 // New creates a Nous HTTP server.
-func New(addr string, board *blackboard.Blackboard, perceiver *cognitive.Perceiver, assistantStore *assistant.Store) *Server {
+func New(addr string, board *blackboard.Blackboard, perceiver *cognitive.Perceiver, assistantStore *assistant.Store, apiKey string) *Server {
 	return &Server{
 		board:      board,
 		perceiver:  perceiver,
@@ -108,6 +109,7 @@ func New(addr string, board *blackboard.Blackboard, perceiver *cognitive.Perceiv
 		classifier: &cognitive.FastPathClassifier{},
 		jobs:       NewJobManager(),
 		addr:       addr,
+		apiKey:     apiKey,
 	}
 }
 
@@ -121,9 +123,11 @@ func (s *Server) SetFastPath(responder *cognitive.FastPathResponder, conv *cogni
 // Start begins listening for HTTP requests.
 func (s *Server) Start(version, model string, toolCount int) error {
 	startTime := time.Now()
+	var handler http.Handler = s.newMux(version, model, toolCount, startTime)
+	handler = AuthMiddleware(s.apiKey, handler)
 	s.server = &http.Server{
 		Addr:         s.addr,
-		Handler:      s.newMux(version, model, toolCount, startTime),
+		Handler:      handler,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 300 * time.Second,
 		IdleTimeout:  60 * time.Second,

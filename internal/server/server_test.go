@@ -58,7 +58,7 @@ func TestWebUIContainsBackgroundJobsControls(t *testing.T) {
 }
 
 func TestCORSRejectsDisallowedOrigin(t *testing.T) {
-	srv := New(":0", blackboard.New(), nil, assistant.NewStore(t.TempDir()))
+	srv := New(":0", blackboard.New(), nil, assistant.NewStore(t.TempDir()), "")
 	mux := srv.newMux("0.6.0", "test-model", 0, time.Now())
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/health", nil)
@@ -75,7 +75,7 @@ func TestCORSRejectsDisallowedOrigin(t *testing.T) {
 }
 
 func TestCORSAllowsLocalOrigin(t *testing.T) {
-	srv := New(":0", blackboard.New(), nil, assistant.NewStore(t.TempDir()))
+	srv := New(":0", blackboard.New(), nil, assistant.NewStore(t.TempDir()), "")
 	mux := srv.newMux("0.6.0", "test-model", 0, time.Now())
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/health", nil)
@@ -98,7 +98,7 @@ func TestAssistantTodayEndpointReturnsNotificationsAndTasks(t *testing.T) {
 	_, _ = store.AddTask("Pay rent", now.Add(2*time.Hour), "")
 	_, _ = store.TriggerDue(now)
 
-	srv := New(":0", blackboard.New(), nil, store)
+	srv := New(":0", blackboard.New(), nil, store, "")
 	mux := srv.newMux("0.6.0", "test-model", 0, now)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/assistant/today", nil)
@@ -122,7 +122,7 @@ func TestAssistantTodayEndpointReturnsNotificationsAndTasks(t *testing.T) {
 
 func TestAssistantTaskLifecycleEndpoints(t *testing.T) {
 	store := assistant.NewStore(t.TempDir())
-	srv := New(":0", blackboard.New(), nil, store)
+	srv := New(":0", blackboard.New(), nil, store, "")
 	mux := srv.newMux("0.6.0", "test-model", 0, time.Now())
 
 	createReq := httptest.NewRequest(http.MethodPost, "/api/assistant/tasks", strings.NewReader(`{"title":"Stretch","due_at":"2026-03-12T09:00:00Z","recurrence":"daily"}`))
@@ -163,7 +163,7 @@ func TestAssistantPreferenceAndReadEndpoints(t *testing.T) {
 	store := assistant.NewStore(t.TempDir())
 	_, _ = store.AddTask("Hydrate", time.Now().Add(-time.Minute), "")
 	_, _ = store.TriggerDue(time.Now())
-	srv := New(":0", blackboard.New(), nil, store)
+	srv := New(":0", blackboard.New(), nil, store, "")
 	mux := srv.newMux("0.6.0", "test-model", 0, time.Now())
 
 	prefReq := httptest.NewRequest(http.MethodPost, "/api/assistant/preferences", strings.NewReader(`{"key":"language","value":"de"}`))
@@ -200,7 +200,7 @@ func TestAssistantPreferenceAndReadEndpoints(t *testing.T) {
 
 func TestAssistantRoutinesEndpointCreatesAndListsRoutines(t *testing.T) {
 	store := assistant.NewStore(t.TempDir())
-	srv := New(":0", blackboard.New(), nil, store)
+	srv := New(":0", blackboard.New(), nil, store, "")
 	mux := srv.newMux("0.6.0", "test-model", 0, time.Now())
 
 	createReq := httptest.NewRequest(http.MethodPost, "/api/assistant/routines", strings.NewReader(`{"title":"Morning review","schedule":"daily","time_of_day":"08:30"}`))

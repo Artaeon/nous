@@ -6,7 +6,7 @@ set -e
 
 INSTALL_DIR="/opt/nous"
 BINARY="nous"
-VERSION="0.6.0"
+VERSION="0.9.0"
 
 echo "  Installing Nous v${VERSION}..."
 echo ""

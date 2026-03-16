@@ -28,7 +28,7 @@ import (
 	"github.com/artaeon/nous/internal/training"
 )
 
-const version = "0.8.0"
+const version = "0.9.0"
 
 func main() {
 	// Flags
@@ -42,6 +42,7 @@ func main() {
 	listenHost := flag.String("listen", "127.0.0.1", "HTTP listen host (with --serve)")
 	publicMode := flag.Bool("public", false, "Bind the HTTP server to 0.0.0.0 (with --serve)")
 	servePort := flag.String("port", "3333", "HTTP server port (with --serve)")
+	apiKey := flag.String("api-key", "", "API key for HTTP server authentication (with --serve)")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 	flag.Parse()
 
@@ -489,7 +490,7 @@ func main() {
 		}
 		addr := serveHost + ":" + *servePort
 		fmt.Printf("  serving on http://%s\n\n", addr)
-		srv := server.New(addr, board, perceiver, assistantStore)
+		srv := server.New(addr, board, perceiver, assistantStore, *apiKey)
 		srv.SetFastPath(&cognitive.FastPathResponder{
 			LLM:         llm,
 			WorkingMem:  wm,
