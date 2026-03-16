@@ -350,6 +350,31 @@ func main() {
 		filepath.Join(nousDir, "knowledge.json"),
 	)
 
+	// Auto-ingest bundled knowledge on first run (when knowledge store is empty).
+	if reasoner.Knowledge.Size() == 0 {
+		knowledgeDirs := []string{
+			filepath.Join(workDir, "knowledge"),  // repo checkout
+			"/app/knowledge",                      // Docker container
+		}
+		for _, kdir := range knowledgeDirs {
+			files, _ := filepath.Glob(filepath.Join(kdir, "*.txt"))
+			if len(files) > 0 {
+				total := 0
+				for _, f := range files {
+					n, err := reasoner.Knowledge.Ingest(f)
+					if err == nil {
+						total += n
+					}
+				}
+				if total > 0 {
+					fmt.Printf("  %s✓%s Loaded %d knowledge chunks from %d files\n",
+						cognitive.ColorGreen, cognitive.ColorReset, total, len(files))
+				}
+				break
+			}
+		}
+	}
+
 	// 15. Model Compiler — compile experience into optimized Modelfiles
 	reasoner.Compiler = cognitive.NewModelCompiler(
 		*model, reasoner.Distiller, reasoner.Crystals,

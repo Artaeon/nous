@@ -578,6 +578,31 @@ const webUI = `<!DOCTYPE html>
     const btn = document.getElementById('send');
 		const queueBtn = document.getElementById('queue');
 
+		// API key management — stored in localStorage
+		let apiKey = localStorage.getItem('nous_api_key') || '';
+
+		function authHeaders(extra) {
+			const h = Object.assign({'Content-Type': 'application/json'}, extra || {});
+			if (apiKey) h['Authorization'] = 'Bearer ' + apiKey;
+			return h;
+		}
+
+		async function authFetch(url, opts) {
+			opts = opts || {};
+			opts.headers = authHeaders(opts.headers);
+			const res = await fetch(url, opts);
+			if (res.status === 401) {
+				const key = prompt('API key required:');
+				if (key) {
+					apiKey = key;
+					localStorage.setItem('nous_api_key', key);
+					opts.headers = authHeaders(opts.headers);
+					return fetch(url, opts);
+				}
+			}
+			return res;
+		}
+
     input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
 
     async function send() {
@@ -591,9 +616,8 @@ const webUI = `<!DOCTYPE html>
       const loading = addMsg('<span class="spinner"></span>thinking...', 'nous');
 
       try {
-        const res = await fetch('/api/chat', {
+        const res = await authFetch('/api/chat', {
           method: 'POST',
-          headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({message: msg})
         });
         const data = await res.json();
@@ -617,9 +641,8 @@ const webUI = `<!DOCTYPE html>
 			addMsg('queued for background execution', 'nous');
 
 			try {
-				await fetch('/api/jobs', {
+				await authFetch('/api/jobs', {
 					method: 'POST',
-					headers: {'Content-Type': 'application/json'},
 					body: JSON.stringify({message: msg})
 				});
 				await refreshJobs();
@@ -643,7 +666,7 @@ const webUI = `<!DOCTYPE html>
 
 		async function refreshJobs() {
 			try {
-				const res = await fetch('/api/jobs');
+				const res = await authFetch('/api/jobs');
 				const data = await res.json();
 				jobs.innerHTML = '';
 
@@ -677,7 +700,7 @@ const webUI = `<!DOCTYPE html>
 				.replaceAll('>', '&gt;');
 		}
 
-    fetch('/api/status').then(r=>r.json()).then(s=>{
+    authFetch('/api/status').then(r=>r.json()).then(s=>{
       document.querySelector('.header p').textContent =
 				s.version + ' | ' + s.model + ' | ' + s.tool_count + ' tools | ' + s.running_jobs + ' running | ' + s.queued_jobs + ' queued | up ' + s.uptime;
     });
