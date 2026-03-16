@@ -3,8 +3,7 @@ version: "3.8"
 services:
   ollama:
     image: ollama/ollama
-    ports:
-      - "11434:11434"
+    restart: unless-stopped
     volumes:
       - ollama_data:/root/.ollama
     deploy:
@@ -14,20 +13,39 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+    # No ports exposed — only accessible within Docker network
 
   nous:
     build: .
-    ports:
-      - "3333:3333"
+    restart: unless-stopped
     depends_on:
       - ollama
     environment:
-      - OLLAMA_HOST=http://ollama:11434
-    command: ["--serve", "--port", "3333", "--host", "http://ollama:11434", "--trust"]
+      - NOUS_TELEGRAM_TOKEN=${NOUS_TELEGRAM_TOKEN:-}
+    command:
+      - "--serve"
+      - "--port"
+      - "3333"
+      - "--host"
+      - "http://ollama:11434"
+      - "--memory"
+      - "/data"
+      - "--trust"
+      - "--allow-shell"
+      - "--api-key"
+      - "${NOUS_API_KEY:-}"
     volumes:
-      - nous_data:/app/.nous
-      - ./:/workspace
+      - nous_data:/data
+      - nous_workspace:/workspace
+    labels:
+      # Traefik integration — adjust domain to yours
+      - "traefik.enable=true"
+      - "traefik.http.routers.nous.rule=Host(`nous.${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.nous.entrypoints=websecure"
+      - "traefik.http.routers.nous.tls.certresolver=letsencrypt"
+      - "traefik.http.services.nous.loadbalancer.server.port=3333"
 
 volumes:
   ollama_data:
   nous_data:
+  nous_workspace:
