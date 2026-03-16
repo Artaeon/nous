@@ -1,23 +1,24 @@
 services:
-  ollama:
-    image: ollama/ollama
-    restart: unless-stopped
-    volumes:
-      - ollama_data:/root/.ollama
-    # Uncomment below for GPU acceleration:
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
+  # To use Ollama inside Docker (with GPU), uncomment this service
+  # and change OLLAMA_HOST below to http://ollama:11434
+  #
+  # ollama:
+  #   image: ollama/ollama
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ollama_data:/root/.ollama
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: [gpu]
 
   nous:
     build: .
     restart: unless-stopped
-    depends_on:
-      - ollama
+    network_mode: host
     environment:
       - NOUS_TELEGRAM_TOKEN=${NOUS_TELEGRAM_TOKEN:-}
     command:
@@ -28,15 +29,13 @@ services:
       - "--model"
       - "${NOUS_MODEL:-qwen3:4b}"
       - "--host"
-      - "http://ollama:11434"
+      - "http://127.0.0.1:11434"
       - "--memory"
       - "/data"
       - "--trust"
       - "--allow-shell"
       - "--api-key"
       - "${NOUS_API_KEY:-}"
-    ports:
-      - "3333:3333"
     volumes:
       - nous_data:/data
       - nous_workspace:/workspace
@@ -49,6 +48,5 @@ services:
       - "traefik.http.services.nous.loadbalancer.server.port=3333"
 
 volumes:
-  ollama_data:
   nous_data:
   nous_workspace:
