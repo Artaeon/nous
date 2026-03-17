@@ -27,6 +27,8 @@ Thumbs.db
 # Nous runtime
 .nous/
 *.mmap
+**/backups/
+**/episodes.json
 
 # Release binaries
 nous-*
