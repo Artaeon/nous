@@ -241,6 +241,80 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 		})
 	}))
 
+	// POST /api/chat/stream — streaming chat via SSE
+	mux.HandleFunc("/api/chat/stream", cors(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req ChatRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			return
+		}
+		message := strings.TrimSpace(req.Message)
+		if message == "" {
+			http.Error(w, "empty message", http.StatusBadRequest)
+			return
+		}
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming not supported", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		chatMu.Lock()
+		defer chatMu.Unlock()
+
+		start := time.Now()
+
+		// Try streaming fast/medium path
+		if s.fastPath != nil && s.conv != nil {
+			path := s.classifier.ClassifyQuery(message)
+			if path == cognitive.PathFast || path == cognitive.PathMedium {
+				_, err := s.fastPath.RespondStreamWithPathFull(s.conv, message, path, func(token string, done bool) {
+					if done {
+						// Crystal/greeting hits send full text with done=true — emit text first
+						if token != "" {
+							tokenJSON, _ := json.Marshal(token)
+							fmt.Fprintf(w, "data: {\"t\":%s,\"d\":false}\n\n", tokenJSON)
+							flusher.Flush()
+						}
+						ms := time.Since(start).Milliseconds()
+						fmt.Fprintf(w, "data: {\"t\":\"\",\"d\":true,\"ms\":%d}\n\n", ms)
+					} else {
+						tokenJSON, _ := json.Marshal(token)
+						fmt.Fprintf(w, "data: {\"t\":%s,\"d\":false}\n\n", tokenJSON)
+					}
+					flusher.Flush()
+				})
+				if err == nil {
+					return
+				}
+			}
+		}
+
+		// Full pipeline fallback — non-streaming, send complete answer as single event
+		reqCounter++
+		answerKey := fmt.Sprintf("last_answer_%d", reqCounter)
+		s.board.Set("answer_key", answerKey)
+		s.perceiver.Submit(message)
+		answer := waitForAnswer(s.board, 300*time.Second, answerKey)
+
+		answerJSON, _ := json.Marshal(answer)
+		ms := time.Since(start).Milliseconds()
+		fmt.Fprintf(w, "data: {\"t\":%s,\"d\":false}\n\n", answerJSON)
+		flusher.Flush()
+		fmt.Fprintf(w, "data: {\"t\":\"\",\"d\":true,\"ms\":%d}\n\n", ms)
+		flusher.Flush()
+	}))
+
 	// POST /api/jobs — queue a background task for the always-on server worker.
 	mux.HandleFunc("/api/jobs", cors(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
