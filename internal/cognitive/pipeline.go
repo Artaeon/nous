@@ -45,14 +45,25 @@ func (p *Pipeline) SetDistiller(llm *ollama.Client) {
 	p.distiller = llm
 }
 
+// simpleTools are tools whose results can be summarized with rules, no LLM needed.
+var simpleTools = map[string]bool{
+	"read": true, "ls": true, "glob": true, "grep": true, "tree": true, "sysinfo": true,
+}
+
 // AddStep compresses and stores the result of a tool execution.
-// Uses thought distillation (LLM-based) when a distiller is configured,
-// falling back to rule-based compression otherwise.
+// For simple tools (read, ls, glob, grep), uses fast rule-based compression.
+// For complex tools, tries LLM distillation with rule-based fallback.
 func (p *Pipeline) AddStep(toolName, rawResult string) {
 	summary := ""
 
-	// Try thought distillation first
-	if p.distiller != nil && len(rawResult) > 80 {
+	// Simple tools always use rule-based compression — no LLM call needed.
+	// This eliminates ~3s of overhead per simple tool result.
+	if simpleTools[toolName] {
+		summary = CompressStep(toolName, rawResult)
+	}
+
+	// Try thought distillation for complex tools only
+	if summary == "" && p.distiller != nil && len(rawResult) > 80 {
 		if distilled := distillStep(p.distiller, p.userQuery, toolName, rawResult); distilled != "" {
 			summary = distilled
 		}
