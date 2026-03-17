@@ -26,11 +26,24 @@ type Node struct {
 
 // Edge is a directed relationship between two nodes.
 type Edge struct {
-	From     string  `json:"from"`
-	To       string  `json:"to"`
-	Relation string  `json:"relation"` // "uses", "contains", "depends_on", "related_to", "created_by"
-	Weight   float64 `json:"weight"`
+	From       string    `json:"from"`
+	To         string    `json:"to"`
+	Relation   string    `json:"relation"`   // typed: uses, depends_on, is_a, contains, causes, contradicts, related_to
+	Weight     float64   `json:"weight"`
+	Confidence float64   `json:"confidence"` // 0.0-1.0 extraction confidence
+	CreatedAt  time.Time `json:"created_at,omitempty"`
 }
+
+// Typed relationship constants for semantic graph queries.
+const (
+	RelUses        = "uses"
+	RelDependsOn   = "depends_on"
+	RelIsA         = "is_a"
+	RelContains    = "contains"
+	RelCauses      = "causes"
+	RelContradicts = "contradicts"
+	RelRelatedTo   = "related_to"
+)
 
 // GraphStats summarizes the knowledge graph.
 type GraphStats struct {
@@ -82,22 +95,113 @@ func (kg *KnowledgeGraph) AddNode(label, nodeType string) string {
 
 // AddEdge creates or strengthens a relationship between two nodes.
 func (kg *KnowledgeGraph) AddEdge(from, to, relation string) {
+	kg.AddEdgeWithConfidence(from, to, relation, 0.5)
+}
+
+// AddEdgeWithConfidence creates or strengthens a typed relationship with a confidence score.
+func (kg *KnowledgeGraph) AddEdgeWithConfidence(from, to, relation string, confidence float64) {
 	kg.mu.Lock()
 	defer kg.mu.Unlock()
+
+	if confidence < 0 {
+		confidence = 0
+	}
+	if confidence > 1 {
+		confidence = 1
+	}
 
 	// Check if edge already exists
 	for i := range kg.edges {
 		if kg.edges[i].From == from && kg.edges[i].To == to && kg.edges[i].Relation == relation {
 			kg.edges[i].Weight++
+			// EMA update for confidence
+			kg.edges[i].Confidence = 0.3*confidence + 0.7*kg.edges[i].Confidence
 			return
 		}
 	}
 	kg.edges = append(kg.edges, Edge{
-		From:     from,
-		To:       to,
-		Relation: relation,
-		Weight:   1.0,
+		From:       from,
+		To:         to,
+		Relation:   relation,
+		Weight:     1.0,
+		Confidence: confidence,
+		CreatedAt:  time.Now(),
 	})
+}
+
+// FollowEdges traverses edges of a specific type transitively from a starting node.
+// maxDepth limits the traversal depth to prevent infinite loops.
+func (kg *KnowledgeGraph) FollowEdges(startID, relation string, maxDepth int) []*Node {
+	kg.mu.RLock()
+	defer kg.mu.RUnlock()
+
+	if maxDepth <= 0 {
+		maxDepth = 3
+	}
+
+	visited := make(map[string]bool)
+	var results []*Node
+	queue := []string{startID}
+	depth := 0
+
+	for len(queue) > 0 && depth < maxDepth {
+		nextQueue := []string{}
+		for _, id := range queue {
+			if visited[id] {
+				continue
+			}
+			visited[id] = true
+
+			for _, e := range kg.edges {
+				if e.From == id && e.Relation == relation && !visited[e.To] {
+					if n, ok := kg.nodes[e.To]; ok {
+						cp := *n
+						results = append(results, &cp)
+						nextQueue = append(nextQueue, e.To)
+					}
+				}
+			}
+		}
+		queue = nextQueue
+		depth++
+	}
+
+	return results
+}
+
+// DecayWeights applies temporal decay to all node weights.
+// Nodes not accessed in 30 days get weight *= decayFactor.
+func (kg *KnowledgeGraph) DecayWeights(decayFactor float64) int {
+	kg.mu.Lock()
+	defer kg.mu.Unlock()
+
+	if decayFactor <= 0 || decayFactor >= 1 {
+		decayFactor = 0.9
+	}
+
+	cutoff := time.Now().Add(-30 * 24 * time.Hour)
+	decayed := 0
+	for _, n := range kg.nodes {
+		if n.LastSeen.Before(cutoff) {
+			n.Weight *= decayFactor
+			decayed++
+		}
+	}
+	return decayed
+}
+
+// EdgesByRelation returns all edges of a specific type from a node.
+func (kg *KnowledgeGraph) EdgesByRelation(id, relation string) []Edge {
+	kg.mu.RLock()
+	defer kg.mu.RUnlock()
+
+	var results []Edge
+	for _, e := range kg.edges {
+		if (e.From == id || e.To == id) && e.Relation == relation {
+			results = append(results, e)
+		}
+	}
+	return results
 }
 
 // Query finds nodes whose label contains the query string (case-insensitive).
@@ -247,11 +351,45 @@ func (kg *KnowledgeGraph) ExtractFromText(text string) {
 		}
 	}
 
-	// Build co-occurrence edges
+	// Extract typed relationships from text patterns
+	usesRe := regexp.MustCompile(`(?i)(\w+)\s+(?:uses?|utilizes?|requires?)\s+(\w+)`)
+	for _, match := range usesRe.FindAllStringSubmatch(text, -1) {
+		fromID := nodeID(match[1], "concept")
+		toID := nodeID(match[2], "concept")
+		if _, ok := kg.nodes[fromID]; ok {
+			if _, ok2 := kg.nodes[toID]; ok2 {
+				kg.AddEdgeWithConfidence(fromID, toID, RelUses, 0.7)
+			}
+		}
+	}
+
+	dependsRe := regexp.MustCompile(`(?i)(\w+)\s+(?:depends?\s+on|relies?\s+on)\s+(\w+)`)
+	for _, match := range dependsRe.FindAllStringSubmatch(text, -1) {
+		fromID := nodeID(match[1], "concept")
+		toID := nodeID(match[2], "concept")
+		if _, ok := kg.nodes[fromID]; ok {
+			if _, ok2 := kg.nodes[toID]; ok2 {
+				kg.AddEdgeWithConfidence(fromID, toID, RelDependsOn, 0.7)
+			}
+		}
+	}
+
+	containsRe := regexp.MustCompile(`(?i)(\w+)\s+(?:contains?|includes?|has)\s+(\w+)`)
+	for _, match := range containsRe.FindAllStringSubmatch(text, -1) {
+		fromID := nodeID(match[1], "concept")
+		toID := nodeID(match[2], "concept")
+		if _, ok := kg.nodes[fromID]; ok {
+			if _, ok2 := kg.nodes[toID]; ok2 {
+				kg.AddEdgeWithConfidence(fromID, toID, RelContains, 0.6)
+			}
+		}
+	}
+
+	// Build co-occurrence edges for remaining pairs
 	for i := 0; i < len(extracted); i++ {
 		for j := i + 1; j < len(extracted); j++ {
 			if extracted[i] != extracted[j] {
-				kg.AddEdge(extracted[i], extracted[j], "related_to")
+				kg.AddEdgeWithConfidence(extracted[i], extracted[j], RelRelatedTo, 0.3)
 			}
 		}
 	}
