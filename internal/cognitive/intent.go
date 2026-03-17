@@ -615,25 +615,33 @@ func (ic *IntentCompiler) ResolveDir(fragment string) string {
 }
 
 // RefreshFS scans the working directory to build the file/dir tree.
+// Performs the filesystem walk without holding the lock, then swaps atomically.
 func (ic *IntentCompiler) RefreshFS() {
-	ic.mu.Lock()
-	defer ic.mu.Unlock()
+	ic.mu.RLock()
+	workDir := ic.workDir
+	maxFiles := ic.maxFiles
+	maxDepth := ic.maxDepth
+	ic.mu.RUnlock()
 
-	ic.fileTree = nil
-	ic.dirTree = nil
-	ic.lastScan = time.Now()
-
-	if ic.workDir == "" {
+	if workDir == "" {
+		ic.mu.Lock()
+		ic.fileTree = nil
+		ic.dirTree = nil
+		ic.lastScan = time.Now()
+		ic.mu.Unlock()
 		return
 	}
 
+	// Build new trees without holding the lock
+	var newFiles []string
+	var newDirs []string
 	seen := make(map[string]bool)
 	count := 0
-	_ = filepath.Walk(ic.workDir, func(path string, info os.FileInfo, err error) error {
+	_ = filepath.Walk(workDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // skip errors
 		}
-		if count >= ic.maxFiles {
+		if count >= maxFiles {
 			return filepath.SkipDir
 		}
 
@@ -649,14 +657,14 @@ func (ic *IntentCompiler) RefreshFS() {
 			return filepath.SkipDir
 		}
 
-		rel, err := filepath.Rel(ic.workDir, path)
+		rel, err := filepath.Rel(workDir, path)
 		if err != nil || rel == "." {
 			return nil
 		}
 
 		// Check depth
 		depth := strings.Count(rel, string(filepath.Separator))
-		if depth > ic.maxDepth {
+		if depth > maxDepth {
 			if info.IsDir() {
 				return filepath.SkipDir
 			}
@@ -665,18 +673,25 @@ func (ic *IntentCompiler) RefreshFS() {
 
 		if info.IsDir() {
 			if !seen[rel] {
-				ic.dirTree = append(ic.dirTree, rel)
+				newDirs = append(newDirs, rel)
 				seen[rel] = true
 			}
 		} else {
-			ic.fileTree = append(ic.fileTree, rel)
+			newFiles = append(newFiles, rel)
 			count++
 		}
 		return nil
 	})
 
-	sort.Strings(ic.fileTree)
-	sort.Strings(ic.dirTree)
+	sort.Strings(newFiles)
+	sort.Strings(newDirs)
+
+	// Atomic swap under write lock
+	ic.mu.Lock()
+	ic.fileTree = newFiles
+	ic.dirTree = newDirs
+	ic.lastScan = time.Now()
+	ic.mu.Unlock()
 }
 
 // ensureFreshFS refreshes the filesystem cache if stale.

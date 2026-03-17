@@ -26,6 +26,7 @@ type Crystal struct {
 	Trigger      *CrystalTrigger `json:"trigger"`
 	Steps        []CrystalStep `json:"steps"`
 	ResponseTmpl string        `json:"response_template"` // template with {result_N} placeholders
+	Embedding    []float64     `json:"embedding,omitempty"` // semantic embedding for similarity matching
 	Uses         int           `json:"uses"`
 	Successes    int           `json:"successes"`
 	CreatedAt    time.Time     `json:"created_at"`
@@ -55,6 +56,7 @@ type CrystalBook struct {
 	storePath string
 	mu        sync.RWMutex
 	maxSize   int
+	embedFunc func(string) ([]float64, error) // optional: for semantic matching
 }
 
 // CrystalMatch is a crystal matched to a query with a confidence score.
@@ -86,11 +88,20 @@ func (cb *CrystalBook) Match(query string) *CrystalMatch {
 	}
 
 	words := strings.Fields(strings.ToLower(query))
+
+	// Compute query embedding for semantic matching (if available)
+	var queryEmbed []float64
+	if cb.embedFunc != nil {
+		if vec, err := cb.embedFunc(query); err == nil {
+			queryEmbed = vec
+		}
+	}
+
 	var best *CrystalMatch
 
 	for i := range cb.crystals {
 		c := &cb.crystals[i]
-		score := cb.matchScore(c, query, words)
+		score := cb.matchScoreWithEmbed(c, query, words, queryEmbed)
 		if score < 0.7 {
 			continue
 		}
@@ -128,7 +139,7 @@ func (cb *CrystalBook) Crystallize(query string, pipe *Pipeline, finalAnswer str
 	words := strings.Fields(strings.ToLower(query))
 	for i := range cb.crystals {
 		score := cb.matchScore(&cb.crystals[i], query, words)
-		if score >= 0.8 {
+		if score >= 0.75 {
 			// Update existing crystal's success count
 			cb.crystals[i].Uses++
 			cb.crystals[i].Successes++
@@ -162,11 +173,20 @@ func (cb *CrystalBook) Crystallize(query string, pipe *Pipeline, finalAnswer str
 	// Build response template
 	tmpl := buildResponseTemplate(finalAnswer, pipe)
 
+	// Compute embedding for semantic matching
+	var embedding []float64
+	if cb.embedFunc != nil {
+		if vec, err := cb.embedFunc(query); err == nil {
+			embedding = vec
+		}
+	}
+
 	crystal := Crystal{
 		ID:           crystalID(query),
 		Trigger:      trigger,
 		Steps:        steps,
 		ResponseTmpl: tmpl,
+		Embedding:    embedding,
 		Uses:         1,
 		Successes:    1,
 		CreatedAt:    time.Now(),
@@ -258,16 +278,26 @@ type CrystalStats struct {
 
 // --- Internal ---
 
+// SetEmbedFunc sets the embedding function for semantic crystal matching.
+func (cb *CrystalBook) SetEmbedFunc(fn func(string) ([]float64, error)) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	cb.embedFunc = fn
+}
+
 func (cb *CrystalBook) matchScore(c *Crystal, query string, words []string) float64 {
+	return cb.matchScoreWithEmbed(c, query, words, nil)
+}
+
+func (cb *CrystalBook) matchScoreWithEmbed(c *Crystal, query string, words []string, queryEmbed []float64) float64 {
 	score := 0.0
 
-	// Keyword match (primary signal — Go regex doesn't support lookaheads,
-	// so we use keyword overlap as the main matching strategy)
+	// Compute keyword overlap (used by multiple signals)
+	keywordRatio := 0.0
 	if len(c.Trigger.Keywords) > 0 {
 		matched := 0
 		for _, kw := range c.Trigger.Keywords {
 			for _, w := range words {
-				// Strip trailing punctuation for comparison
 				clean := strings.TrimRight(w, "?!.,;:")
 				if clean == kw || w == kw {
 					matched++
@@ -275,25 +305,27 @@ func (cb *CrystalBook) matchScore(c *Crystal, query string, words []string) floa
 				}
 			}
 		}
-		ratio := float64(matched) / float64(len(c.Trigger.Keywords))
-		score += ratio * 0.7
+		keywordRatio = float64(matched) / float64(len(c.Trigger.Keywords))
 	}
 
-	// Word count similarity
-	wc := len(words)
-	if c.Trigger.MinWords > 0 && wc >= c.Trigger.MinWords &&
-		c.Trigger.MaxWords > 0 && wc <= c.Trigger.MaxWords {
-		score += 0.15
+	// Scoring weights:
+	//   With embeddings: 0.40 semantic + 0.30 keyword + 0.20 success + 0.10 recency
+	//   Without:         0.70 keyword + 0.20 success + 0.10 recency
+	if len(queryEmbed) > 0 && len(c.Embedding) > 0 {
+		sim := cosineSim(queryEmbed, c.Embedding)
+		score += sim * 0.40
+		score += keywordRatio * 0.30
+	} else {
+		score += keywordRatio * 0.70
 	}
 
-	// Success rate bonus — log-scaled usage so proven crystals rank higher
-	// but can't dominate purely on volume. Capped at 0.15.
+	// Success rate bonus — log-scaled, capped at 0.20
 	if c.Uses > 2 {
 		rate := float64(c.Successes) / float64(c.Uses)
 		if rate >= 0.8 {
-			usageBonus := math.Log2(float64(c.Uses)+1) * 0.02
-			if usageBonus > 0.15 {
-				usageBonus = 0.15
+			usageBonus := math.Log2(float64(c.Uses)+1) * 0.03
+			if usageBonus > 0.20 {
+				usageBonus = 0.20
 			}
 			score += usageBonus
 		}
@@ -301,6 +333,8 @@ func (cb *CrystalBook) matchScore(c *Crystal, query string, words []string) floa
 
 	// Recency bonus
 	if time.Since(c.LastUsed) < time.Hour {
+		score += 0.10
+	} else if time.Since(c.LastUsed) < 24*time.Hour {
 		score += 0.05
 	}
 
