@@ -343,6 +343,226 @@ func truncateDesc(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
+// --- Prompt Evolution ---
+
+// PromptEvolver extends neuroplastic evolution to any named system prompt.
+// Unlike tool descriptions (which evolve per-tool), prompts evolve per-purpose.
+type PromptEvolver struct {
+	mu      sync.RWMutex
+	prompts map[string]*PromptEntry // keyed by prompt name
+	path    string
+}
+
+// PromptEntry tracks prompt variants and their performance.
+type PromptEntry struct {
+	Name      string          `json:"name"`
+	Variants  []PromptVariant `json:"variants"`
+	ActiveIdx int             `json:"active_idx"`
+}
+
+// PromptVariant is one version of a prompt with performance tracking.
+type PromptVariant struct {
+	Text      string    `json:"text"`
+	Attempts  int       `json:"attempts"`
+	Successes int       `json:"successes"`
+	AvgScore  float64   `json:"avg_score"` // EMA of quality scores
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// SuccessRate returns the success rate of a prompt variant.
+func (pv *PromptVariant) SuccessRate() float64 {
+	if pv.Attempts == 0 {
+		return 0.5
+	}
+	return float64(pv.Successes) / float64(pv.Attempts)
+}
+
+// NewPromptEvolver creates a prompt evolution system.
+func NewPromptEvolver(path string) *PromptEvolver {
+	pe := &PromptEvolver{
+		prompts: make(map[string]*PromptEntry),
+		path:    path,
+	}
+	pe.load()
+	return pe
+}
+
+// Register registers a named prompt with its default text.
+func (pe *PromptEvolver) Register(name, text string) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+
+	if _, exists := pe.prompts[name]; exists {
+		return
+	}
+	pe.prompts[name] = &PromptEntry{
+		Name: name,
+		Variants: []PromptVariant{{
+			Text:      text,
+			CreatedAt: time.Now(),
+		}},
+		ActiveIdx: 0,
+	}
+}
+
+// Get returns the current best prompt for a given name.
+func (pe *PromptEvolver) Get(name string) string {
+	pe.mu.RLock()
+	defer pe.mu.RUnlock()
+
+	entry, ok := pe.prompts[name]
+	if !ok || len(entry.Variants) == 0 {
+		return ""
+	}
+	return entry.Variants[entry.ActiveIdx].Text
+}
+
+// RecordOutcome records a quality score (0.0-1.0) for the active prompt variant.
+func (pe *PromptEvolver) RecordOutcome(name string, score float64, success bool) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+
+	entry, ok := pe.prompts[name]
+	if !ok || len(entry.Variants) == 0 {
+		return
+	}
+
+	v := &entry.Variants[entry.ActiveIdx]
+	v.Attempts++
+	if success {
+		v.Successes++
+	}
+	// EMA update for score
+	const alpha = 0.2
+	if v.Attempts == 1 {
+		v.AvgScore = score
+	} else {
+		v.AvgScore = alpha*score + (1-alpha)*v.AvgScore
+	}
+}
+
+// AddVariant adds a new prompt variant for testing.
+func (pe *PromptEvolver) AddVariant(name, text string) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+
+	entry, ok := pe.prompts[name]
+	if !ok {
+		return
+	}
+
+	for _, v := range entry.Variants {
+		if v.Text == text {
+			return // duplicate
+		}
+	}
+
+	entry.Variants = append(entry.Variants, PromptVariant{
+		Text:      text,
+		CreatedAt: time.Now(),
+	})
+}
+
+// Evolve promotes the best-performing variant for each prompt.
+// Returns a map of prompt names that changed.
+func (pe *PromptEvolver) Evolve() map[string]string {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+
+	changes := make(map[string]string)
+
+	for name, entry := range pe.prompts {
+		if len(entry.Variants) <= 1 {
+			continue
+		}
+
+		bestIdx := entry.ActiveIdx
+		bestScore := entry.Variants[bestIdx].AvgScore
+		if entry.Variants[bestIdx].Attempts < 5 {
+			bestScore = entry.Variants[bestIdx].SuccessRate()
+		}
+
+		for i, v := range entry.Variants {
+			if v.Attempts < 5 {
+				continue
+			}
+			score := v.AvgScore
+			if score > bestScore {
+				bestScore = score
+				bestIdx = i
+			}
+		}
+
+		if bestIdx != entry.ActiveIdx {
+			changes[name] = fmt.Sprintf("promoted variant %d (score: %.2f → %.2f)",
+				bestIdx, entry.Variants[entry.ActiveIdx].AvgScore, bestScore)
+			entry.ActiveIdx = bestIdx
+		}
+	}
+
+	if len(changes) > 0 {
+		pe.save()
+	}
+
+	return changes
+}
+
+// Stats returns the current state of all prompt entries.
+func (pe *PromptEvolver) Stats() map[string]PromptStats {
+	pe.mu.RLock()
+	defer pe.mu.RUnlock()
+
+	stats := make(map[string]PromptStats)
+	for name, entry := range pe.prompts {
+		if len(entry.Variants) == 0 {
+			continue
+		}
+		active := entry.Variants[entry.ActiveIdx]
+		stats[name] = PromptStats{
+			ActiveText:  truncateDesc(active.Text, 60),
+			Attempts:    active.Attempts,
+			AvgScore:    active.AvgScore,
+			SuccessRate: active.SuccessRate(),
+			VariantCount: len(entry.Variants),
+		}
+	}
+	return stats
+}
+
+// PromptStats holds performance statistics for a named prompt.
+type PromptStats struct {
+	ActiveText   string
+	Attempts     int
+	AvgScore     float64
+	SuccessRate  float64
+	VariantCount int
+}
+
+func (pe *PromptEvolver) load() {
+	if pe.path == "" {
+		return
+	}
+	data, err := os.ReadFile(pe.path)
+	if err != nil {
+		return
+	}
+	var prompts map[string]*PromptEntry
+	if err := json.Unmarshal(data, &prompts); err == nil && prompts != nil {
+		pe.prompts = prompts
+	}
+}
+
+func (pe *PromptEvolver) save() {
+	if pe.path == "" {
+		return
+	}
+	data, err := json.MarshalIndent(pe.prompts, "", "  ")
+	if err != nil {
+		return
+	}
+	safefile.WriteAtomic(pe.path, data, 0o644)
+}
+
 // --- Persistence ---
 
 func (nd *NeuroplasticDescriptions) load() {

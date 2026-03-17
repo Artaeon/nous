@@ -252,6 +252,156 @@ func TestSuccessRate(t *testing.T) {
 	}
 }
 
+// --- Prompt Evolver Tests ---
+
+func TestPromptEvolverRegisterAndGet(t *testing.T) {
+	pe := NewPromptEvolver("")
+	pe.Register("system", "You are Nous, a helpful AI.")
+
+	got := pe.Get("system")
+	if got != "You are Nous, a helpful AI." {
+		t.Errorf("Get = %q, want registered prompt", got)
+	}
+}
+
+func TestPromptEvolverGetMissing(t *testing.T) {
+	pe := NewPromptEvolver("")
+	if got := pe.Get("nonexistent"); got != "" {
+		t.Errorf("Get nonexistent = %q, want empty", got)
+	}
+}
+
+func TestPromptEvolverRegisterNoDuplicate(t *testing.T) {
+	pe := NewPromptEvolver("")
+	pe.Register("system", "Version 1")
+	pe.Register("system", "Version 2") // should be ignored
+
+	if got := pe.Get("system"); got != "Version 1" {
+		t.Errorf("second Register should be ignored, got %q", got)
+	}
+}
+
+func TestPromptEvolverRecordOutcome(t *testing.T) {
+	pe := NewPromptEvolver("")
+	pe.Register("fast", "Be brief.")
+
+	pe.RecordOutcome("fast", 0.8, true)
+	pe.RecordOutcome("fast", 0.6, false)
+
+	stats := pe.Stats()
+	s, ok := stats["fast"]
+	if !ok {
+		t.Fatal("stats should include 'fast'")
+	}
+	if s.Attempts != 2 {
+		t.Errorf("Attempts = %d, want 2", s.Attempts)
+	}
+	if s.SuccessRate != 0.5 {
+		t.Errorf("SuccessRate = %f, want 0.5", s.SuccessRate)
+	}
+}
+
+func TestPromptEvolverAddVariant(t *testing.T) {
+	pe := NewPromptEvolver("")
+	pe.Register("system", "Version 1")
+	pe.AddVariant("system", "Version 2")
+
+	stats := pe.Stats()
+	if stats["system"].VariantCount != 2 {
+		t.Errorf("VariantCount = %d, want 2", stats["system"].VariantCount)
+	}
+
+	// Duplicate should not be added
+	pe.AddVariant("system", "Version 2")
+	stats = pe.Stats()
+	if stats["system"].VariantCount != 2 {
+		t.Errorf("VariantCount after dupe = %d, want 2", stats["system"].VariantCount)
+	}
+}
+
+func TestPromptEvolverEvolve(t *testing.T) {
+	pe := NewPromptEvolver("")
+	pe.Register("system", "Version 1")
+	pe.AddVariant("system", "Version 2 (better)")
+
+	// Record bad outcomes for variant 0
+	for i := 0; i < 10; i++ {
+		pe.RecordOutcome("system", 0.3, false)
+	}
+
+	// Switch to variant 1
+	pe.mu.Lock()
+	pe.prompts["system"].ActiveIdx = 1
+	pe.mu.Unlock()
+
+	// Record good outcomes for variant 1
+	for i := 0; i < 10; i++ {
+		pe.RecordOutcome("system", 0.9, true)
+	}
+
+	// Switch back to variant 0 to test evolution
+	pe.mu.Lock()
+	pe.prompts["system"].ActiveIdx = 0
+	pe.mu.Unlock()
+
+	changes := pe.Evolve()
+	if _, ok := changes["system"]; !ok {
+		t.Error("Evolve should promote variant 1 over variant 0")
+	}
+
+	if pe.Get("system") != "Version 2 (better)" {
+		t.Errorf("active prompt should now be 'Version 2 (better)', got %q", pe.Get("system"))
+	}
+}
+
+func TestPromptEvolverEvolveNoChangeWhenGood(t *testing.T) {
+	pe := NewPromptEvolver("")
+	pe.Register("system", "Already good")
+
+	for i := 0; i < 10; i++ {
+		pe.RecordOutcome("system", 0.9, true)
+	}
+
+	changes := pe.Evolve()
+	if len(changes) != 0 {
+		t.Errorf("Evolve should not change when only one variant, got %v", changes)
+	}
+}
+
+func TestPromptVariantSuccessRate(t *testing.T) {
+	v := PromptVariant{Attempts: 0}
+	if v.SuccessRate() != 0.5 {
+		t.Errorf("zero attempts should be 0.5, got %f", v.SuccessRate())
+	}
+
+	v = PromptVariant{Attempts: 20, Successes: 15}
+	if v.SuccessRate() != 0.75 {
+		t.Errorf("15/20 should be 0.75, got %f", v.SuccessRate())
+	}
+}
+
+func TestPromptEvolverPersistence(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "prompts.json")
+
+	pe := NewPromptEvolver(path)
+	pe.Register("system", "Test prompt")
+	pe.RecordOutcome("system", 0.8, true)
+	pe.save()
+
+	// Load into new instance
+	pe2 := NewPromptEvolver(path)
+	got := pe2.Get("system")
+	if got != "Test prompt" {
+		t.Errorf("loaded prompt = %q, want 'Test prompt'", got)
+	}
+
+	stats := pe2.Stats()
+	if stats["system"].Attempts != 1 {
+		t.Errorf("loaded attempts = %d, want 1", stats["system"].Attempts)
+	}
+}
+
 // --- Benchmark ---
 
 func BenchmarkNeuroplasticGetDescription(b *testing.B) {
