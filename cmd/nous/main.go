@@ -394,7 +394,10 @@ func main() {
 
 	// 14b. Response Crystal Store — semantic cache that learns from every LLM response.
 	// The more you use Nous, the more queries are served instantly (0ms) from cache.
+	// Uses EmbedCache to avoid 5-10s embedding calls on repeated queries.
+	embedCache := cognitive.NewEmbedCache(256, 30*time.Minute)
 	responseCrystals := cognitive.NewResponseCrystalStore(knowledgeEmbedFn, nousDir)
+	responseCrystals.SetEmbedCache(embedCache)
 	if responseCrystals.Size() > 0 {
 		size, hits := responseCrystals.Stats()
 		fmt.Printf("  %s✓%s %d response crystals loaded (%d total hits)\n",

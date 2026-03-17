@@ -258,6 +258,16 @@ func tryQuickResponse(query string) string {
 
 // RespondWithPath generates a response using the specified path level.
 func (r *FastPathResponder) RespondWithPath(conv *Conversation, query string, path QueryPath) (string, error) {
+	// Crystal pre-check: check ResponseCrystals BEFORE any path classification
+	// or LLM call. This gives ~1ms responses for previously-answered queries.
+	if r.ResponseCrystals != nil {
+		if cached, ok := r.ResponseCrystals.Lookup(query); ok {
+			conv.User(query)
+			conv.Assistant(cached)
+			return cached, nil
+		}
+	}
+
 	// Instant response for trivial greetings — skip LLM entirely.
 	if path == PathFast {
 		if quick := tryQuickResponse(query); quick != "" {
@@ -299,15 +309,6 @@ func (r *FastPathResponder) RespondWithPath(conv *Conversation, query string, pa
 	// Add the current query.
 	msgs = append(msgs, ollama.Message{Role: "user", Content: query})
 
-	// Check response crystal cache — instant if semantically similar query was answered before.
-	if r.ResponseCrystals != nil && path == PathMedium {
-		if cached, ok := r.ResponseCrystals.Lookup(query); ok {
-			conv.User(query)
-			conv.Assistant(cached)
-			return cached, nil
-		}
-	}
-
 	// Medium path gets more tokens for knowledge-rich answers.
 	// Fast path stays brief for greetings/acknowledgments.
 	numPredict := 512
@@ -328,8 +329,9 @@ func (r *FastPathResponder) RespondWithPath(conv *Conversation, query string, pa
 	answer := strings.TrimSpace(resp.Message.Content)
 
 	// Learn from this response — cache it for future similar queries.
+	// Synchronous so the crystal is saved before the next request arrives.
 	if r.ResponseCrystals != nil && path == PathMedium && len(answer) > 20 {
-		go r.ResponseCrystals.Learn(query, answer, 0.7)
+		r.ResponseCrystals.Learn(query, answer, 0.7)
 	}
 
 	// Post-generation fact-checking: verify answer against knowledge store.
