@@ -348,6 +348,93 @@ func (r *FastPathResponder) RespondWithPath(conv *Conversation, query string, pa
 	return answer, nil
 }
 
+// RespondStreamWithPath generates a streaming response, calling onToken for each token.
+func (r *FastPathResponder) RespondStreamWithPathFull(conv *Conversation, query string, path QueryPath, onToken func(token string, done bool)) (string, error) {
+	// Crystal pre-check
+	if r.ResponseCrystals != nil {
+		if cached, ok := r.ResponseCrystals.Lookup(query); ok {
+			conv.User(query)
+			conv.Assistant(cached)
+			onToken(cached, true)
+			return cached, nil
+		}
+	}
+
+	// Instant greetings
+	if path == PathFast {
+		if quick := tryQuickResponse(query); quick != "" {
+			conv.User(query)
+			conv.Assistant(quick)
+			onToken(quick, true)
+			return quick, nil
+		}
+	}
+
+	var sysPrompt string
+	var maxHistory int
+
+	switch path {
+	case PathMedium:
+		sysPrompt = r.buildMediumPrompt(conv, query)
+		maxHistory = 10
+	default:
+		sysPrompt = fastPathSystemPrompt
+		maxHistory = 4
+	}
+
+	msgs := make([]ollama.Message, 0, maxHistory+2)
+	msgs = append(msgs, ollama.Message{Role: "system", Content: sysPrompt})
+
+	convMsgs := conv.Messages()
+	start := 0
+	if len(convMsgs) > maxHistory {
+		start = len(convMsgs) - maxHistory
+	}
+	for _, m := range convMsgs[start:] {
+		if m.Role == "system" {
+			continue
+		}
+		msgs = append(msgs, m)
+	}
+	msgs = append(msgs, ollama.Message{Role: "user", Content: query})
+
+	numPredict := 512
+	temp := 0.7
+	if path == PathMedium {
+		numPredict = 1024
+		temp = 0.6
+	}
+
+	var fullAnswer strings.Builder
+	_, err := r.LLM.ChatStream(msgs, &ollama.ModelOptions{
+		Temperature: temp,
+		NumPredict:  numPredict,
+	}, func(token string, done bool) {
+		if !done {
+			fullAnswer.WriteString(token)
+		}
+		onToken(token, done)
+	})
+	if err != nil {
+		return "", err
+	}
+
+	answer := strings.TrimSpace(fullAnswer.String())
+
+	// Learn from this response
+	if r.ResponseCrystals != nil && path == PathMedium && len(answer) > 20 {
+		r.ResponseCrystals.Learn(query, answer, 0.7)
+	}
+
+	// Fact-check (post-generation, but we already streamed — this is a trade-off)
+	// For streaming, we skip fact-checking since the user already saw the tokens.
+
+	conv.User(query)
+	conv.Assistant(answer)
+
+	return answer, nil
+}
+
 // buildMediumPrompt creates a richer system prompt with memory facts and knowledge for the medium path.
 func (r *FastPathResponder) buildMediumPrompt(conv *Conversation, query string) string {
 	var sb strings.Builder
