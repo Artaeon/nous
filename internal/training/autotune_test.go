@@ -315,3 +315,134 @@ func TestCheckQuietSuppressesFailureNoise(t *testing.T) {
 		t.Fatalf("CheckQuiet should suppress failure chatter, got %v", messages)
 	}
 }
+
+func TestABTestingRecordAndWinRate(t *testing.T) {
+	c := newTestCollector(60, 0.9)
+	at := NewAutoTuner(c, "qwen2.5:1.5b").WithABTesting(true)
+
+	// Initial win rate should be 0.5 (no data)
+	if wr := at.ABWinRate(); wr != 0.5 {
+		t.Errorf("initial win rate = %f, want 0.5", wr)
+	}
+
+	// Record some results
+	at.RecordABResult("tuned")
+	at.RecordABResult("tuned")
+	at.RecordABResult("base")
+
+	if wr := at.ABWinRate(); math.Abs(wr-2.0/3.0) > 0.01 {
+		t.Errorf("win rate = %f, want ~0.667", wr)
+	}
+
+	stats := at.Stats()
+	if stats.ABTotalTrials != 3 {
+		t.Errorf("ABTotalTrials = %d, want 3", stats.ABTotalTrials)
+	}
+	if stats.ABTunedWins != 2 {
+		t.Errorf("ABTunedWins = %d, want 2", stats.ABTunedWins)
+	}
+	if stats.ABBaseWins != 1 {
+		t.Errorf("ABBaseWins = %d, want 1", stats.ABBaseWins)
+	}
+}
+
+func TestShouldUseTunedDefaultsTrue(t *testing.T) {
+	c := newTestCollector(60, 0.9)
+	at := NewAutoTuner(c, "qwen2.5:1.5b").WithABTesting(true)
+
+	// With fewer than 10 trials, should default to tuned
+	for i := 0; i < 9; i++ {
+		at.RecordABResult("base")
+	}
+	if !at.ShouldUseTuned() {
+		t.Error("ShouldUseTuned should return true with <10 trials")
+	}
+}
+
+func TestShouldUseTunedRejectsAfterEnoughTrials(t *testing.T) {
+	c := newTestCollector(60, 0.9)
+	at := NewAutoTuner(c, "qwen2.5:1.5b").WithABTesting(true)
+
+	// Tuned wins less than 50% after 10+ trials
+	for i := 0; i < 7; i++ {
+		at.RecordABResult("base")
+	}
+	for i := 0; i < 3; i++ {
+		at.RecordABResult("tuned")
+	}
+	// 10 trials, tuned wins 3/10 = 30%
+	if at.ShouldUseTuned() {
+		t.Error("ShouldUseTuned should return false when tuned wins <50%")
+	}
+}
+
+func TestAdaptiveCooldownIncreasesOnFailure(t *testing.T) {
+	c := newTestCollector(60, 0.9)
+	mock := &mockCreator{err: errMock}
+	at := NewAutoTuner(c, "qwen2.5:1.5b").
+		WithCreator(mock).
+		WithCooldown(1 * time.Millisecond).
+		WithAdaptiveCooldown(true)
+
+	// First failure
+	at.Check()
+	stats := at.Stats()
+	if stats.ConsecutiveFails != 1 {
+		t.Errorf("consecutive fails = %d, want 1", stats.ConsecutiveFails)
+	}
+	// Cooldown should be doubled from base
+	if stats.EffectiveCooldown < 2*time.Millisecond {
+		t.Errorf("cooldown should increase after failure, got %v", stats.EffectiveCooldown)
+	}
+}
+
+func TestAdaptiveCooldownResetsOnSuccess(t *testing.T) {
+	c := newTestCollector(60, 0.9)
+	failMock := &mockCreator{err: errMock}
+	at := NewAutoTuner(c, "qwen2.5:1.5b").
+		WithCreator(failMock).
+		WithCooldown(1 * time.Millisecond).
+		WithAdaptiveCooldown(true)
+
+	// Cause 2 failures
+	at.Check()
+	time.Sleep(5 * time.Millisecond)
+	at.Check()
+
+	stats := at.Stats()
+	if stats.ConsecutiveFails != 2 {
+		t.Errorf("consecutive fails = %d, want 2", stats.ConsecutiveFails)
+	}
+
+	// Now succeed
+	successMock := &mockCreator{}
+	at.WithCreator(successMock)
+	// Wait for cooldown to expire before checking
+	time.Sleep(time.Duration(stats.EffectiveCooldown) + 10*time.Millisecond)
+	at.Check()
+
+	stats = at.Stats()
+	if stats.ConsecutiveFails != 0 {
+		t.Errorf("consecutive fails should reset to 0 on success, got %d", stats.ConsecutiveFails)
+	}
+}
+
+func TestAdaptiveCooldownCapsAt24Hours(t *testing.T) {
+	c := newTestCollector(60, 0.9)
+	at := NewAutoTuner(c, "qwen2.5:1.5b").
+		WithCooldown(1 * time.Hour).
+		WithAdaptiveCooldown(true)
+
+	// Simulate many failures
+	at.mu.Lock()
+	at.consecutiveFails = 10
+	at.mu.Unlock()
+
+	cd := at.adaptiveCooldownValue()
+	if cd > 24*time.Hour {
+		t.Errorf("cooldown should cap at 24h, got %v", cd)
+	}
+	if cd != 24*time.Hour {
+		t.Errorf("cooldown should be exactly 24h with many failures, got %v", cd)
+	}
+}
