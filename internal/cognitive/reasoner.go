@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -19,7 +20,13 @@ import (
 	"github.com/artaeon/nous/internal/tools"
 )
 
-const maxToolIterations = 6
+// maxToolIterations is the default maximum for complex queries.
+// Simple queries use fewer iterations; early exit reduces this further.
+const maxToolIterations = 8
+
+// confidenceThreshold determines when to exit early.
+// If confidence > 0.9 after at least 2 iterations, stop.
+const earlyExitConfidence = 0.9
 
 // Reasoner performs autonomous chain-of-thought inference with tool use.
 // It listens for percepts, reasons about them, and can autonomously chain
@@ -66,6 +73,8 @@ type Reasoner struct {
 	Growth           *PersonalGrowth
 	Ensemble         *ToolEnsemble
 	Feedback         *FeedbackLoop
+	ResponseCrystals *ResponseCrystalStore
+	EmbedCache       *EmbedCache
 	OnToken          func(token string, done bool)
 	OnStatus         func(status string)
 	Confirm          ConfirmFunc
@@ -118,6 +127,28 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 	r.Gate.Reset()
 	r.currentInput = percept.Raw
 	defer func() { r.currentInput = "" }()
+
+	// Crystal pre-check: before ANY classification or LLM call, check if
+	// CrystalBook or ResponseCrystals can serve this query instantly (~1ms).
+	if r.Crystals != nil {
+		if match := r.Crystals.Match(percept.Raw); match != nil && match.Confidence > 0.75 {
+			r.emitStatus(fmt.Sprintf("  %s↳ crystal-hit (%.0f%%)%s", ColorDim, match.Confidence*100, ColorReset))
+			if answer := r.executeCrystalMatch(percept, match); answer != "" {
+				return nil
+			}
+		}
+	}
+	if r.ResponseCrystals != nil {
+		if cached, ok := r.ResponseCrystals.Lookup(percept.Raw); ok {
+			r.emitStatus(fmt.Sprintf("  %s↳ response-crystal-hit%s", ColorDim, ColorReset))
+			r.Conv.User(percept.Raw)
+			r.Conv.Assistant(cached)
+			r.publishAnswer(cached)
+			r.finishReasoning(percept, NewPipeline(percept.Raw), cached)
+			return nil
+		}
+	}
+
 	recentConversation := recentConversationContext(r.Conv.Messages(), 6)
 
 	if r.AssistantAnswer != nil {
@@ -330,11 +361,34 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 	// JSON-in-text parsing, we rebuild fresh context from the pipeline each iteration.
 	var nativeConv *Conversation
 
-	for i := 0; i < maxToolIterations; i++ {
+	// Dynamic max iterations: simple queries get fewer, complex gets more
+	maxIter := maxToolIterations
+	if pipe.StepCount() == 0 {
+		// Will be adjusted after first iteration based on query complexity
+	}
+
+	for i := 0; i < maxIter; i++ {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
+		}
+
+		// Confidence-based early exit: if we have enough evidence after 2+ iterations,
+		// generate final answer instead of continuing to call tools
+		if i >= 2 && pipe.StepCount() >= 2 {
+			hasReflectorIssues := false
+			if reflection, ok := r.Board.Get("reflection"); ok {
+				if msg, isStr := reflection.(string); isStr && msg != "" {
+					hasReflectorIssues = true
+				}
+			}
+			hasCrystalMatch := r.Crystals != nil && r.Crystals.Match(percept.Raw) != nil
+
+			if !hasReflectorIssues && (hasCrystalMatch || i >= 4) {
+				r.emitStatus(fmt.Sprintf("  %s↳ early exit (iter %d, confident)%s", ColorDim, i, ColorReset))
+				break
+			}
 		}
 
 		if nativeConv != nil {
@@ -459,49 +513,41 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 			nativeConv = nil
 		}
 
-		// Execute tool calls
-		for _, tc := range toolCalls {
-			// Handle request_tools meta-tool
-			if tc.Name == "request_tools" {
-				cat := ToolCategory(tc.Args["category"])
-				newTools := ExpandCategory(cat, r.Tools.List(), r.activeTools)
-				if len(newTools) > 0 {
-					r.activeTools = append(r.activeTools, newTools...)
-					r.activeCats[cat] = true
-					names := CategoryNames(cat, r.Tools.List())
-					r.emitStatus(fmt.Sprintf("  %s+ %s%s", ColorDim, strings.Join(names, ", "), ColorReset))
-				}
-				continue
+		// Execute tool calls — safe tools run in parallel, dangerous ones sequentially
+		toolResults := r.executeToolCalls(toolCalls, i, pipe)
+
+		for idx, tr := range toolResults {
+			if tr.metaTool {
+				continue // already handled
 			}
 
-			start := time.Now()
-			result, toolErr := r.executeTool(tc)
-			duration := time.Since(start)
+			result := tr.result
+			toolErr := tr.err
 
 			// Emit tool status with duration
-			r.emitStatus(ToolStatus(tc.Name, formatArgs(tc.Args), duration))
+			r.emitStatus(ToolStatus(tr.tc.Name, formatArgs(tr.tc.Args), tr.duration))
 
 			// 3a. Smart truncation (tool-specific)
 			if toolErr == nil {
-				result = SmartTruncate(tc.Name, result)
+				result = SmartTruncate(tr.tc.Name, result)
 			}
 
 			// 3b. Result validation
-			result, hint := ValidateToolResult(tc.Name, result, toolErr)
+			result, hint := ValidateToolResult(tr.tc.Name, result, toolErr)
 
 			// Emit action_recorded for Reflector stream
 			r.Board.RecordAction(blackboard.ActionRecord{
-				StepID:    fmt.Sprintf("reason-%d-%d", i, len(pipe.steps)),
-				Tool:      tc.Name,
-				Input:     formatArgs(tc.Args),
+				StepID:    fmt.Sprintf("reason-%d-%d", i, len(pipe.steps)+idx),
+				Tool:      tr.tc.Name,
+				Input:     formatArgs(tr.tc.Args),
 				Output:    result,
 				Success:   toolErr == nil,
-				Duration:  duration,
+				Duration:  tr.duration,
 				Timestamp: time.Now(),
 			})
 
 			// 5. Synchronous reflection gate
-			gateCheck := r.Gate.Check(tc.Name, result, toolErr)
+			gateCheck := r.Gate.Check(tr.tc.Name, result, toolErr)
 
 			// Inject hints into result for pipeline compression
 			if hint != "" {
@@ -523,11 +569,11 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 
 			// Send tool result back via native API
 			if usedNativeAPI {
-				r.Conv.NativeToolResult(tc.Name, result)
+				r.Conv.NativeToolResult(tr.tc.Name, result)
 			}
 
 			// Compress and add to pipeline (used by both paths)
-			pipe.AddStep(tc.Name, result)
+			pipe.AddStep(tr.tc.Name, result)
 
 			// Force stop if gate says so
 			if gateCheck.ForceStop {
@@ -654,8 +700,142 @@ func (r *Reasoner) finalAnswerFromEvidence(userQuery, assistantFacts, memoryFact
 		return "", false, nil
 	}
 
+	// Draft-Critique-Refine: for complex queries with substantial evidence,
+	// run the draft through critique + refinement for higher quality answers.
+	if pipe.StepCount() >= 2 && len(answer) > 100 {
+		if refined, ok := r.draftCritiqueRefine(userQuery, answer, pipe, assistantFacts, memoryFacts); ok {
+			finalConv.Assistant(refined)
+			return refined, true, nil
+		}
+	}
+
 	finalConv.Assistant(answer)
 	return answer, true, nil
+}
+
+// draftCritiqueRefine improves a draft answer through critique and refinement.
+// Step 1: Firewall validates the draft deterministically (free, ~0ms).
+// Step 2: Short LLM call critiques the draft against evidence (~500ms).
+// Step 3: If critique finds issues, re-generate with critique as context (~1s).
+// Returns the refined answer and true, or empty and false if refinement wasn't needed.
+func (r *Reasoner) draftCritiqueRefine(query, draft string, pipe *Pipeline, assistantFacts, memoryFacts string) (string, bool) {
+	// Step 1: Deterministic firewall check
+	firewalled := draft
+	var violations []Violation
+	if r.Firewall != nil {
+		ctx := &FirewallContext{
+			Query:    query,
+			Response: draft,
+		}
+		if pipe != nil {
+			for _, s := range pipe.steps {
+				ctx.ToolResults = append(ctx.ToolResults, FirewallToolResult{
+					Tool:   s.ToolName,
+					Result: s.RawResult,
+				})
+			}
+		}
+		if CurrentProject != nil {
+			ctx.Language = CurrentProject.Language
+		}
+		firewalled, violations = r.Firewall.Validate(ctx)
+	}
+
+	// Step 2: LLM critique — ask the model to evaluate the draft
+	critiqueConv := NewConversation(5)
+	critiqueConv.System("You are a critique agent. Evaluate the draft answer against the evidence. List ONLY concrete issues: factual errors, missing key information, or contradictions with evidence. If the draft is good, respond with exactly 'LGTM'. Be terse — max 3 bullet points.")
+
+	var critiqueMsg strings.Builder
+	critiqueMsg.WriteString("Query: ")
+	critiqueMsg.WriteString(query)
+	critiqueMsg.WriteString("\n\nDraft answer:\n")
+	critiqueMsg.WriteString(firewalled)
+	if pipeCtx := pipe.BuildContext(); pipeCtx != "" {
+		critiqueMsg.WriteString("\n\nEvidence:\n")
+		critiqueMsg.WriteString(pipeCtx)
+	}
+	if len(violations) > 0 {
+		critiqueMsg.WriteString("\n\nFirewall corrections applied:")
+		for _, v := range violations {
+			critiqueMsg.WriteString(fmt.Sprintf("\n- %s: %s", v.Type, v.Description))
+		}
+	}
+	critiqueConv.User(critiqueMsg.String())
+
+	r.Conv = critiqueConv
+	critique, err := r.callLLM()
+	if err != nil {
+		// Critique failed — return firewall-corrected draft
+		if firewalled != draft {
+			return firewalled, true
+		}
+		return "", false
+	}
+
+	critique = strings.TrimSpace(critique)
+
+	// If critique says LGTM (or close), the draft is good
+	if strings.Contains(strings.ToUpper(critique), "LGTM") || critique == "" {
+		if firewalled != draft {
+			r.emitStatus(fmt.Sprintf("  %s↳ draft-critique: firewall-corrected%s", ColorDim, ColorReset))
+			return firewalled, true
+		}
+		return "", false // no refinement needed
+	}
+
+	r.emitStatus(fmt.Sprintf("  %s↳ draft-critique-refine: refining%s", ColorDim, ColorReset))
+
+	// Step 3: Refine — re-generate with critique as additional context
+	refineConv := NewConversation(10)
+	var sys strings.Builder
+	if r.PromptDist != nil {
+		lang := ""
+		if CurrentProject != nil {
+			lang = CurrentProject.Language
+		}
+		sys.WriteString(r.PromptDist.BuildFinalAnswerPrompt(lang))
+	} else {
+		sys.WriteString("You are Nous in final-answer mode. Give a direct plain-text answer using only the evidence already collected. Do not call tools. Do not emit JSON.")
+	}
+	if assistantFacts != "" {
+		sys.WriteString("\n")
+		sys.WriteString(assistantFacts)
+	}
+	if memoryFacts != "" {
+		sys.WriteString("\n")
+		sys.WriteString(memoryFacts)
+	}
+	refineConv.System(strings.TrimSpace(sys.String()))
+
+	var refineMsg strings.Builder
+	refineMsg.WriteString(query)
+	if pipeCtx := pipe.BuildContext(); pipeCtx != "" {
+		refineMsg.WriteString("\n\nEvidence summary:\n")
+		refineMsg.WriteString(pipeCtx)
+	}
+	refineMsg.WriteString("\n\n[Previous draft had these issues — fix them in your response:]\n")
+	refineMsg.WriteString(critique)
+	if len(violations) > 0 {
+		refineMsg.WriteString("\n\n[Firewall corrections already applied — do not reintroduce these errors.]")
+	}
+	refineConv.User(refineMsg.String())
+
+	r.Conv = refineConv
+	refined, err := r.callLLM()
+	if err != nil {
+		// Refinement failed — return firewall-corrected draft
+		return firewalled, true
+	}
+
+	refined = strings.TrimSpace(refined)
+	if refined == "" || looksLikeFailedToolCall(refined) {
+		return firewalled, true
+	}
+
+	// Final firewall pass on refined answer
+	refined = r.firewallCheck(refined, pipe)
+
+	return refined, true
 }
 
 // firewallCheck validates and corrects an LLM response using the cognitive firewall.
@@ -1581,10 +1761,10 @@ func (r *Reasoner) recallKeyFacts(input string) string {
 		// Try semantic retrieval first — find slots relevant to this query
 		var items []memory.Slot
 		if r.WorkingMem.Size() > 0 {
-			// Attempt semantic search via embedding
+			// Attempt semantic search via embedding (with cache)
 			if r.LLM != nil {
-				vec, err := r.LLM.Embed(input)
-				if err == nil && len(vec) > 0 {
+				vec := r.cachedEmbed(input)
+				if len(vec) > 0 {
 					items = r.WorkingMem.SemanticSearch(vec, 5)
 				}
 			}
@@ -2228,6 +2408,12 @@ func (r *Reasoner) finishReasoning(percept blackboard.Percept, pipe *Pipeline, f
 		}
 	}
 
+	// Cache response in crystals for future instant reuse.
+	// Full-pipeline answers are high quality — learn them at 0.8.
+	if r.ResponseCrystals != nil && len(finalAnswer) >= 20 && len(finalAnswer) <= 5000 {
+		go r.ResponseCrystals.Learn(percept.Raw, finalAnswer, 0.8)
+	}
+
 	r.storeToMemory(percept.Raw, finalAnswer)
 }
 
@@ -2321,4 +2507,164 @@ func (r *Reasoner) storeToMemory(input, answer string) {
 		// Store the user's self-introduction as a persistent fact
 		r.WorkingMem.Store("user_identity", input, 1.0)
 	}
+}
+
+// executeCrystalMatch executes a matched crystal's tool chain and returns a response.
+// Returns empty string if the crystal couldn't produce a valid response.
+func (r *Reasoner) executeCrystalMatch(percept blackboard.Percept, match *CrystalMatch) string {
+	crystal := match.Crystal
+	pipe := NewPipeline(percept.Raw)
+	synth := NewResponseSynthesizer()
+
+	var steps []synthStep
+	for _, step := range crystal.Steps {
+		tc := toolCall{Name: step.Tool, Args: step.Args}
+		start := time.Now()
+		result, toolErr := r.executeTool(tc)
+		duration := time.Since(start)
+		r.emitStatus(ToolStatus(tc.Name, formatArgs(tc.Args), duration))
+
+		if toolErr == nil {
+			result = SmartTruncate(tc.Name, result)
+		}
+		result, _ = ValidateToolResult(tc.Name, result, toolErr)
+		pipe.AddStep(tc.Name, result)
+
+		steps = append(steps, synthStep{
+			Tool:   step.Tool,
+			Args:   step.Args,
+			Result: result,
+			Err:    toolErr,
+		})
+	}
+
+	// Try to synthesize without LLM
+	if synth.CanSynthesize(crystal.Steps[0].Tool) {
+		answer := synth.SynthesizeMulti(percept.Raw, steps)
+		if answer != "" {
+			r.Crystals.ReportSuccess(crystal.ID)
+			r.Conv.User(percept.Raw)
+			r.Conv.Assistant(answer)
+			r.publishAnswer(answer)
+			r.finishReasoning(percept, pipe, answer)
+			return answer
+		}
+	}
+
+	// Crystal steps executed but synthesis failed — let the normal pipeline handle it
+	r.Crystals.ReportFailure(crystal.ID)
+	return ""
+}
+
+// safeParallelTools are tools that can execute concurrently (read-only, no side effects).
+var safeParallelTools = map[string]bool{
+	"read": true, "glob": true, "grep": true, "ls": true, "tree": true,
+	"sysinfo": true, "diff": true,
+}
+
+// toolExecResult holds the result of executing a single tool call.
+type toolExecResult struct {
+	tc       toolCall
+	result   string
+	err      error
+	duration time.Duration
+	metaTool bool // true if this was request_tools or similar
+}
+
+// executeToolCalls executes tool calls, running safe (read-only) tools in parallel
+// and dangerous (write/shell) tools sequentially. Returns results in original order.
+func (r *Reasoner) executeToolCalls(calls []toolCall, iteration int, pipe *Pipeline) []toolExecResult {
+	results := make([]toolExecResult, len(calls))
+
+	// Handle meta-tools first and partition into safe/dangerous
+	// Group consecutive safe tools for parallel execution
+	idx := 0
+	for idx < len(calls) {
+		tc := calls[idx]
+
+		// Handle request_tools meta-tool inline
+		if tc.Name == "request_tools" {
+			cat := ToolCategory(tc.Args["category"])
+			newTools := ExpandCategory(cat, r.Tools.List(), r.activeTools)
+			if len(newTools) > 0 {
+				r.activeTools = append(r.activeTools, newTools...)
+				r.activeCats[cat] = true
+				names := CategoryNames(cat, r.Tools.List())
+				r.emitStatus(fmt.Sprintf("  %s+ %s%s", ColorDim, strings.Join(names, ", "), ColorReset))
+			}
+			results[idx] = toolExecResult{tc: tc, metaTool: true}
+			idx++
+			continue
+		}
+
+		// Find a consecutive run of safe tools to parallelize
+		if safeParallelTools[tc.Name] {
+			end := idx + 1
+			for end < len(calls) && safeParallelTools[calls[end].Name] {
+				end++
+			}
+
+			if end-idx > 1 {
+				// Multiple safe tools — execute in parallel
+				var wg sync.WaitGroup
+				for j := idx; j < end; j++ {
+					wg.Add(1)
+					go func(pos int, call toolCall) {
+						defer wg.Done()
+						start := time.Now()
+						result, toolErr := r.executeTool(call)
+						results[pos] = toolExecResult{
+							tc:       call,
+							result:   result,
+							err:      toolErr,
+							duration: time.Since(start),
+						}
+					}(j, calls[j])
+				}
+				wg.Wait()
+				idx = end
+				continue
+			}
+		}
+
+		// Single tool or dangerous tool — execute sequentially
+		start := time.Now()
+		result, toolErr := r.executeTool(tc)
+		results[idx] = toolExecResult{
+			tc:       tc,
+			result:   result,
+			err:      toolErr,
+			duration: time.Since(start),
+		}
+		idx++
+	}
+
+	return results
+}
+
+// cachedEmbed returns the embedding for text, using the EmbedCache to avoid
+// redundant calls. Falls back to direct LLM.Embed if no cache is configured.
+func (r *Reasoner) cachedEmbed(text string) []float64 {
+	if r.LLM == nil {
+		return nil
+	}
+
+	// Check cache first
+	if r.EmbedCache != nil {
+		if vec := r.EmbedCache.Get(text); vec != nil {
+			return vec
+		}
+	}
+
+	vec, err := r.LLM.Embed(text)
+	if err != nil || len(vec) == 0 {
+		return nil
+	}
+
+	// Store in cache
+	if r.EmbedCache != nil {
+		r.EmbedCache.Put(text, vec)
+	}
+
+	return vec
 }
