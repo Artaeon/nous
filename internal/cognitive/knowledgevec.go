@@ -3,11 +3,12 @@ package cognitive
 import (
 	"bufio"
 	"encoding/json"
-	"math"
 	"os"
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/artaeon/nous/internal/simd"
 )
 
 // KnowledgeVec is a vector knowledge store that gives Nous access to
@@ -355,22 +356,7 @@ func (kv *KnowledgeVec) Load() error {
 	return nil
 }
 
-// cosineSim computes cosine similarity between two vectors.
+// cosineSim delegates to the shared SIMD-optimized implementation.
 func cosineSim(a, b []float64) float64 {
-	if len(a) != len(b) || len(a) == 0 {
-		return 0
-	}
-
-	var dot, normA, normB float64
-	for i := range a {
-		dot += a[i] * b[i]
-		normA += a[i] * a[i]
-		normB += b[i] * b[i]
-	}
-
-	denom := math.Sqrt(normA) * math.Sqrt(normB)
-	if denom == 0 {
-		return 0
-	}
-	return dot / denom
+	return simd.CosineSimilarity(a, b)
 }

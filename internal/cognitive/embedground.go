@@ -1,10 +1,11 @@
 package cognitive
 
 import (
-	"math"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/artaeon/nous/internal/simd"
 )
 
 // EmbedGrounder uses embedding vectors as a semantic secondary brain.
@@ -368,20 +369,5 @@ func (gr *GroundedResult) FormatGroundingContext() string {
 
 // embedCosineSimilarity computes cosine similarity between two vectors.
 func embedCosineSimilarity(a, b []float64) float64 {
-	if len(a) != len(b) || len(a) == 0 {
-		return 0
-	}
-
-	var dot, normA, normB float64
-	for i := range a {
-		dot += a[i] * b[i]
-		normA += a[i] * a[i]
-		normB += b[i] * b[i]
-	}
-
-	denom := math.Sqrt(normA) * math.Sqrt(normB)
-	if denom == 0 {
-		return 0
-	}
-	return dot / denom
+	return simd.CosineSimilarity(a, b)
 }

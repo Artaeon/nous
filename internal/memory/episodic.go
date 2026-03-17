@@ -2,7 +2,6 @@ package memory
 
 import (
 	"encoding/json"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +9,7 @@ import (
 	"time"
 
 	"github.com/artaeon/nous/internal/safefile"
+	"github.com/artaeon/nous/internal/simd"
 )
 
 // Episode is a single interaction stored with full context.
@@ -176,7 +176,7 @@ func (em *EpisodicMemory) SearchSemantic(queryVec []float64, limit int) []Episod
 		if len(ep.Embedding) == 0 {
 			continue
 		}
-		sim := cosineSimilarity(queryVec, ep.Embedding)
+		sim := simd.CosineSimilarity(queryVec, ep.Embedding)
 		if sim > 0.3 { // minimum similarity threshold
 			matches = append(matches, scored{ep: ep, score: sim})
 		}
@@ -604,24 +604,7 @@ func extractTags(input string) []string {
 	return tags
 }
 
-// cosineSimilarity computes the cosine similarity between two vectors.
-// Returns 0.0-1.0 (higher = more similar).
+// cosineSimilarity delegates to the shared SIMD-optimized implementation.
 func cosineSimilarity(a, b []float64) float64 {
-	if len(a) != len(b) || len(a) == 0 {
-		return 0
-	}
-
-	var dot, normA, normB float64
-	for i := range a {
-		dot += a[i] * b[i]
-		normA += a[i] * a[i]
-		normB += b[i] * b[i]
-	}
-
-	denom := math.Sqrt(normA) * math.Sqrt(normB)
-	if denom == 0 {
-		return 0
-	}
-
-	return dot / denom
+	return simd.CosineSimilarity(a, b)
 }
