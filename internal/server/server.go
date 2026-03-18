@@ -32,6 +32,11 @@ type Server struct {
 	apiKey     string
 	server     *http.Server
 
+	// New architecture: NLU → Action → Response (max 1 LLM call)
+	nlu       *cognitive.NLU
+	actions   *cognitive.ActionRouter
+	formatter *cognitive.ResponseFormatter
+
 	// Extended data sources for dashboard/memory endpoints
 	workingMem  *memory.WorkingMemory
 	longTermMem *memory.LongTermMemory
@@ -118,6 +123,8 @@ func New(addr string, board *blackboard.Blackboard, perceiver *cognitive.Perceiv
 		perceiver:  perceiver,
 		assistant:  assistantStore,
 		classifier: &cognitive.FastPathClassifier{},
+		nlu:        cognitive.NewNLU(),
+		actions:    cognitive.NewActionRouter(),
 		jobs:       NewJobManager(),
 		addr:       addr,
 		apiKey:     apiKey,
@@ -129,6 +136,10 @@ func New(addr string, board *blackboard.Blackboard, perceiver *cognitive.Perceiv
 func (s *Server) SetFastPath(responder *cognitive.FastPathResponder, conv *cognitive.Conversation) {
 	s.fastPath = responder
 	s.conv = conv
+	// Wire the response formatter with the same LLM
+	if responder != nil && responder.LLM != nil {
+		s.formatter = &cognitive.ResponseFormatter{LLM: responder.LLM}
+	}
 }
 
 // SetDataSources connects memory, tools, training, and session subsystems
@@ -140,6 +151,14 @@ func (s *Server) SetDataSources(wm *memory.WorkingMemory, ltm *memory.LongTermMe
 	s.toolReg = tr
 	s.collector = col
 	s.sessions = sess
+
+	// Wire action router with data sources
+	if s.actions != nil {
+		s.actions.Tools = tr
+		s.actions.WorkingMem = wm
+		s.actions.LongTermMem = ltm
+		s.actions.EpisodicMem = em
+	}
 }
 
 // Start begins listening for HTTP requests.
@@ -194,7 +213,28 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 
 		start := time.Now()
 
-		// Fast/medium path: skip perceiver entirely for simple queries.
+		// NEW: NLU → Action → Response pipeline (max 1 LLM call)
+		if s.nlu != nil && s.actions != nil && s.conv != nil {
+			nluResult := s.nlu.Understand(message)
+			if nluResult.Confidence >= 0.5 {
+				actionResult := s.actions.Execute(nluResult, s.conv)
+				if actionResult.DirectResponse != "" {
+					s.conv.User(message)
+					s.conv.Assistant(actionResult.DirectResponse)
+					return actionResult.DirectResponse, time.Since(start).Milliseconds()
+				}
+				if actionResult.NeedsLLM && s.formatter != nil {
+					answer, err := s.formatter.Format(message, actionResult, s.conv)
+					if err == nil {
+						s.conv.User(message)
+						s.conv.Assistant(answer)
+						return answer, time.Since(start).Milliseconds()
+					}
+				}
+			}
+		}
+
+		// LEGACY: Fast/medium path
 		if s.fastPath != nil && s.conv != nil {
 			path := s.classifier.ClassifyQuery(message)
 			if path == cognitive.PathFast || path == cognitive.PathMedium {
@@ -202,10 +242,10 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 				if err == nil {
 					return answer, time.Since(start).Milliseconds()
 				}
-				// Fall through to full pipeline on error.
 			}
 		}
 
+		// Full pipeline fallback
 		reqCounter++
 		answerKey := fmt.Sprintf("last_answer_%d", reqCounter)
 		s.board.Set("answer_key", answerKey)
@@ -274,13 +314,71 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 
 		start := time.Now()
 
-		// Try streaming fast/medium path
+		// === NEW ARCHITECTURE: NLU → Action → Response ===
+		// Maximum 1 LLM call (response formatting). Most queries need 0.
+		if s.nlu != nil && s.actions != nil && s.conv != nil {
+			nluResult := s.nlu.Understand(message)
+
+			// High-confidence NLU result → deterministic action
+			if nluResult.Confidence >= 0.5 {
+				actionResult := s.actions.Execute(nluResult, s.conv)
+
+				// Direct response (greetings, math, dates) → 0 LLM calls
+				if actionResult.DirectResponse != "" {
+					s.conv.User(message)
+					s.conv.Assistant(actionResult.DirectResponse)
+					tokenJSON, _ := json.Marshal(actionResult.DirectResponse)
+					fmt.Fprintf(w, "data: {\"t\":%s,\"d\":false}\n\n", tokenJSON)
+					flusher.Flush()
+					ms := time.Since(start).Milliseconds()
+					fmt.Fprintf(w, "data: {\"t\":\"\",\"d\":true,\"ms\":%d}\n\n", ms)
+					flusher.Flush()
+
+					// Learn for crystal cache
+					if s.fastPath != nil && s.fastPath.ResponseCrystals != nil && len(actionResult.DirectResponse) > 20 {
+						s.fastPath.ResponseCrystals.Learn(message, actionResult.DirectResponse, 0.8)
+					}
+					return
+				}
+
+				// Action gathered data → 1 LLM call to format response
+				if actionResult.NeedsLLM && s.formatter != nil {
+					s.conv.User(message)
+					var answer string
+					_, err := s.formatter.FormatStream(message, actionResult, s.conv, func(token string, done bool) {
+						if done {
+							if token != "" {
+								tokenJSON, _ := json.Marshal(token)
+								fmt.Fprintf(w, "data: {\"t\":%s,\"d\":false}\n\n", tokenJSON)
+								flusher.Flush()
+							}
+							ms := time.Since(start).Milliseconds()
+							fmt.Fprintf(w, "data: {\"t\":\"\",\"d\":true,\"ms\":%d}\n\n", ms)
+						} else {
+							answer += token
+							tokenJSON, _ := json.Marshal(token)
+							fmt.Fprintf(w, "data: {\"t\":%s,\"d\":false}\n\n", tokenJSON)
+						}
+						flusher.Flush()
+					})
+					if err == nil {
+						s.conv.Assistant(strings.TrimSpace(answer))
+						if s.fastPath != nil && s.fastPath.ResponseCrystals != nil && len(answer) > 20 {
+							s.fastPath.ResponseCrystals.Learn(message, strings.TrimSpace(answer), 0.7)
+						}
+						return
+					}
+					// LLM formatting failed — fall through to legacy pipeline
+				}
+			}
+		}
+
+		// === LEGACY FALLBACK: Crystal cache + fast/medium path ===
 		if s.fastPath != nil && s.conv != nil {
 			path := s.classifier.ClassifyQuery(message)
 			if path == cognitive.PathFast || path == cognitive.PathMedium {
 				_, err := s.fastPath.RespondStreamWithPathFull(s.conv, message, path, func(token string, done bool) {
 					if done {
-						// Crystal/greeting hits send full text with done=true — emit text first
 						if token != "" {
 							tokenJSON, _ := json.Marshal(token)
 							fmt.Fprintf(w, "data: {\"t\":%s,\"d\":false}\n\n", tokenJSON)
@@ -300,7 +398,7 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 			}
 		}
 
-		// Full pipeline fallback — non-streaming, send complete answer as single event
+		// Full pipeline fallback — non-streaming
 		reqCounter++
 		answerKey := fmt.Sprintf("last_answer_%d", reqCounter)
 		s.board.Set("answer_key", answerKey)
