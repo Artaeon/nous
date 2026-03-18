@@ -539,7 +539,12 @@ func KnowledgeSource(kv *KnowledgeVec) ContextSource {
 			}
 			var slices []ContextSlice
 			for _, r := range results {
-				if r.Score < 0.3 {
+				if r.Score < 0.5 {
+					continue
+				}
+				// Filter out code-indexed content — it contaminates general Q&A.
+				// Code sources have file-path-like source strings (contain "/" or ".go", ".py", etc.)
+				if isCodeSource(r.Source) {
 					continue
 				}
 				slices = append(slices, ContextSlice{
@@ -721,4 +726,96 @@ func (vc *VirtualContext) UpdateSourceSize(name string, newSize int) {
 			return
 		}
 	}
+}
+
+// isCodeSource returns true if a knowledge source string looks like code-indexed content.
+// Code sources typically have file paths or code-file extensions as their source identifier.
+func isCodeSource(source string) bool {
+	if source == "" {
+		return false
+	}
+	// File path patterns
+	if strings.Contains(source, "/") || strings.Contains(source, "\\") {
+		return true
+	}
+	// Code file extensions
+	codeExts := []string{".go", ".py", ".js", ".ts", ".rs", ".java", ".c", ".cpp", ".h", ".rb", ".sh", ".yaml", ".yml", ".toml", ".json"}
+	lower := strings.ToLower(source)
+	for _, ext := range codeExts {
+		if strings.HasSuffix(lower, ext) {
+			return true
+		}
+	}
+	// Explicit code-index markers
+	if strings.HasPrefix(lower, "code:") || strings.HasPrefix(lower, "codeindex:") || strings.HasPrefix(lower, "index:") {
+		return true
+	}
+	return false
+}
+
+// WeaveForPath assembles context filtered by query path.
+// For PathFast, only personal/growth sources are included (no episodic or code knowledge).
+// For PathMedium, episodic is included but code knowledge is still filtered.
+// For PathFull, all sources are included.
+func (vc *VirtualContext) WeaveForPath(query string, path QueryPath) *ContextAssembly {
+	vc.mu.Lock()
+	vc.totalQueries++
+	vc.mu.Unlock()
+
+	vc.mu.RLock()
+	var sources []ContextSource
+	for _, s := range vc.sources {
+		switch path {
+		case PathFast:
+			// Fast path: only personal context and working memory — no episodic or knowledge
+			if s.Type == SourcePersonal || s.Type == SourceWorking {
+				sources = append(sources, s)
+			}
+		case PathMedium:
+			// Medium path: personal + episodic, but NOT domain/code knowledge
+			if s.Type != SourceDomain {
+				sources = append(sources, s)
+			}
+		default:
+			// Full path: everything
+			sources = append(sources, s)
+		}
+	}
+	vc.mu.RUnlock()
+
+	if len(sources) == 0 {
+		return &ContextAssembly{VirtualSize: 0}
+	}
+
+	// Phase 1: Allocate budget
+	budgets := vc.allocateBudgets(sources)
+
+	// Phase 2: Query each source concurrently
+	type sourceResult struct {
+		slices []ContextSlice
+	}
+	results := make([]sourceResult, len(sources))
+	var wg sync.WaitGroup
+	for i, source := range sources {
+		if budgets[i] <= 0 || source.Query == nil {
+			continue
+		}
+		wg.Add(1)
+		go func(idx int, src ContextSource, budget int) {
+			defer wg.Done()
+			results[idx].slices = src.Query(query, budget)
+		}(i, source, budgets[i])
+	}
+	wg.Wait()
+
+	var allSlices []ContextSlice
+	for _, r := range results {
+		allSlices = append(allSlices, r.slices...)
+	}
+
+	// Phase 3: Rank and fit into budget
+	assembly := vc.assembleContext(allSlices)
+	assembly.VirtualSize = vc.TotalSize()
+
+	return assembly
 }

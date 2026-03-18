@@ -205,6 +205,40 @@ func (ar *ActionRouter) handleWebSearch(nlu *NLUResult) *ActionResult {
 	if err != nil {
 		return &ActionResult{Data: fmt.Sprintf("search error: %v", err), Source: "web", NeedsLLM: true}
 	}
+	// If we got results, format top 3 as a direct response — no LLM needed.
+	if result != "" && !strings.HasPrefix(result, "No results found") {
+		lines := strings.Split(strings.TrimSpace(result), "\n")
+		// Extract at most 3 result blocks (each block: number+title, url, snippet, blank).
+		var formatted []string
+		count := 0
+		for i := 0; i < len(lines) && count < 3; i++ {
+			line := strings.TrimSpace(lines[i])
+			if line == "" {
+				continue
+			}
+			// Detect a numbered result line like "1. Title"
+			if len(line) > 2 && line[0] >= '1' && line[0] <= '9' && line[1] == '.' {
+				block := line
+				// Gather indented continuation lines (URL, snippet).
+				for i+1 < len(lines) {
+					next := lines[i+1]
+					if strings.HasPrefix(next, "   ") && strings.TrimSpace(next) != "" {
+						block += "\n" + next
+						i++
+					} else {
+						break
+					}
+				}
+				formatted = append(formatted, block)
+				count++
+			}
+		}
+		if len(formatted) > 0 {
+			direct := fmt.Sprintf("Here's what I found for \"%s\":\n\n%s", query, strings.Join(formatted, "\n\n"))
+			return &ActionResult{DirectResponse: direct, Source: "web"}
+		}
+	}
+	// No usable results — let LLM explain.
 	return &ActionResult{Data: result, Source: "web", NeedsLLM: true}
 }
 
@@ -344,6 +378,31 @@ func (ar *ActionRouter) handleLookupMemory(nlu *NLUResult) *ActionResult {
 	if len(parts) == 0 {
 		return &ActionResult{Data: "no relevant memories found", Source: "memory", NeedsLLM: true}
 	}
+
+	// Simple recall: if there's exactly one longterm fact, return it directly.
+	// This handles "what is my name", "what's my email", etc. without an LLM call.
+	var longtermParts []string
+	for _, p := range parts {
+		if strings.HasPrefix(p, "[longterm]") {
+			longtermParts = append(longtermParts, p)
+		}
+	}
+	if len(longtermParts) == 1 && len(parts) <= 2 {
+		// Extract the value from "[longterm] key: value"
+		fact := longtermParts[0]
+		if idx := strings.Index(fact, ": "); idx > 0 {
+			// Find the actual value after the first ": " past the prefix
+			afterPrefix := strings.TrimPrefix(fact, "[longterm] ")
+			if valIdx := strings.Index(afterPrefix, ": "); valIdx > 0 {
+				value := afterPrefix[valIdx+2:]
+				if value != "" {
+					return &ActionResult{DirectResponse: value, Source: "memory"}
+				}
+			}
+		}
+	}
+
+	// Multiple facts or complex queries — let LLM synthesize.
 	return &ActionResult{Data: strings.Join(parts, "\n"), Source: "memory", NeedsLLM: true}
 }
 
@@ -395,6 +454,23 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 		}
 		return &ActionResult{Data: query, Source: "knowledge", NeedsLLM: true}
 	}
+
+	// Single high-confidence result — return directly without LLM.
+	if ar.Knowledge != nil {
+		results, err := ar.Knowledge.Search(query, 5)
+		if err == nil && len(results) > 0 && results[0].Score > 0.7 {
+			// Check if there's a clear single winner (top result far above others).
+			if len(results) == 1 || (len(results) > 1 && results[0].Score-results[1].Score > 0.15) {
+				return &ActionResult{
+					DirectResponse: results[0].Text,
+					Source:         "knowledge",
+					Structured:     map[string]string{"source": results[0].Source, "score": fmt.Sprintf("%.2f", results[0].Score)},
+				}
+			}
+		}
+	}
+
+	// Multiple results or ambiguous — let LLM synthesize.
 	return &ActionResult{Data: strings.Join(parts, "\n"), Source: "knowledge", NeedsLLM: true}
 }
 
@@ -434,11 +510,33 @@ func (ar *ActionRouter) handleSchedule(nlu *NLUResult) *ActionResult {
 		}
 	}
 
+	// Build a human-readable confirmation directly — no LLM needed.
+	task := nlu.Entities["task"]
+	if task == "" {
+		task = nlu.Entities["topic"]
+	}
+	if task == "" {
+		task = nlu.Raw
+	}
+	when := nlu.Entities["when"]
+	var msg string
+	if parsedTime, ok := structured["parsed_time"]; ok {
+		// Parse the RFC3339 time back for friendly formatting.
+		if t, err := time.Parse(time.RFC3339, parsedTime); err == nil {
+			msg = fmt.Sprintf("Got it! I've scheduled \"%s\" for %s.", task, t.Format("Monday, January 2 at 3:04 PM"))
+		} else {
+			msg = fmt.Sprintf("Got it! I've scheduled \"%s\" for %s.", task, when)
+		}
+	} else if when != "" {
+		msg = fmt.Sprintf("Got it! I've scheduled \"%s\" for %s.", task, when)
+	} else {
+		msg = fmt.Sprintf("Got it! I've noted the task: \"%s\".", task)
+	}
+
 	return &ActionResult{
-		Data:       fmt.Sprintf("Task scheduled: %s", nlu.Entities["task"]),
-		Structured: structured,
-		Source:     "schedule",
-		NeedsLLM:  true,
+		DirectResponse: msg,
+		Structured:     structured,
+		Source:         "schedule",
 	}
 }
 
@@ -674,12 +772,14 @@ func (ar *ActionRouter) handleLLMChat(nlu *NLUResult, conv *Conversation) *Actio
 	}
 
 	// Weave virtual context for richer grounding.
+	// Use PathMedium filtering for conversational queries to prevent
+	// code-indexed content from contaminating general Q&A responses.
 	if ar.VCtx != nil {
 		query := nlu.Entities["topic"]
 		if query == "" {
 			query = nlu.Raw
 		}
-		assembly := ar.VCtx.Weave(query)
+		assembly := ar.VCtx.WeaveForPath(query, PathMedium)
 		if woven := assembly.FormatForPrompt(); woven != "" {
 			context = append(context, woven)
 		}

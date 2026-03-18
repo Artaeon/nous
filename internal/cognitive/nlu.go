@@ -36,6 +36,10 @@ type NLU struct {
 	explainVerbs     []string
 	computeVerbs     []string
 
+	recommendVerbs []string
+	compareVerbs   []string
+	compareVsRe    *regexp.Regexp // matches "X vs Y" patterns
+
 	// web-lookup signals: topics that require external/current knowledge
 	currentEventWords []string
 	webLookupPatterns []*regexp.Regexp
@@ -60,7 +64,7 @@ type NLU struct {
 func NewNLU() *NLU {
 	n := &NLU{
 		greetings: []string{
-			"hi", "hello", "hey", "howdy", "hiya", "yo",
+			"hi", "hello", "hey", "hey there", "howdy", "hiya", "yo",
 			"good morning", "good afternoon", "good evening", "good night",
 			"morning", "evening", "afternoon",
 			"what's up", "whats up", "sup", "greetings", "salutations",
@@ -69,6 +73,7 @@ func NewNLU() *NLU {
 			"bye", "goodbye", "good bye", "see ya", "see you", "later",
 			"farewell", "ciao", "adios", "peace", "take care",
 			"good night", "gn", "ttyl", "talk later",
+			"gotta go", "catch you later",
 		},
 		affirmatives: []string{
 			"yes", "yeah", "yep", "yup", "sure", "ok", "okay", "k",
@@ -93,6 +98,9 @@ func NewNLU() *NLU {
 
 		questionPrefixes: []string{
 			"what", "who", "where", "when", "why", "how",
+			"how come ", "why does ", "why is ",
+			"what makes ", "who invented ", "when was ", "where is ",
+			"is it true that ",
 			"is ", "are ", "was ", "were ", "do ", "does ", "did ",
 			"can ", "could ", "would ", "should ", "will ",
 			"has ", "have ", "had ",
@@ -139,6 +147,14 @@ func NewNLU() *NLU {
 			"what is", // followed by math
 			"convert", "how much is", "how many",
 		},
+		recommendVerbs: []string{
+			"suggest", "recommend", "any tips", "advice on",
+			"what should i", "what would you suggest",
+		},
+		compareVerbs: []string{
+			"difference between", "compare", "better than", "worse than",
+		},
+		compareVsRe: regexp.MustCompile(`(?i)\b\w+\s+vs\.?\s+\w+`),
 		currentEventWords: []string{
 			"score", "scores", "won", "winning", "lost",
 			"price", "stock", "market", "trading",
@@ -147,12 +163,22 @@ func NewNLU() *NLU {
 		},
 
 		weatherWords: []string{
-			"weather", "forecast", "temperature outside", "how hot", "how cold",
+			"weather", "forecast", "temperature", "how hot", "how cold",
 			"is it raining", "will it rain", "is it sunny",
+			"degrees outside", "what's it like outside",
 		},
 		convertWords: []string{
 			"miles to", "km to", "pounds to", "kg to", "celsius to", "fahrenheit to",
 			"gallons to", "liters to", "inches to", "feet to", "meters to",
+			"to miles", "to km", "to kilometers", "to pounds", "to kg",
+			"to celsius", "to fahrenheit", "to gallons", "to liters",
+			"to inches", "to feet", "to meters", "to centimeters",
+			"in miles", "in km", "in kilometers", "in pounds", "in kg",
+			"in celsius", "in fahrenheit",
+			"how many miles", "how many km", "how many kilometers",
+			"how many pounds", "how many kg", "how many kilograms",
+			"how many gallons", "how many liters", "how many litres",
+			"how many inches", "how many feet", "how many meters", "how many metres",
 			"usd to", "eur to", "gbp to", "dollars to", "euros to", "pounds to",
 			"mph to", "bytes to", "mb to", "gb to",
 		},
@@ -474,6 +500,32 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 		}
 	}
 
+	// 6e. Recommendation patterns
+	for _, v := range n.recommendVerbs {
+		if strings.Contains(lower, v) {
+			r.Intent = "recommendation"
+			r.Confidence = 0.85
+			r.Entities["topic"] = n.extractTopic(lower, v)
+			return
+		}
+	}
+
+	// 6f. Comparison patterns ("X vs Y", "difference between", etc.)
+	if n.compareVsRe.MatchString(lower) {
+		r.Intent = "compare"
+		r.Confidence = 0.85
+		r.Entities["topic"] = n.extractTopicGeneral(lower)
+		return
+	}
+	for _, v := range n.compareVerbs {
+		if strings.Contains(lower, v) {
+			r.Intent = "compare"
+			r.Confidence = 0.85
+			r.Entities["topic"] = n.extractTopic(lower, v)
+			return
+		}
+	}
+
 	// 7. Plan/schedule
 	for _, v := range n.planVerbs {
 		if strings.Contains(lower, v) {
@@ -700,6 +752,11 @@ func (n *NLU) mapAction(lower string, r *NLUResult) {
 		r.Action = "run_code"
 	case "find_files":
 		r.Action = "find_files"
+
+	case "recommendation":
+		r.Action = "lookup_knowledge"
+	case "compare":
+		r.Action = "lookup_knowledge"
 
 	case "remember":
 		r.Action = "lookup_memory" // store to memory

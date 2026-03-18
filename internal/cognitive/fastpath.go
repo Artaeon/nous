@@ -238,28 +238,90 @@ func (r *FastPathResponder) Respond(conv *Conversation, query string) (string, e
 // quickGreetings maps trivial inputs to instant responses — no LLM call needed.
 // This is faster (0ms vs 500ms) and better quality than what tiny models generate.
 var quickGreetings = map[string][]string{
-	"hello":         {"Hello! How can I help you today?", "Hey there! What are you working on?", "Hi! Ready to help."},
-	"hi":            {"Hi! What can I do for you?", "Hey! What are we working on?", "Hello! How can I help?"},
-	"hey":           {"Hey! What's up?", "Hi there! Ready when you are.", "Hey! How can I help?"},
-	"yo":            {"Yo! What's the task?", "Hey! What do you need?"},
-	"sup":           {"Not much — ready to help! What's up?", "All good here. What do you need?"},
-	"howdy":         {"Howdy! What can I help with?"},
-	"thanks":        {"You're welcome!", "Happy to help!", "Anytime!"},
-	"thanks!":       {"You're welcome! Let me know if you need anything else.", "Glad I could help!"},
-	"thank you":     {"You're welcome!", "Happy to help! Let me know if there's anything else."},
-	"thx":           {"No problem!", "Anytime!"},
-	"bye":           {"See you later!", "Bye! Happy coding."},
-	"goodbye":       {"Goodbye! See you next time.", "Take care!"},
-	"ok":            {"Got it. Let me know if you need anything.", "Alright!"},
-	"cool":          {"Glad that works! Anything else?"},
-	"great":         {"Glad to hear it! Need anything else?"},
-	"awesome":       {"Thanks! Let me know if there's more to do."},
-	"perfect":       {"Glad that's what you needed!"},
-	"nice":          {"Thanks! What's next?"},
-	"got it":        {"Good. Ready for the next task.", "Alright, what's next?"},
-	"good morning":  {"Good morning! What are we tackling today?"},
-	"good afternoon": {"Good afternoon! How can I help?"},
-	"good evening":  {"Good evening! What are you working on?"},
+	// Greetings
+	"hello":            {"Hello! How can I help you today?", "Hey there! What are you working on?", "Hi! Ready to help."},
+	"hello there":      {"Hello! What can I do for you?", "Hey there! How can I help?"},
+	"hi":               {"Hi! What can I do for you?", "Hey! What are we working on?", "Hello! How can I help?"},
+	"hi there":         {"Hi there! What are you working on?", "Hey! How can I help?"},
+	"hey":              {"Hey! What's up?", "Hi there! Ready when you are.", "Hey! How can I help?"},
+	"hey there":        {"Hey there! What can I do for you?", "Hey! Ready when you are."},
+	"yo":               {"Yo! What's the task?", "Hey! What do you need?"},
+	"sup":              {"Not much — ready to help! What's up?", "All good here. What do you need?"},
+	"what's up":        {"Not much — ready to help! What are you working on?", "All good! What do you need?"},
+	"whats up":         {"Not much — ready to help! What are you working on?", "All good! What do you need?"},
+	"howdy":            {"Howdy! What can I help with?"},
+	"greetings":        {"Greetings! What can I help you with?", "Hello! How can I help?"},
+	"hola":             {"Hola! How can I help you today?"},
+	"bonjour":          {"Bonjour! What can I do for you?"},
+	"good morning":     {"Good morning! What are we tackling today?", "Morning! How can I help?"},
+	"morning":          {"Morning! What are we working on today?", "Good morning! How can I help?"},
+	"good afternoon":   {"Good afternoon! How can I help?", "Afternoon! What are you working on?"},
+	"good evening":     {"Good evening! What are you working on?", "Evening! How can I help?"},
+	"good night":       {"Good night! See you next time.", "Night! Happy coding."},
+
+	// Thanks
+	"thanks":           {"You're welcome!", "Happy to help!", "Anytime!"},
+	"thanks!":          {"You're welcome! Let me know if you need anything else.", "Glad I could help!"},
+	"thank you":        {"You're welcome!", "Happy to help! Let me know if there's anything else."},
+	"thank you so much": {"You're very welcome! Let me know if there's anything else.", "Happy to help!"},
+	"thanks a lot":     {"You're welcome! Glad I could help.", "Anytime!"},
+	"thanks so much":   {"You're very welcome!", "Happy to help!"},
+	"thx":              {"No problem!", "Anytime!"},
+	"ty":               {"You're welcome!", "No problem!"},
+	"much appreciated": {"Happy to help! Let me know if you need anything else.", "You're welcome!"},
+	"appreciate it":    {"You're welcome! Let me know if there's more.", "Glad I could help!"},
+
+	// Farewells
+	"bye":              {"See you later!", "Bye! Happy coding."},
+	"goodbye":          {"Goodbye! See you next time.", "Take care!"},
+	"see ya":           {"See ya! Happy coding.", "Later!"},
+	"see you":          {"See you! Take care.", "Later!"},
+	"see you later":    {"See you later! Happy coding.", "Later!"},
+	"later":            {"Later! Happy coding.", "See you!"},
+	"ciao":             {"Ciao! See you next time.", "Ciao!"},
+	"take care":        {"You too! See you later.", "Take care!"},
+	"have a good one":  {"You too! See you later.", "Thanks, you too!"},
+	"gotta go":         {"See you later! Happy coding.", "Later!"},
+	"ttyl":             {"Talk to you later!", "Later!"},
+	"peace":            {"Peace! See you next time.", "Later!"},
+	"night":            {"Good night! See you next time.", "Night!"},
+	"nite":             {"Good night! See you later.", "Night!"},
+
+	// Acknowledgments
+	"ok":               {"Got it. Let me know if you need anything.", "Alright!"},
+	"okay":             {"Got it. Let me know if you need anything.", "Alright!"},
+	"k":                {"Got it. What's next?"},
+	"cool":             {"Glad that works! Anything else?"},
+	"great":            {"Glad to hear it! Need anything else?"},
+	"awesome":          {"Thanks! Let me know if there's more to do."},
+	"perfect":          {"Glad that's what you needed!"},
+	"nice":             {"Thanks! What's next?"},
+	"sweet":            {"Glad it works! What's next?"},
+	"wonderful":        {"Glad to hear it! Anything else?"},
+	"excellent":        {"Thanks! Let me know if there's more to do."},
+	"got it":           {"Good. Ready for the next task.", "Alright, what's next?"},
+	"understood":       {"Good. Let me know if you need anything else.", "Ready for the next task."},
+	"noted":            {"Got it. What's next?", "Noted. Anything else?"},
+	"sure":             {"Alright! What do you need?", "Sure thing! How can I help?"},
+	"yep":              {"Got it. What's next?"},
+	"yeah":             {"Got it. What do you need?"},
+	"yup":              {"Got it. What's next?"},
+	"nope":             {"Alright. Let me know if you change your mind.", "Got it."},
+	"nah":              {"Alright. Let me know if you need anything.", "Got it."},
+	"no worries":       {"All good! Let me know if you need anything.", "No problem!"},
+	"all good":         {"Great! Let me know if you need anything.", "Glad to hear it!"},
+	"sounds good":      {"Great! Let me know if you need anything.", "Glad we're on the same page."},
+	"works for me":     {"Great! What's next?", "Glad that works!"},
+	"that's it":        {"Got it. Let me know if you need anything later!", "Alright!"},
+	"that's all":       {"Got it! I'm here whenever you need me.", "Alright!"},
+	"never mind":       {"No problem. Let me know if you need anything.", "Alright!"},
+	"nevermind":        {"No problem. Let me know if you need anything.", "Alright!"},
+
+	// How are you
+	"how are you":          {"I'm great, thanks for asking! How can I help?", "Doing well! What are you working on?"},
+	"how are you doing":    {"I'm doing great! How can I help you?", "All good! What do you need?"},
+	"how's it going":       {"Going well! What can I do for you?", "All good! What are you working on?"},
+	"hows it going":        {"Going well! What can I do for you?", "All good! What are you working on?"},
 }
 
 // tryQuickResponse returns an instant canned response for trivial queries.
@@ -483,6 +545,8 @@ func (r *FastPathResponder) buildMediumPrompt(conv *Conversation, query string) 
 	}
 
 	// Inject memory facts if available.
+	// Filter out code-indexed entries to prevent knowledge contamination
+	// (e.g., code snippets leaking into "capital of france" answers).
 	var facts []string
 
 	if r.WorkingMem != nil {
@@ -499,6 +563,10 @@ func (r *FastPathResponder) buildMediumPrompt(conv *Conversation, query string) 
 			limit = len(entries)
 		}
 		for _, e := range entries[:limit] {
+			// Skip code-indexed categories — they contaminate general Q&A
+			if isCodeCategory(e.Category) {
+				continue
+			}
 			facts = append(facts, fmt.Sprintf("- [%s] %s: %s", e.Category, e.Key, e.Value))
 		}
 	}
@@ -509,4 +577,17 @@ func (r *FastPathResponder) buildMediumPrompt(conv *Conversation, query string) 
 	}
 
 	return sb.String()
+}
+
+// isCodeCategory returns true if a memory category contains code-indexed content
+// that should not leak into general Q&A responses.
+func isCodeCategory(category string) bool {
+	lower := strings.ToLower(category)
+	codeCategories := []string{"code", "codebase", "index", "function", "symbol", "file", "module", "package", "struct", "class"}
+	for _, cc := range codeCategories {
+		if strings.Contains(lower, cc) {
+			return true
+		}
+	}
+	return false
 }

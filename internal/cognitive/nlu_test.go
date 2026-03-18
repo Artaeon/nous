@@ -85,7 +85,7 @@ func TestNLUQuestions(t *testing.T) {
 		{"What is Go?", "go"},
 		{"How does TCP work?", "tcp work"},
 		{"Why is the sky blue?", "the sky blue"},
-		{"Is Python better than Go?", ""},
+		// "Is Python better than Go?" now correctly routes to "compare" intent
 		{"Who invented the telephone?", "invented the telephone"},
 	}
 	for _, c := range cases {

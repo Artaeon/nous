@@ -256,10 +256,24 @@ func resolveUnit(s string) string {
 // reConversion matches patterns like "100 km to miles", "5.5 pounds in kg"
 var reConversion = regexp.MustCompile(`(?i)^\s*(-?[\d.]+)\s+(.+?)\s+(?:to|in|into|as)\s+(.+?)\s*$`)
 
+// reConversionReverse matches reversed patterns like "kilometers is 10 miles", "km in 5 miles"
+var reConversionReverse = regexp.MustCompile(`(?i)^\s*(.+?)\s+(?:is|are|in|=)\s+(-?[\d.]+)\s+(.+?)\s*$`)
+
 // ParseConversion parses natural language conversion requests.
 func ParseConversion(input string) (float64, string, string, error) {
 	m := reConversion.FindStringSubmatch(input)
 	if m == nil {
+		// Try reversed format: "kilometers is 10 miles" → convert 10 miles to kilometers
+		m = reConversionReverse.FindStringSubmatch(input)
+		if m != nil {
+			value, err := strconv.ParseFloat(m[2], 64)
+			if err != nil {
+				return 0, "", "", fmt.Errorf("invalid number: %s", m[2])
+			}
+			from := resolveUnit(m[3])
+			to := resolveUnit(m[1])
+			return value, from, to, nil
+		}
 		return 0, "", "", fmt.Errorf("could not parse conversion from %q — expected format like '100 km to miles'", input)
 	}
 

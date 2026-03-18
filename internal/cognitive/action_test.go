@@ -131,14 +131,40 @@ func TestActionRouter_LookupMemory(t *testing.T) {
 	}
 	result := ar.Execute(nlu, NewConversation(10))
 
-	if !result.NeedsLLM {
-		t.Error("memory lookup should need LLM for formatting")
-	}
 	if result.Source != "memory" {
 		t.Errorf("source = %q, want memory", result.Source)
 	}
+	// With only working memory, no longterm single-fact match, so needs LLM.
+	if !result.NeedsLLM {
+		t.Error("memory lookup with only working mem should need LLM for formatting")
+	}
 	if !strings.Contains(result.Data, "user_name") {
 		t.Errorf("Data should contain 'user_name', got %q", result.Data)
+	}
+}
+
+func TestActionRouter_LookupMemory_DirectFact(t *testing.T) {
+	ar := NewActionRouter()
+	ar.LongTermMem = memory.NewLongTermMemory("")
+
+	ar.LongTermMem.Store("user_name", "Raphael", "personal")
+
+	nlu := &NLUResult{
+		Action:   "lookup_memory",
+		Entities: map[string]string{"query": "user_name"},
+		Raw:      "what is my name",
+	}
+	result := ar.Execute(nlu, NewConversation(10))
+
+	if result.Source != "memory" {
+		t.Errorf("source = %q, want memory", result.Source)
+	}
+	// Single longterm fact should return directly without LLM.
+	if result.NeedsLLM {
+		t.Error("single longterm fact should not need LLM")
+	}
+	if result.DirectResponse != "Raphael" {
+		t.Errorf("DirectResponse = %q, want 'Raphael'", result.DirectResponse)
 	}
 }
 
@@ -241,6 +267,16 @@ func TestActionRouter_Schedule(t *testing.T) {
 	}
 	if result.Structured["parsed_time"] == "" {
 		t.Error("expected parsed_time in structured data")
+	}
+	// Schedule now returns a direct response — no LLM needed.
+	if result.NeedsLLM {
+		t.Error("schedule should not need LLM")
+	}
+	if result.DirectResponse == "" {
+		t.Error("schedule should return DirectResponse")
+	}
+	if !strings.Contains(result.DirectResponse, "review PR") {
+		t.Errorf("DirectResponse should mention the task, got %q", result.DirectResponse)
 	}
 }
 

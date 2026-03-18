@@ -8,9 +8,52 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/artaeon/nous/internal/safefile"
 )
+
+// normalizeQuery strips punctuation, lowercases, and removes leading question
+// preambles so that "What is the capital of France?" and "capital of france"
+// compare as equivalent concepts.
+func normalizeQuery(q string) string {
+	// Lowercase and trim whitespace.
+	q = strings.ToLower(strings.TrimSpace(q))
+
+	// Strip all punctuation characters.
+	q = strings.Map(func(r rune) rune {
+		if unicode.IsPunct(r) {
+			return -1
+		}
+		return r
+	}, q)
+
+	// Remove leading question preambles (order matters: longest first).
+	preambles := []string{
+		"can you tell me ",
+		"could you tell me ",
+		"tell me about ",
+		"tell me ",
+		"what is the ",
+		"what is a ",
+		"what is an ",
+		"what is ",
+		"whats the ",
+		"whats a ",
+		"whats an ",
+		"whats ",
+	}
+	for _, p := range preambles {
+		if strings.HasPrefix(q, p) {
+			q = q[len(p):]
+			break
+		}
+	}
+
+	// Collapse multiple spaces.
+	fields := strings.Fields(q)
+	return strings.Join(fields, " ")
+}
 
 // ResponseCrystal stores a high-quality LLM response for future instant reuse.
 // When a similar query arrives, the crystal serves the cached response (0ms)
@@ -76,22 +119,42 @@ func (s *ResponseCrystalStore) cachedEmbed(text string) ([]float64, error) {
 
 // Lookup finds a cached response for a query using semantic similarity.
 // Returns the response and true if a high-quality match is found.
-// Fast path: exact text match (~0ms) before falling back to embedding similarity.
+// Fast path: exact text match (~0ms), then normalized concept match,
+// before falling back to embedding similarity.
 func (s *ResponseCrystalStore) Lookup(query string) (string, bool) {
 	if len(query) < 10 {
 		return "", false
 	}
 
-	// Fast path: exact text match — no embedding call needed (~0ms)
-	normalized := strings.ToLower(strings.TrimSpace(query))
+	// Normalize the incoming query: strip punctuation, lowercase, remove
+	// leading question words so "What is the capital of France?" matches
+	// a crystal stored as "capital of france".
+	normQuery := normalizeQuery(query)
+
+	// Fast path 1: exact text match — no embedding call needed (~0ms)
+	lowerQuery := strings.ToLower(strings.TrimSpace(query))
 	s.mu.Lock()
 	for i, c := range s.crystals {
-		if strings.ToLower(strings.TrimSpace(c.Query)) == normalized {
+		if strings.ToLower(strings.TrimSpace(c.Query)) == lowerQuery {
 			s.crystals[i].Uses++
 			s.crystals[i].LastUsed = time.Now()
 			resp := s.crystals[i].Response
 			s.mu.Unlock()
 			return resp, true
+		}
+	}
+
+	// Fast path 2: normalized concept match — both queries reduce to the
+	// same core concept after stripping question preambles and punctuation.
+	if normQuery != "" {
+		for i, c := range s.crystals {
+			if normalizeQuery(c.Query) == normQuery {
+				s.crystals[i].Uses++
+				s.crystals[i].LastUsed = time.Now()
+				resp := s.crystals[i].Response
+				s.mu.Unlock()
+				return resp, true
+			}
 		}
 	}
 	s.mu.Unlock()
@@ -105,6 +168,12 @@ func (s *ResponseCrystalStore) Lookup(query string) (string, bool) {
 	if err != nil || len(queryVec) == 0 {
 		return "", false
 	}
+
+	// Use a slightly lower threshold when the normalized forms are
+	// similar (e.g. one has an extra word). The default threshold is
+	// s.threshold (0.78); for normalized-concept near-matches we accept
+	// 0.03 lower to catch paraphrases that normalize closely.
+	conceptThreshold := s.threshold - 0.03
 
 	// Use full write lock to avoid RUnlock→Lock race window
 	s.mu.Lock()
@@ -124,7 +193,21 @@ func (s *ResponseCrystalStore) Lookup(query string) (string, bool) {
 		}
 	}
 
-	if bestIdx < 0 || bestScore < s.threshold {
+	if bestIdx < 0 {
+		return "", false
+	}
+
+	// Use the lower threshold when the normalized concepts match closely;
+	// otherwise require the standard threshold.
+	threshold := s.threshold
+	if normQuery != "" {
+		normStored := normalizeQuery(s.crystals[bestIdx].Query)
+		if strings.Contains(normStored, normQuery) || strings.Contains(normQuery, normStored) {
+			threshold = conceptThreshold
+		}
+	}
+
+	if bestScore < threshold {
 		return "", false
 	}
 
