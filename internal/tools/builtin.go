@@ -136,14 +136,6 @@ func RegisterBuiltins(r *Registry, workDir string, allowShell bool, undo ...*mem
 	})
 
 	r.Register(Tool{
-		Name:        "sysinfo",
-		Description: "Show system information: OS, architecture, CPU, disk. Args: none.",
-		Execute: func(args map[string]string) (string, error) {
-			return toolSysinfo(workDir)
-		},
-	})
-
-	r.Register(Tool{
 		Name:        "find_replace",
 		Description: "Regex find and replace in a file. Args: path (required), pattern (required regex), replacement (required), all (optional 'true').",
 		Execute: func(args map[string]string) (string, error) {
@@ -189,16 +181,24 @@ func RegisterBuiltins(r *Registry, workDir string, allowShell bool, undo ...*mem
 		},
 	})
 
-	r.Register(Tool{
-		Name:        "clipboard",
-		Description: "Read from or write to the system clipboard. Args: action (required: 'read' or 'write'), content (required for write).",
-		Execute: func(args map[string]string) (string, error) {
-			return toolClipboard(args)
-		},
-	})
-
 	// Web search and knowledge tools
 	RegisterSearchTools(r)
+
+	// Assistant tools
+	RegisterWeatherTools(r)
+	RegisterConvertTool(r)
+	RegisterCurrencyTool(r)
+	RegisterSysInfoTools(r)
+	RegisterClipboardTools(r)
+	RegisterNoteTools(r)
+	RegisterTodoTools(r)
+	RegisterFileFinderTools(r)
+	RegisterSummarizeTools(r)
+	RegisterRSSTools(r)
+	RegisterCodeRunnerTools(r)
+	RegisterCalendarTools(r)
+	RegisterEmailTools(r)
+	RegisterScreenshotTools(r)
 }
 
 // pushUndoForWrite records the state before a write operation.

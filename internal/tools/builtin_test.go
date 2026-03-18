@@ -616,7 +616,7 @@ func TestRegisterBuiltinsRegistersAllTools(t *testing.T) {
 	r := NewRegistry()
 	RegisterBuiltins(r, dir, false)
 
-	expectedTools := []string{"read", "write", "edit", "glob", "grep", "ls", "shell", "mkdir", "tree", "fetch", "run", "sysinfo", "find_replace", "git", "patch", "replace_all", "diff", "clipboard", "websearch", "wikipedia"}
+	expectedTools := []string{"read", "write", "edit", "glob", "grep", "ls", "shell", "mkdir", "tree", "fetch", "run", "sysinfo", "find_replace", "git", "patch", "replace_all", "diff", "clipboard", "websearch", "wikipedia", "weather", "convert", "currency", "notes", "todos", "filefinder", "summarize", "rss", "coderunner", "calendar", "email", "screenshot"}
 	tools := r.List()
 
 	registered := map[string]bool{}
@@ -756,20 +756,11 @@ func TestToolSysinfo(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	if !strings.Contains(result, "Hostname:") {
+		t.Error("expected 'Hostname:' in sysinfo output")
+	}
 	if !strings.Contains(result, "OS:") {
 		t.Error("expected 'OS:' in sysinfo output")
-	}
-	if !strings.Contains(result, "Architecture:") {
-		t.Error("expected 'Architecture:' in sysinfo output")
-	}
-	if !strings.Contains(result, "CPU cores:") {
-		t.Error("expected 'CPU cores:' in sysinfo output")
-	}
-	if !strings.Contains(result, "Go version:") {
-		t.Error("expected 'Go version:' in sysinfo output")
-	}
-	if !strings.Contains(result, "Disk:") {
-		t.Error("expected 'Disk:' in sysinfo output")
 	}
 	if !strings.Contains(result, "linux") {
 		t.Error("expected 'linux' in sysinfo output on a Linux system")
@@ -987,42 +978,25 @@ func TestToolClipboard(t *testing.T) {
 
 	tool, _ := r.Get("clipboard")
 
-	// Test missing action
+	// Test read (no args) -- may fail due to no clipboard tool in test env
 	_, err := tool.Execute(map[string]string{})
-	if err == nil {
-		t.Fatal("expected error for missing action argument")
-	}
-	if !strings.Contains(err.Error(), "action") {
-		t.Errorf("expected 'action' in error, got %q", err.Error())
-	}
-
-	// Test invalid action
-	_, err = tool.Execute(map[string]string{"action": "invalid"})
-	if err != nil {
-		errStr := err.Error()
-		// Either "neither xclip nor xsel" (no clipboard tool) or "unknown action"
-		if !strings.Contains(errStr, "neither") && !strings.Contains(errStr, "unknown action") {
-			t.Errorf("expected clipboard-related error, got %q", errStr)
-		}
-	}
-
-	// Test write without content -- may fail due to no xclip/xsel, that's OK
-	_, err = tool.Execute(map[string]string{"action": "write"})
 	if err != nil {
 		errStr := err.Error()
 		if strings.Contains(errStr, "neither") {
 			t.Logf("clipboard not available (expected in CI): %v", err)
-		} else if strings.Contains(errStr, "content") {
-			t.Logf("correctly requires content for write: %v", err)
+		} else if strings.Contains(errStr, "clipboard read") {
+			t.Logf("clipboard read failed (expected in headless env): %v", err)
 		}
 	}
 
-	// Test read -- will likely fail due to no clipboard tool in test env
-	_, err = tool.Execute(map[string]string{"action": "read"})
+	// Test write with text -- may fail due to no clipboard tool, that's OK
+	_, err = tool.Execute(map[string]string{"text": "hello"})
 	if err != nil {
 		errStr := err.Error()
 		if strings.Contains(errStr, "neither") {
 			t.Logf("clipboard not available (expected in CI): %v", err)
+		} else if strings.Contains(errStr, "clipboard write") {
+			t.Logf("clipboard write failed (expected in headless env): %v", err)
 		}
 	}
 }

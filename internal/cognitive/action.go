@@ -48,6 +48,7 @@ type ActionRouter struct {
 	Growth      *PersonalGrowth
 	VCtx        *VirtualContext
 	Researcher  *InlineResearcher
+	Reminders   *ReminderManager
 }
 
 // NewActionRouter creates a router with nil subsystems.
@@ -100,6 +101,34 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 		return ar.handleChain(nlu, conv)
 	case "generate_doc":
 		return ar.handleGenerateDoc(nlu, conv)
+	case "weather":
+		return ar.handleWeather(nlu)
+	case "convert":
+		return ar.handleConvert(nlu)
+	case "reminder":
+		return ar.handleReminder(nlu)
+	case "sysinfo":
+		return ar.handleSysInfo(nlu)
+	case "clipboard":
+		return ar.handleClipboard(nlu)
+	case "notes":
+		return ar.handleNotes(nlu)
+	case "todos":
+		return ar.handleTodos(nlu)
+	case "find_files":
+		return ar.handleFindFiles(nlu)
+	case "summarize_url":
+		return ar.handleSummarizeURL(nlu)
+	case "news":
+		return ar.handleNews(nlu)
+	case "run_code":
+		return ar.handleRunCode(nlu)
+	case "calendar":
+		return ar.handleCalendar(nlu)
+	case "check_email":
+		return ar.handleCheckEmail(nlu)
+	case "screenshot":
+		return ar.handleScreenshot(nlu)
 	default:
 		// Unknown action — let the LLM handle it.
 		return &ActionResult{
@@ -118,13 +147,13 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 var metaResponses = map[string]string{
 	"who are you":          "I'm Nous (νοῦς) — your personal AI running fully on your machine. I think locally, remember everything, and get smarter over time.",
 	"what are you":         "I'm Nous, a local AI assistant. I search the web, compute answers, remember your preferences, and help plan your day — all running on your hardware.",
-	"what can you do":      "I can answer questions, search the web, do math, remember things about you, read/write files, create documents, research topics, and help plan your day. Try asking me anything!",
+	"what can you do":      "I can: check weather, run code (Python/bash/JS), manage notes and todos, convert units, set reminders, take screenshots, check news, find files, show system info, read clipboard, search the web, do math, remember things, read/write files, and more. All instant, all local.",
 	"what is your name":    "I'm Nous (νοῦς) — Greek for 'mind'. I'm your personal AI.",
 	"what's your name":     "I'm Nous (νοῦς) — Greek for 'mind'. I'm your personal AI.",
-	"help":                 "Just ask me anything! I can: search the web, answer questions, do math, remember things, read/write files, research topics, create documents, and plan your day.",
+	"help":                 "Just ask me anything! I can: weather, run code, notes, todos, reminders, screenshots, news, file search, system info, clipboard, unit conversion, web search, math, memory, file I/O, research, and more.",
 	"what do you know":     "I have a knowledge base, your conversation history, and can search the web for anything I don't know. Ask me anything!",
 	"how do you work":      "I use deterministic code for understanding and computing, and a small LLM only for natural language. Most answers need zero AI calls — I think in code, not tokens.",
-	"your capabilities":    "Web search, Wikipedia lookup, math, date calculations, file operations, memory, research, document generation, task planning, and natural conversation.",
+	"your capabilities":    "Weather, code execution, notes, todos, reminders, screenshots, news feeds, file finder, system info, clipboard, unit/currency conversion, web search, math, dates, memory, file I/O, research, document generation, and task planning.",
 }
 
 // handleRespond returns a canned response for greetings, farewells, meta, etc.

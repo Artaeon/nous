@@ -158,6 +158,7 @@ func (s *Server) SetDataSources(wm *memory.WorkingMemory, ltm *memory.LongTermMe
 		s.actions.WorkingMem = wm
 		s.actions.LongTermMem = ltm
 		s.actions.EpisodicMem = em
+		s.actions.Reminders = cognitive.NewReminderManager()
 	}
 }
 

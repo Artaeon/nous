@@ -39,6 +39,21 @@ type NLU struct {
 	// web-lookup signals: topics that require external/current knowledge
 	currentEventWords []string
 	webLookupPatterns []*regexp.Regexp
+
+	// Assistant feature patterns
+	weatherWords   []string
+	convertWords   []string
+	reminderWords  []string
+	sysinfoWords   []string
+	clipboardWords []string
+	noteWords      []string
+	todoWords      []string
+	newsWords      []string
+	calendarWords  []string
+	emailWords     []string
+	screenshotWords  []string
+	codeRunWords     []string
+	fileFinderWords  []string
 }
 
 // NewNLU creates a new deterministic NLU engine with all pattern tables initialized.
@@ -125,11 +140,86 @@ func NewNLU() *NLU {
 			"convert", "how much is", "how many",
 		},
 		currentEventWords: []string{
-			"weather", "news", "latest", "current", "today's",
 			"score", "scores", "won", "winning", "lost",
 			"price", "stock", "market", "trading",
 			"live", "breaking", "trending", "viral",
 			"election", "results",
+		},
+
+		weatherWords: []string{
+			"weather", "forecast", "temperature outside", "how hot", "how cold",
+			"is it raining", "will it rain", "is it sunny",
+		},
+		convertWords: []string{
+			"miles to", "km to", "pounds to", "kg to", "celsius to", "fahrenheit to",
+			"gallons to", "liters to", "inches to", "feet to", "meters to",
+			"usd to", "eur to", "gbp to", "dollars to", "euros to", "pounds to",
+			"mph to", "bytes to", "mb to", "gb to",
+		},
+		reminderWords: []string{
+			"remind me", "set a reminder", "set reminder", "set a timer", "set timer",
+			"timer for", "alarm for", "wake me",
+		},
+		sysinfoWords: []string{
+			"disk space", "free space", "storage space",
+			"how much ram", "memory usage", "free memory",
+			"my ip", "ip address", "what is my ip",
+			"system info", "system information", "cpu info",
+			"uptime", "how long has",
+		},
+		clipboardWords: []string{
+			"clipboard", "what did i copy", "paste", "what's in my clipboard",
+			"whats in my clipboard", "show clipboard", "read clipboard",
+			"copy this", "copy to clipboard",
+		},
+		noteWords: []string{
+			"save a note", "save note", "new note", "create note", "create a note",
+			"note about", "note:", "my notes", "show notes", "list notes",
+			"show my notes", "delete note", "search notes", "find note",
+		},
+		todoWords: []string{
+			"add task", "add todo", "add a task", "add a todo",
+			"new task", "new todo", "create task", "create todo",
+			"my tasks", "my todos", "show tasks", "show todos",
+			"list tasks", "list todos", "task list", "todo list",
+			"complete task", "finish task", "done with", "mark done",
+			"delete task", "remove task",
+		},
+		newsWords: []string{
+			"news", "headlines", "what's happening", "whats happening",
+			"latest news", "tech news", "world news", "science news",
+			"rss", "feed", "show me news",
+		},
+		calendarWords: []string{
+			"my calendar", "my schedule", "my events", "my agenda",
+			"what's on my calendar", "whats on my calendar",
+			"events today", "events tomorrow", "events this week",
+			"any meetings", "upcoming events", "upcoming meetings",
+		},
+		emailWords: []string{
+			"check my email", "check email", "any new email", "new emails",
+			"my email", "my inbox", "unread email", "unread messages",
+			"check my mail", "check mail",
+		},
+		screenshotWords: []string{
+			"screenshot", "take a screenshot", "capture screen", "screen capture",
+			"snap the screen", "grab screen", "print screen",
+		},
+		fileFinderWords: []string{
+			"find files", "find file", "find my files", "locate file", "locate files",
+			"find documents", "find images", "find photos", "find videos",
+			"find pdfs", "search files", "search my files",
+			"where is the file", "where are my files",
+			".go files", ".py files", ".js files", ".pdf files", ".txt files",
+			".md files", ".json files", ".csv files", ".html files",
+			"files in ~/", "files in /",
+		},
+		codeRunWords: []string{
+			"run this code", "run this script", "run the code",
+			"run python", "run bash", "run javascript", "run node",
+			"execute this", "execute code", "execute python", "execute script",
+			"python code:", "bash code:", "javascript code:",
+			"```python", "```bash", "```javascript", "```node",
 		},
 		webLookupPatterns: []*regexp.Regexp{
 			regexp.MustCompile(`(?i)what(?:'s| is) the (?:weather|temperature|forecast)`),
@@ -286,6 +376,104 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 		}
 	}
 
+	// 6a. Todos (before plan, since planVerbs contains "todo")
+	for _, w := range n.todoWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "todo"
+			r.Confidence = 0.90
+			r.Entities["topic"] = n.extractTopicGeneral(lower)
+			return
+		}
+	}
+
+	// 6b. Reminders (before plan, since planVerbs contains "remind")
+	for _, w := range n.reminderWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "reminder"
+			r.Confidence = 0.90
+			return
+		}
+	}
+
+	// 6c. Calendar (before plan, since planVerbs contains "schedule")
+	for _, w := range n.calendarWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "calendar"
+			r.Confidence = 0.90
+			return
+		}
+	}
+
+	// 6d. Assistant features (before file/search/command verbs to avoid misrouting)
+	for _, w := range n.noteWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "note"
+			r.Confidence = 0.85
+			r.Entities["topic"] = n.extractTopicGeneral(lower)
+			return
+		}
+	}
+	for _, w := range n.weatherWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "weather"
+			r.Confidence = 0.90
+			r.Entities["location"] = extractWeatherLocation(raw)
+			return
+		}
+	}
+	for _, w := range n.sysinfoWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "sysinfo"
+			r.Confidence = 0.90
+			r.Entities["topic"] = n.extractTopicGeneral(lower)
+			return
+		}
+	}
+	for _, w := range n.clipboardWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "clipboard"
+			r.Confidence = 0.90
+			return
+		}
+	}
+	for _, w := range n.emailWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "email"
+			r.Confidence = 0.90
+			return
+		}
+	}
+	for _, w := range n.screenshotWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "screenshot"
+			r.Confidence = 0.90
+			return
+		}
+	}
+	for _, w := range n.codeRunWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "run_code"
+			r.Confidence = 0.85
+			return
+		}
+	}
+	for _, w := range n.newsWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "news"
+			r.Confidence = 0.85
+			r.Entities["topic"] = n.extractTopicGeneral(lower)
+			return
+		}
+	}
+	for _, w := range n.fileFinderWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "find_files"
+			r.Confidence = 0.85
+			r.Entities["topic"] = n.extractTopicGeneral(lower)
+			return
+		}
+	}
+
 	// 7. Plan/schedule
 	for _, v := range n.planVerbs {
 		if strings.Contains(lower, v) {
@@ -305,8 +493,14 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 		}
 	}
 
-	// 9. URL present → fetch
+	// 9. URL present → fetch or summarize
 	if _, hasURL := r.Entities["url"]; hasURL {
+		if strings.Contains(lower, "summarize") || strings.Contains(lower, "summarise") || strings.Contains(lower, "summary") || strings.Contains(lower, "tldr") {
+			r.Intent = "summarize"
+			r.Action = "summarize_url"
+			r.Confidence = 0.90
+			return
+		}
 		r.Intent = "command"
 		r.Action = "fetch_url"
 		r.Confidence = 0.85
@@ -331,13 +525,34 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 	}
 	for _, v := range n.computeVerbs {
 		if strings.Contains(lower, v) && containsDigit(lower) {
+			// "convert" with units → conversion, not compute
+			if v == "convert" || v == "how much is" || v == "how many" {
+				for _, cw := range n.convertWords {
+					if strings.Contains(lower, cw) {
+						r.Intent = "convert"
+						r.Confidence = 0.90
+						r.Entities["expr"] = raw
+						return
+					}
+				}
+			}
 			r.Intent = "compute"
 			r.Confidence = 0.80
 			return
 		}
 	}
 
-	// 12. Web lookup: current events, weather, prices, scores
+	// 12a. Convert words (fallback for conversions not caught by compute rule 11)
+	for _, w := range n.convertWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "convert"
+			r.Confidence = 0.90
+			r.Entities["expr"] = raw
+			return
+		}
+	}
+
+	// 12. Web lookup: current events, prices, scores
 	for _, pat := range n.webLookupPatterns {
 		if pat.MatchString(lower) {
 			r.Intent = "web_lookup"
@@ -457,6 +672,34 @@ func (n *NLU) mapAction(lower string, r *NLUResult) {
 
 	case "meta":
 		r.Action = "respond"
+
+	// Assistant features: direct intent → action mapping
+	case "weather":
+		r.Action = "weather"
+	case "convert":
+		r.Action = "convert"
+	case "reminder":
+		r.Action = "reminder"
+	case "sysinfo":
+		r.Action = "sysinfo"
+	case "clipboard":
+		r.Action = "clipboard"
+	case "note":
+		r.Action = "notes"
+	case "todo":
+		r.Action = "todos"
+	case "news":
+		r.Action = "news"
+	case "calendar":
+		r.Action = "calendar"
+	case "email":
+		r.Action = "check_email"
+	case "screenshot":
+		r.Action = "screenshot"
+	case "run_code":
+		r.Action = "run_code"
+	case "find_files":
+		r.Action = "find_files"
 
 	case "remember":
 		r.Action = "lookup_memory" // store to memory

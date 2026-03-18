@@ -150,9 +150,9 @@ func TestNLUWebLookup(t *testing.T) {
 		input  string
 		action string
 	}{
-		{"What's the weather in Berlin?", "web_search"},
+		{"What's the weather in Berlin?", "weather"},
 		{"Who won the Super Bowl?", "web_search"},
-		{"Latest news about AI", "web_search"},
+		{"Latest news about AI", "news"},
 		{"What's the stock price of Apple?", "web_search"},
 		{"What is happening in Ukraine?", "web_search"},
 	}
@@ -245,13 +245,9 @@ func TestNLURecall(t *testing.T) {
 
 func TestNLUPlan(t *testing.T) {
 	nlu := NewNLU()
-	cases := []string{
-		"plan my day tomorrow",
-		"remind me to buy groceries",
-		"schedule a meeting for next Monday",
-		"add a todo for code review",
-	}
-	for _, input := range cases {
+
+	// Plan/schedule
+	for _, input := range []string{"plan my day tomorrow", "schedule a meeting for next Monday"} {
 		r := nlu.Understand(input)
 		if r.Intent != "plan" {
 			t.Errorf("Understand(%q): want intent=plan, got %q", input, r.Intent)
@@ -259,6 +255,24 @@ func TestNLUPlan(t *testing.T) {
 		if r.Action != "schedule" {
 			t.Errorf("Understand(%q): want action=schedule, got %q", input, r.Action)
 		}
+	}
+
+	// Reminders now route to dedicated handler
+	r := nlu.Understand("remind me to buy groceries")
+	if r.Intent != "reminder" {
+		t.Errorf("remind: want intent=reminder, got %q", r.Intent)
+	}
+	if r.Action != "reminder" {
+		t.Errorf("remind: want action=reminder, got %q", r.Action)
+	}
+
+	// Todos now route to dedicated handler
+	r = nlu.Understand("add a todo for code review")
+	if r.Intent != "todo" {
+		t.Errorf("todo: want intent=todo, got %q", r.Intent)
+	}
+	if r.Action != "todos" {
+		t.Errorf("todo: want action=todos, got %q", r.Action)
 	}
 }
 
@@ -427,9 +441,9 @@ func TestNLUActionMapping(t *testing.T) {
 		{"bye", "respond"},
 		{"thanks", "respond"},
 		{"who are you", "respond"},
-		// Web search
-		{"what's the weather in London", "web_search"},
-		{"latest news about AI", "web_search"},
+		// Weather and news (dedicated handlers)
+		{"what's the weather in London", "weather"},
+		{"latest news about AI", "news"},
 		{"search for Go tutorials", "web_search"},
 		// Knowledge lookup
 		{"explain quantum computing", "lookup_knowledge"},
@@ -441,8 +455,8 @@ func TestNLUActionMapping(t *testing.T) {
 		{"read main.go", "file_op"},
 		// Compute
 		{"what is 42 + 58", "compute"},
-		// Schedule
-		{"remind me to buy milk tomorrow", "schedule"},
+		// Reminders
+		{"remind me to buy milk tomorrow", "reminder"},
 	}
 
 	for _, tt := range tests {
@@ -477,10 +491,10 @@ func TestNLUKnowledgeVsWeb(t *testing.T) {
 		t.Errorf("current event should use web_search, got %s", r.Action)
 	}
 
-	// Weather should go to web
+	// Weather should go to weather handler
 	r = nlu.Understand("what is the weather today")
-	if r.Action != "web_search" {
-		t.Errorf("weather should use web_search, got %s", r.Action)
+	if r.Action != "weather" {
+		t.Errorf("weather should use weather action, got %s", r.Action)
 	}
 }
 
