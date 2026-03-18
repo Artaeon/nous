@@ -215,7 +215,7 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 
 		// NEW: NLU → Action → Response pipeline (max 1 LLM call)
 		if s.nlu != nil && s.actions != nil && s.conv != nil {
-			nluResult := s.nlu.Understand(message)
+			nluResult := s.nlu.UnderstandWithContext(message, s.conv)
 			if nluResult.Confidence >= 0.5 {
 				actionResult := s.actions.Execute(nluResult, s.conv)
 				if actionResult.DirectResponse != "" {
@@ -317,7 +317,7 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 		// === NEW ARCHITECTURE: NLU → Action → Response ===
 		// Maximum 1 LLM call (response formatting). Most queries need 0.
 		if s.nlu != nil && s.actions != nil && s.conv != nil {
-			nluResult := s.nlu.Understand(message)
+			nluResult := s.nlu.UnderstandWithContext(message, s.conv)
 
 			// High-confidence NLU result → deterministic action
 			if nluResult.Confidence >= 0.5 {

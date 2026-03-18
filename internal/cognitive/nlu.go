@@ -590,6 +590,139 @@ func isWordChar(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_'
 }
 
+// followUpPatterns are phrases that indicate the user is referring to a previous topic.
+var followUpPatterns = []string{
+	"explain further", "explain more", "tell me more", "go on", "continue",
+	"elaborate", "more details", "what else", "and then",
+	"keep going", "go ahead",
+}
+
+// followUpExactPatterns match single-word or very short follow-ups.
+var followUpExactPatterns = []string{
+	"why", "how", "really", "seriously", "and",
+}
+
+// isFollowUp returns true if the input looks like a follow-up referencing a previous turn.
+func isFollowUp(lower string, result *NLUResult) bool {
+	stripped := strings.TrimRight(lower, "?!. ")
+
+	// Exact match on short follow-ups
+	for _, p := range followUpExactPatterns {
+		if stripped == p {
+			return true
+		}
+	}
+
+	// Substring match on follow-up phrases
+	for _, p := range followUpPatterns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+
+	// "what about X" pattern — follow-up with a new angle
+	if strings.HasPrefix(lower, "what about ") || strings.HasPrefix(lower, "how about ") {
+		return true
+	}
+
+	// Short input (under 4 words) starting with a question word and no clear topic
+	words := strings.Fields(lower)
+	if len(words) > 0 && len(words) < 4 {
+		questionWords := map[string]bool{
+			"what": true, "why": true, "how": true, "when": true,
+			"where": true, "who": true, "which": true,
+		}
+		first := strings.TrimRight(words[0], "?!.,")
+		if questionWords[first] {
+			topic := result.Entities["topic"]
+			if topic == "" || topic == stripped {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// lastUserMessage returns the content of the last user message in the conversation,
+// or empty string if there is no prior user message.
+func lastUserMessage(conv *Conversation) string {
+	if conv == nil {
+		return ""
+	}
+	msgs := conv.Messages()
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			return msgs[i].Content
+		}
+	}
+	return ""
+}
+
+// extractTopicFromPrior extracts the core topic from a prior user message.
+func (n *NLU) extractTopicFromPrior(prior string) string {
+	lower := strings.ToLower(strings.TrimSpace(prior))
+	return n.extractTopicGeneral(lower)
+}
+
+// UnderstandWithContext processes input with conversation history for follow-up resolution.
+// When the user says "explain further" or "tell me more", this resolves the topic
+// from the previous conversation turn.
+func (n *NLU) UnderstandWithContext(input string, conv *Conversation) *NLUResult {
+	result := n.Understand(input)
+
+	lower := strings.ToLower(strings.TrimSpace(input))
+
+	if !isFollowUp(lower, result) {
+		return result
+	}
+
+	prior := lastUserMessage(conv)
+	if prior == "" {
+		return result
+	}
+
+	// Resolve topic from the previous turn
+	previousTopic := n.extractTopicFromPrior(prior)
+	if previousTopic == "" {
+		return result
+	}
+
+	// "what about X" / "how about X" — combine the new angle with the previous topic
+	if strings.HasPrefix(lower, "what about ") {
+		newAngle := strings.TrimPrefix(lower, "what about ")
+		newAngle = strings.TrimRight(newAngle, "?!. ")
+		result.Entities["topic"] = previousTopic + " — " + newAngle
+		result.Entities["previous_topic"] = previousTopic
+		result.Entities["new_angle"] = newAngle
+	} else if strings.HasPrefix(lower, "how about ") {
+		newAngle := strings.TrimPrefix(lower, "how about ")
+		newAngle = strings.TrimRight(newAngle, "?!. ")
+		result.Entities["topic"] = previousTopic + " — " + newAngle
+		result.Entities["previous_topic"] = previousTopic
+		result.Entities["new_angle"] = newAngle
+	} else {
+		// Pure follow-up — carry topic forward
+		result.Entities["topic"] = previousTopic
+		result.Entities["previous_topic"] = previousTopic
+	}
+
+	result.Entities["follow_up"] = "true"
+
+	// Boost confidence — we resolved the referent
+	if result.Confidence < 0.7 {
+		result.Confidence = 0.7
+	}
+
+	// If intent was vague, sharpen it to explain (most follow-ups want elaboration)
+	if result.Intent == "question" || result.Intent == "unknown" {
+		result.Intent = "explain"
+		result.Action = "lookup_knowledge"
+	}
+
+	return result
+}
+
 // containsDigit returns true if the string contains at least one digit.
 func containsDigit(s string) bool {
 	for _, r := range s {

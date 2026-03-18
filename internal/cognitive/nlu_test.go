@@ -493,6 +493,130 @@ func repeatWord(word string, n int) string {
 	return result
 }
 
+// --- Follow-up resolution tests ---
+
+// newConvWithHistory creates a Conversation with a prior user+assistant exchange.
+func newConvWithHistory(userMsg, assistantMsg string) *Conversation {
+	conv := NewConversation(20)
+	conv.User(userMsg)
+	conv.Assistant(assistantMsg)
+	return conv
+}
+
+func TestNLUFollowUp_ExplainFurther(t *testing.T) {
+	nlu := NewNLU()
+	conv := newConvWithHistory(
+		"explain quantum entanglement",
+		"Quantum entanglement is a phenomenon where two particles become correlated.",
+	)
+
+	cases := []string{
+		"explain further",
+		"explain more",
+		"elaborate",
+		"more details",
+	}
+	for _, input := range cases {
+		r := nlu.UnderstandWithContext(input, conv)
+		if r.Entities["follow_up"] != "true" {
+			t.Errorf("UnderstandWithContext(%q): expected follow_up=true, got %q", input, r.Entities["follow_up"])
+		}
+		if r.Entities["previous_topic"] == "" {
+			t.Errorf("UnderstandWithContext(%q): expected previous_topic to be set", input)
+		}
+		if r.Intent != "explain" {
+			t.Errorf("UnderstandWithContext(%q): want intent=explain, got %q", input, r.Intent)
+		}
+		if r.Confidence < 0.7 {
+			t.Errorf("UnderstandWithContext(%q): want confidence>=0.7, got %.2f", input, r.Confidence)
+		}
+	}
+}
+
+func TestNLUFollowUp_TellMeMore(t *testing.T) {
+	nlu := NewNLU()
+	conv := newConvWithHistory(
+		"what is photosynthesis",
+		"Photosynthesis is the process by which plants convert sunlight into energy.",
+	)
+
+	cases := []string{
+		"tell me more",
+		"go on",
+		"continue",
+		"what else?",
+		"and then?",
+	}
+	for _, input := range cases {
+		r := nlu.UnderstandWithContext(input, conv)
+		if r.Entities["follow_up"] != "true" {
+			t.Errorf("UnderstandWithContext(%q): expected follow_up=true", input)
+		}
+		topic := r.Entities["topic"]
+		if topic == "" {
+			t.Errorf("UnderstandWithContext(%q): expected topic to be resolved from prior turn", input)
+		}
+		if r.Confidence < 0.7 {
+			t.Errorf("UnderstandWithContext(%q): want confidence>=0.7, got %.2f", input, r.Confidence)
+		}
+	}
+}
+
+func TestNLUFollowUp_SingleWordQuestion(t *testing.T) {
+	nlu := NewNLU()
+	conv := newConvWithHistory(
+		"explain how black holes form",
+		"Black holes form when massive stars collapse at the end of their life cycle.",
+	)
+
+	cases := []string{
+		"why?",
+		"how?",
+	}
+	for _, input := range cases {
+		r := nlu.UnderstandWithContext(input, conv)
+		if r.Entities["follow_up"] != "true" {
+			t.Errorf("UnderstandWithContext(%q): expected follow_up=true", input)
+		}
+		if r.Entities["previous_topic"] == "" {
+			t.Errorf("UnderstandWithContext(%q): expected previous_topic to be set", input)
+		}
+	}
+}
+
+func TestNLUFollowUp_WithNewAngle(t *testing.T) {
+	nlu := NewNLU()
+	conv := newConvWithHistory(
+		"explain quantum physics",
+		"Quantum physics deals with the behavior of matter at the subatomic level.",
+	)
+
+	r := nlu.UnderstandWithContext("what about entanglement?", conv)
+	if r.Entities["follow_up"] != "true" {
+		t.Errorf("expected follow_up=true, got %q", r.Entities["follow_up"])
+	}
+	if r.Entities["previous_topic"] == "" {
+		t.Error("expected previous_topic to be set")
+	}
+	if r.Entities["new_angle"] == "" {
+		t.Error("expected new_angle to be set for 'what about' pattern")
+	}
+	if r.Entities["new_angle"] != "entanglement" {
+		t.Errorf("expected new_angle=entanglement, got %q", r.Entities["new_angle"])
+	}
+}
+
+func TestNLUFollowUp_NoHistoryNoChange(t *testing.T) {
+	nlu := NewNLU()
+	conv := NewConversation(20) // empty conversation
+
+	r := nlu.UnderstandWithContext("tell me more", conv)
+	// Without history, follow-up detection should still trigger but no topic resolved
+	if r.Entities["follow_up"] == "true" {
+		t.Error("should not mark follow_up without conversation history to resolve from")
+	}
+}
+
 func BenchmarkNLUUnderstand(b *testing.B) {
 	nlu := NewNLU()
 	inputs := []string{

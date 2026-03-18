@@ -46,6 +46,8 @@ type ActionRouter struct {
 	Knowledge   *KnowledgeVec
 	Crystals    *ResponseCrystalStore
 	Growth      *PersonalGrowth
+	VCtx        *VirtualContext
+	Researcher  *InlineResearcher
 }
 
 // NewActionRouter creates a router with nil subsystems.
@@ -78,6 +80,8 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 		return ar.handleSchedule(nlu)
 	case "llm_chat":
 		return ar.handleLLMChat(nlu, conv)
+	case "research", "generate_doc":
+		return ar.handleResearch(nlu)
 	default:
 		// Unknown action — let the LLM handle it.
 		return &ActionResult{
@@ -269,23 +273,36 @@ func (ar *ActionRouter) handleLookupMemory(nlu *NLUResult) *ActionResult {
 
 // handleLookupKnowledge searches the knowledge vector store.
 func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
-	query := nlu.Entities["query"]
+	query := nlu.Entities["topic"]
+	if query == "" {
+		query = nlu.Entities["query"]
+	}
 	if query == "" {
 		query = nlu.Raw
 	}
 
-	if ar.Knowledge == nil {
-		return &ActionResult{Data: "knowledge base unavailable", Source: "knowledge", NeedsLLM: true}
-	}
-
-	results, err := ar.Knowledge.Search(query, 5)
-	if err != nil || len(results) == 0 {
-		return &ActionResult{Data: "no relevant knowledge found", Source: "knowledge", NeedsLLM: true}
-	}
-
 	var parts []string
-	for _, r := range results {
-		parts = append(parts, fmt.Sprintf("[%s (%.2f)] %s", r.Source, r.Score, r.Text))
+
+	// Knowledge vector search.
+	if ar.Knowledge != nil {
+		results, err := ar.Knowledge.Search(query, 5)
+		if err == nil {
+			for _, r := range results {
+				parts = append(parts, fmt.Sprintf("[%s (%.2f)] %s", r.Source, r.Score, r.Text))
+			}
+		}
+	}
+
+	// Weave virtual context for additional grounding.
+	if ar.VCtx != nil {
+		assembly := ar.VCtx.Weave(query)
+		if woven := assembly.FormatForPrompt(); woven != "" {
+			parts = append(parts, woven)
+		}
+	}
+
+	if len(parts) == 0 {
+		return &ActionResult{Data: "no relevant knowledge found", Source: "knowledge", NeedsLLM: true}
 	}
 	return &ActionResult{Data: strings.Join(parts, "\n"), Source: "knowledge", NeedsLLM: true}
 }
@@ -334,6 +351,26 @@ func (ar *ActionRouter) handleSchedule(nlu *NLUResult) *ActionResult {
 	}
 }
 
+// handleResearch delegates to the InlineResearcher for deep topic research.
+func (ar *ActionRouter) handleResearch(nlu *NLUResult) *ActionResult {
+	topic := nlu.Entities["topic"]
+	if topic == "" {
+		topic = nlu.Entities["query"]
+	}
+	if topic == "" {
+		topic = nlu.Raw
+	}
+
+	// Use the dedicated InlineResearcher if available.
+	if ar.Researcher != nil {
+		return ar.Researcher.Research(topic)
+	}
+
+	// Fallback: construct an InlineResearcher from the router's tools.
+	ir := &InlineResearcher{Tools: ar.Tools}
+	return ir.Research(topic)
+}
+
 // handleLLMChat passes through to the LLM for conversational responses.
 func (ar *ActionRouter) handleLLMChat(nlu *NLUResult, conv *Conversation) *ActionResult {
 	// Gather any relevant context from memory to enrich the LLM call.
@@ -342,6 +379,18 @@ func (ar *ActionRouter) handleLLMChat(nlu *NLUResult, conv *Conversation) *Actio
 		slots := ar.WorkingMem.MostRelevant(3)
 		for _, s := range slots {
 			context = append(context, fmt.Sprintf("%s: %v", s.Key, s.Value))
+		}
+	}
+
+	// Weave virtual context for richer grounding.
+	if ar.VCtx != nil {
+		query := nlu.Entities["topic"]
+		if query == "" {
+			query = nlu.Raw
+		}
+		assembly := ar.VCtx.Weave(query)
+		if woven := assembly.FormatForPrompt(); woven != "" {
+			context = append(context, woven)
 		}
 	}
 
