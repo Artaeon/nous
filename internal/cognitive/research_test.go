@@ -105,20 +105,4 @@ func TestActionRouter_Research(t *testing.T) {
 	}
 }
 
-func TestActionRouter_GenerateDoc(t *testing.T) {
-	ar := NewActionRouter()
-
-	nlu := &NLUResult{
-		Action:   "generate_doc",
-		Entities: map[string]string{"topic": "Go concurrency"},
-		Raw:      "write a document about Go concurrency",
-	}
-	result := ar.Execute(nlu, NewConversation(10))
-
-	if result.Source != "research" {
-		t.Errorf("source = %q, want research", result.Source)
-	}
-	if !result.NeedsLLM {
-		t.Error("generate_doc should need LLM")
-	}
-}
+// TestActionRouter_GenerateDoc is in action_test.go (more thorough version).

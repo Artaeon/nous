@@ -383,6 +383,162 @@ func TestNeedsLLM_Flags(t *testing.T) {
 	}
 }
 
+func TestActionChain_ResearchAndWrite(t *testing.T) {
+	ar := NewActionRouter()
+	// No tools registered — web search and knowledge both return "unavailable" style data.
+
+	nlu := &NLUResult{
+		Action: "chain",
+		Entities: map[string]string{
+			"chain_type": "research_and_write",
+			"topic":      "quantum physics",
+		},
+		Raw: "research quantum physics",
+	}
+	result := ar.Execute(nlu, NewConversation(10))
+
+	if !result.NeedsLLM {
+		t.Error("chain result should need LLM for synthesis")
+	}
+	if !strings.HasPrefix(result.Source, "chain:") {
+		t.Errorf("source should start with 'chain:', got %q", result.Source)
+	}
+	// Should contain data from both steps (web search + knowledge lookup).
+	if result.Data == "" {
+		t.Error("chain result Data should not be empty")
+	}
+	if !strings.Contains(result.Data, "[web]") && !strings.Contains(result.Data, "[knowledge]") {
+		t.Errorf("chain result should contain step source tags, got %q", result.Data)
+	}
+}
+
+func TestActionChain_SearchAndSave(t *testing.T) {
+	ar := NewActionRouter()
+	reg := tools.NewRegistry()
+	// Register a mock websearch tool.
+	reg.Register(tools.Tool{
+		Name:        "websearch",
+		Description: "mock search",
+		Execute: func(args map[string]string) (string, error) {
+			return "search results for: " + args["query"], nil
+		},
+	})
+	// Register a mock write tool.
+	var writtenContent string
+	reg.Register(tools.Tool{
+		Name:        "write",
+		Description: "mock write",
+		Execute: func(args map[string]string) (string, error) {
+			writtenContent = args["content"]
+			return "wrote to " + args["path"], nil
+		},
+	})
+	ar.Tools = reg
+
+	nlu := &NLUResult{
+		Action: "chain",
+		Entities: map[string]string{
+			"chain_type": "search_and_save",
+			"topic":      "AI news",
+			"path":       "ai_news.txt",
+		},
+		Raw: "search for AI news and save it to a file",
+	}
+	result := ar.Execute(nlu, NewConversation(10))
+
+	if !result.NeedsLLM {
+		t.Error("chain result should need LLM")
+	}
+	// The write step should have received the search output via dependency.
+	if writtenContent == "" {
+		t.Error("write step should have received content from search step via dependency")
+	}
+	if !strings.Contains(writtenContent, "search results for: AI news") {
+		t.Errorf("written content should contain search results, got %q", writtenContent)
+	}
+}
+
+func TestActionChain_StepDependency(t *testing.T) {
+	ar := NewActionRouter()
+	reg := tools.NewRegistry()
+	reg.Register(tools.Tool{
+		Name:        "websearch",
+		Description: "mock search",
+		Execute: func(args map[string]string) (string, error) {
+			return "SEARCH_OUTPUT_DATA", nil
+		},
+	})
+	var capturedInput string
+	reg.Register(tools.Tool{
+		Name:        "write",
+		Description: "mock write",
+		Execute: func(args map[string]string) (string, error) {
+			capturedInput = args["content"]
+			return "ok", nil
+		},
+	})
+	ar.Tools = reg
+
+	chain := &ActionChain{
+		Steps: []ChainStep{
+			{
+				Action:    "web_search",
+				Entities:  map[string]string{"query": "test"},
+				DependsOn: -1,
+			},
+			{
+				Action:    "file_op",
+				Entities:  map[string]string{"op": "write", "path": "out.txt"},
+				DependsOn: 0, // depends on step 0
+			},
+		},
+	}
+
+	nlu := &NLUResult{
+		Action:   "chain",
+		Entities: map[string]string{},
+		Raw:      "test",
+	}
+	ar.ExecuteChain(chain, nlu, NewConversation(10))
+
+	// Verify step 1 received step 0's output.
+	if capturedInput != "SEARCH_OUTPUT_DATA" {
+		t.Errorf("step 1 should receive step 0 output via dependency, got %q", capturedInput)
+	}
+
+	// Verify Results were populated.
+	if len(chain.Results) != 2 {
+		t.Fatalf("chain should have 2 results, got %d", len(chain.Results))
+	}
+	if chain.Results[0].Data != "SEARCH_OUTPUT_DATA" {
+		t.Errorf("step 0 result Data = %q, want SEARCH_OUTPUT_DATA", chain.Results[0].Data)
+	}
+}
+
+func TestActionRouter_GenerateDoc(t *testing.T) {
+	ar := NewActionRouter()
+
+	nlu := &NLUResult{
+		Action:   "generate_doc",
+		Entities: map[string]string{"topic": "quantum computing"},
+		Raw:      "create a document about quantum computing",
+	}
+	result := ar.Execute(nlu, NewConversation(10))
+
+	if !result.NeedsLLM {
+		t.Error("generate_doc should need LLM")
+	}
+	if !strings.Contains(result.Data, "[Document Request: quantum computing]") {
+		t.Errorf("generate_doc Data should contain document request header, got %q", result.Data)
+	}
+	if result.Structured == nil || result.Structured["format"] != "document" {
+		t.Error("generate_doc should set Structured format=document")
+	}
+	if result.Structured["topic"] != "quantum computing" {
+		t.Errorf("generate_doc topic = %q, want 'quantum computing'", result.Structured["topic"])
+	}
+}
+
 func TestParseRelativeTime(t *testing.T) {
 	tests := []struct {
 		input  string

@@ -56,6 +56,20 @@ func NewActionRouter() *ActionRouter {
 	return &ActionRouter{}
 }
 
+// ActionChain represents a sequence of actions to execute in order.
+// Each step's output feeds into the next step's input.
+type ActionChain struct {
+	Steps   []ChainStep
+	Results []ActionResult
+}
+
+// ChainStep is one step in an action chain.
+type ChainStep struct {
+	Action    string            // action name (web_search, fetch_url, file_op, etc.)
+	Entities  map[string]string // entities for this step
+	DependsOn int              // index of previous step whose output feeds in (-1 for none)
+}
+
 // Execute runs the appropriate action for an NLU result.
 // This is PURE CODE — no LLM calls. Returns raw data/facts.
 func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResult {
@@ -80,8 +94,12 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 		return ar.handleSchedule(nlu)
 	case "llm_chat":
 		return ar.handleLLMChat(nlu, conv)
-	case "research", "generate_doc":
+	case "research":
 		return ar.handleResearch(nlu)
+	case "chain":
+		return ar.handleChain(nlu, conv)
+	case "generate_doc":
+		return ar.handleGenerateDoc(nlu, conv)
 	default:
 		// Unknown action — let the LLM handle it.
 		return &ActionResult{
@@ -369,6 +387,206 @@ func (ar *ActionRouter) handleResearch(nlu *NLUResult) *ActionResult {
 	// Fallback: construct an InlineResearcher from the router's tools.
 	ir := &InlineResearcher{Tools: ar.Tools}
 	return ir.Research(topic)
+}
+
+// ExecuteChain runs a sequence of actions, piping outputs forward.
+// Each step executes in order. If a step depends on a previous step,
+// the previous step's output is injected as context into the current step's entities.
+func (ar *ActionRouter) ExecuteChain(chain *ActionChain, nlu *NLUResult, conv *Conversation) *ActionResult {
+	chain.Results = make([]ActionResult, len(chain.Steps))
+
+	var allData []string
+	var lastSource string
+
+	for i, step := range chain.Steps {
+		// Build a synthetic NLUResult for this step.
+		stepNLU := &NLUResult{
+			Intent:   nlu.Intent,
+			Action:   step.Action,
+			Entities: make(map[string]string),
+			Raw:      nlu.Raw,
+		}
+		for k, v := range step.Entities {
+			stepNLU.Entities[k] = v
+		}
+
+		// If this step depends on a previous step, inject that step's output.
+		if step.DependsOn >= 0 && step.DependsOn < i {
+			prev := chain.Results[step.DependsOn]
+			stepNLU.Entities["_chain_input"] = prev.Data
+			// For file write steps, use previous output as content.
+			if step.Action == "file_op" && stepNLU.Entities["op"] == "write" {
+				stepNLU.Entities["content"] = prev.Data
+			}
+		}
+
+		// Execute the step using normal single-action dispatch (no recursion).
+		result := ar.executeSingleAction(stepNLU, conv)
+		chain.Results[i] = *result
+
+		if result.Data != "" {
+			allData = append(allData, fmt.Sprintf("[%s] %s", result.Source, result.Data))
+		}
+		if result.DirectResponse != "" {
+			allData = append(allData, result.DirectResponse)
+		}
+		lastSource = result.Source
+	}
+
+	// Combine all step outputs into a single result.
+	combined := strings.Join(allData, "\n\n---\n\n")
+	return &ActionResult{
+		Data:     combined,
+		Source:   "chain:" + lastSource,
+		NeedsLLM: true,
+	}
+}
+
+// executeSingleAction dispatches a single action without chain/generate_doc handling.
+// This avoids infinite recursion if a chain step is itself "chain".
+func (ar *ActionRouter) executeSingleAction(nlu *NLUResult, conv *Conversation) *ActionResult {
+	switch nlu.Action {
+	case "respond":
+		return ar.handleRespond(nlu)
+	case "web_search":
+		return ar.handleWebSearch(nlu)
+	case "fetch_url":
+		return ar.handleFetchURL(nlu)
+	case "file_op":
+		return ar.handleFileOp(nlu)
+	case "compute":
+		return ar.handleCompute(nlu)
+	case "lookup_memory":
+		return ar.handleLookupMemory(nlu)
+	case "lookup_knowledge":
+		return ar.handleLookupKnowledge(nlu)
+	case "lookup_web":
+		return ar.handleLookupWeb(nlu)
+	case "schedule":
+		return ar.handleSchedule(nlu)
+	case "llm_chat":
+		return ar.handleLLMChat(nlu, conv)
+	default:
+		return &ActionResult{
+			Data:     nlu.Raw,
+			Source:   "fallback",
+			NeedsLLM: true,
+		}
+	}
+}
+
+// handleChain builds and executes a chain based on the chain_type entity.
+func (ar *ActionRouter) handleChain(nlu *NLUResult, conv *Conversation) *ActionResult {
+	chainType := nlu.Entities["chain_type"]
+	topic := nlu.Entities["topic"]
+	if topic == "" {
+		topic = nlu.Entities["query"]
+	}
+	if topic == "" {
+		topic = nlu.Raw
+	}
+
+	var chain *ActionChain
+	switch chainType {
+	case "research_and_write":
+		chain = researchChain(topic)
+	case "search_and_save":
+		filepath := nlu.Entities["path"]
+		if filepath == "" {
+			filepath = strings.ReplaceAll(strings.ToLower(topic), " ", "_") + ".txt"
+		}
+		chain = searchAndSaveChain(topic, filepath)
+	case "search_and_explain":
+		chain = searchAndExplainChain(topic)
+	default:
+		chain = researchChain(topic)
+	}
+
+	return ar.ExecuteChain(chain, nlu, conv)
+}
+
+// handleGenerateDoc extracts a topic, runs web search + knowledge lookup,
+// combines results, and returns with NeedsLLM=true for document formatting.
+func (ar *ActionRouter) handleGenerateDoc(nlu *NLUResult, conv *Conversation) *ActionResult {
+	topic := nlu.Entities["topic"]
+	if topic == "" {
+		topic = nlu.Entities["query"]
+	}
+	if topic == "" {
+		topic = nlu.Raw
+	}
+
+	chain := researchChain(topic)
+	result := ar.ExecuteChain(chain, nlu, conv)
+
+	result.Structured = map[string]string{
+		"format": "document",
+		"topic":  topic,
+	}
+	result.Data = fmt.Sprintf("[Document Request: %s]\n\n%s", topic, result.Data)
+	result.NeedsLLM = true
+	return result
+}
+
+// -----------------------------------------------------------------------
+// Chain templates — pre-built pipelines for common multi-step tasks.
+// -----------------------------------------------------------------------
+
+// researchChain builds a chain for "research X" or "create a document about X".
+// Steps: web search -> knowledge lookup -> combine (NeedsLLM=true for synthesis).
+func researchChain(topic string) *ActionChain {
+	return &ActionChain{
+		Steps: []ChainStep{
+			{
+				Action:    "web_search",
+				Entities:  map[string]string{"query": topic},
+				DependsOn: -1,
+			},
+			{
+				Action:    "lookup_knowledge",
+				Entities:  map[string]string{"query": topic},
+				DependsOn: -1,
+			},
+		},
+	}
+}
+
+// searchAndSaveChain builds a chain for "search X and save to file".
+// Steps: web search -> file write with search results.
+func searchAndSaveChain(topic, filepath string) *ActionChain {
+	return &ActionChain{
+		Steps: []ChainStep{
+			{
+				Action:    "web_search",
+				Entities:  map[string]string{"query": topic},
+				DependsOn: -1,
+			},
+			{
+				Action:    "file_op",
+				Entities:  map[string]string{"op": "write", "path": filepath},
+				DependsOn: 0,
+			},
+		},
+	}
+}
+
+// searchAndExplainChain builds a chain for "look up X and explain it".
+// Steps: web search -> knowledge lookup -> combine for LLM explanation.
+func searchAndExplainChain(topic string) *ActionChain {
+	return &ActionChain{
+		Steps: []ChainStep{
+			{
+				Action:    "web_search",
+				Entities:  map[string]string{"query": topic},
+				DependsOn: -1,
+			},
+			{
+				Action:    "lookup_knowledge",
+				Entities:  map[string]string{"query": topic},
+				DependsOn: -1,
+			},
+		},
+	}
 }
 
 // handleLLMChat passes through to the LLM for conversational responses.

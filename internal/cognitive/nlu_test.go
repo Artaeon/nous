@@ -617,6 +617,77 @@ func TestNLUFollowUp_NoHistoryNoChange(t *testing.T) {
 	}
 }
 
+func TestNLU_ChainDetection(t *testing.T) {
+	nlu := NewNLU()
+
+	tests := []struct {
+		input     string
+		action    string
+		chainType string
+	}{
+		// search_and_save chains
+		{"search for AI news and save it to a file", "chain", "search_and_save"},
+		{"find golang tutorials and save to file", "chain", "search_and_save"},
+		{"look up climate change and write it to a file", "chain", "search_and_save"},
+
+		// search_and_explain chains
+		{"look up photosynthesis and explain it", "chain", "search_and_explain"},
+		{"search for quantum mechanics and summarize it", "chain", "search_and_explain"},
+
+		// research_and_write chains
+		{"research quantum physics", "chain", "research_and_write"},
+		{"investigate machine learning", "chain", "research_and_write"},
+		{"deep dive into blockchain technology", "chain", "research_and_write"},
+
+		// document generation
+		{"create a document about quantum physics", "generate_doc", ""},
+		{"write a report about climate change", "generate_doc", ""},
+		{"generate a document about artificial intelligence", "generate_doc", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			r := nlu.Understand(tt.input)
+			if r.Action != tt.action {
+				t.Errorf("Understand(%q): want action=%s, got %s (intent=%s)", tt.input, tt.action, r.Action, r.Intent)
+			}
+			if tt.chainType != "" {
+				if got := r.Entities["chain_type"]; got != tt.chainType {
+					t.Errorf("Understand(%q): want chain_type=%s, got %s", tt.input, tt.chainType, got)
+				}
+			}
+			// Chain actions should have a topic extracted.
+			if topic := r.Entities["topic"]; topic == "" {
+				t.Errorf("Understand(%q): expected non-empty topic entity", tt.input)
+			}
+		})
+	}
+}
+
+func TestNLU_NonChainNotMisclassified(t *testing.T) {
+	nlu := NewNLU()
+
+	// These should NOT be detected as chains.
+	nonChainInputs := []struct {
+		input  string
+		action string
+	}{
+		{"search for quantum computing", "web_search"},
+		{"what is photosynthesis", "lookup_knowledge"},
+		{"hello", "respond"},
+		{"what is 2 + 2", "compute"},
+	}
+
+	for _, tt := range nonChainInputs {
+		t.Run(tt.input, func(t *testing.T) {
+			r := nlu.Understand(tt.input)
+			if r.Action != tt.action {
+				t.Errorf("Understand(%q): want action=%s, got %s (intent=%s)", tt.input, tt.action, r.Action, r.Intent)
+			}
+		})
+	}
+}
+
 func BenchmarkNLUUnderstand(b *testing.B) {
 	nlu := NewNLU()
 	inputs := []string{

@@ -422,6 +422,25 @@ func (n *NLU) mapAction(lower string, r *NLUResult) {
 		return
 	}
 
+	// Check for multi-step chain patterns before single-action mapping.
+	if chainType := n.detectChain(lower); chainType != "" {
+		r.Action = "chain"
+		r.Entities["chain_type"] = chainType
+		if r.Entities["topic"] == "" {
+			r.Entities["topic"] = n.extractChainTopic(lower)
+		}
+		return
+	}
+
+	// Check for document generation patterns.
+	if n.isDocGeneration(lower) {
+		r.Action = "generate_doc"
+		if r.Entities["topic"] == "" {
+			r.Entities["topic"] = n.extractChainTopic(lower)
+		}
+		return
+	}
+
 	switch r.Intent {
 	case "greeting", "farewell", "affirmation":
 		r.Action = "respond"
@@ -731,4 +750,111 @@ func containsDigit(s string) bool {
 		}
 	}
 	return false
+}
+
+// -----------------------------------------------------------------------
+// Chain detection — identifies multi-step intent patterns.
+// -----------------------------------------------------------------------
+
+// Chain detection regexes compiled once.
+var (
+	chainSearchAndSaveRe = regexp.MustCompile(
+		`(?i)(?:search|find|look up|lookup)\s+(?:for\s+)?(.+?)\s+and\s+(?:save|write|store)\s+(?:it\s+)?(?:to\s+)?(?:a\s+)?(?:file)?`)
+	chainSearchAndExplainRe = regexp.MustCompile(
+		`(?i)(?:look up|lookup|search|find)\s+(?:for\s+)?(.+?)\s+and\s+(?:explain|summarize|describe)\s+(?:it)?`)
+	chainResearchRe = regexp.MustCompile(
+		`(?i)^(?:research|investigate|deep dive into|explore)\s+(.+)`)
+	chainSummarizeFromWebRe = regexp.MustCompile(
+		`(?i)(?:summarize|summarise)\s+(.+?)\s+from\s+(?:the\s+)?(?:web|internet|online)`)
+)
+
+// detectChain returns the chain_type if the input matches a multi-step pattern,
+// or empty string if no chain is detected.
+func (n *NLU) detectChain(lower string) string {
+	// "search X and save it" / "find X and write to file"
+	if chainSearchAndSaveRe.MatchString(lower) {
+		return "search_and_save"
+	}
+
+	// "look up X and explain it" / "search X and summarize it"
+	if chainSearchAndExplainRe.MatchString(lower) {
+		return "search_and_explain"
+	}
+
+	// "research X" / "investigate X" / "deep dive into X"
+	if chainResearchRe.MatchString(lower) {
+		return "research_and_write"
+	}
+
+	// "summarize X from the web"
+	if chainSummarizeFromWebRe.MatchString(lower) {
+		return "search_and_explain"
+	}
+
+	return ""
+}
+
+// isDocGeneration returns true if the input asks for document creation.
+func (n *NLU) isDocGeneration(lower string) bool {
+	docPatterns := []string{
+		"create a document about ",
+		"create a report about ",
+		"create a report on ",
+		"create a document on ",
+		"write a document about ",
+		"write a report about ",
+		"write a report on ",
+		"write a document on ",
+		"generate a document about ",
+		"generate a report about ",
+		"generate a report on ",
+		"make a document about ",
+		"make a report about ",
+		"draft a document about ",
+		"draft a report about ",
+	}
+	for _, p := range docPatterns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// extractChainTopic extracts the subject/topic from a chain-type query.
+func (n *NLU) extractChainTopic(lower string) string {
+	// Try each chain regex to extract the topic capture group.
+	if m := chainSearchAndSaveRe.FindStringSubmatch(lower); len(m) >= 2 {
+		return strings.TrimSpace(m[1])
+	}
+	if m := chainSearchAndExplainRe.FindStringSubmatch(lower); len(m) >= 2 {
+		return strings.TrimSpace(m[1])
+	}
+	if m := chainResearchRe.FindStringSubmatch(lower); len(m) >= 2 {
+		return strings.TrimSpace(m[1])
+	}
+	if m := chainSummarizeFromWebRe.FindStringSubmatch(lower); len(m) >= 2 {
+		return strings.TrimSpace(m[1])
+	}
+
+	// Document generation topic extraction.
+	docPrefixes := []string{
+		"create a document about ", "create a report about ",
+		"create a report on ", "create a document on ",
+		"write a document about ", "write a report about ",
+		"write a report on ", "write a document on ",
+		"generate a document about ", "generate a report about ",
+		"generate a report on ", "make a document about ",
+		"make a report about ", "draft a document about ",
+		"draft a report about ",
+	}
+	for _, p := range docPrefixes {
+		if idx := strings.Index(lower, p); idx >= 0 {
+			topic := lower[idx+len(p):]
+			topic = strings.TrimRight(topic, "?!. ")
+			return strings.TrimSpace(topic)
+		}
+	}
+
+	return n.extractTopicGeneral(lower)
 }
