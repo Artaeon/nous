@@ -210,6 +210,11 @@ func main() {
 	toolReg := tools.NewRegistry()
 	tools.RegisterBuiltins(toolReg, workDir, *allowShell, undoStack)
 
+	// NLU + ActionRouter: deterministic intent → action pipeline (shared with HTTP API)
+	nlu := cognitive.NewNLU()
+	actions := cognitive.NewActionRouter()
+	actions.Tools = toolReg
+
 	// Predictive Pre-computation
 	predictor := cognitive.NewPredictor(toolReg)
 
@@ -227,6 +232,12 @@ func main() {
 	// Episodic memory — remembers every interaction forever (semantic search via embeddings)
 	episodic := memory.NewEpisodicMemory(nousDir, llm.Embed)
 	assistantStore := assistant.NewStore(*memoryPath)
+
+	// Wire memory into action router
+	actions.WorkingMem = wm
+	actions.LongTermMem = ltm
+	actions.EpisodicMem = episodic
+	actions.Reminders = cognitive.NewReminderManager()
 
 	// Training data collector — gathers successful interactions for fine-tuning
 	collector := training.NewCollector(nousDir)
@@ -725,10 +736,6 @@ func main() {
 			}
 		}
 
-		// Classify query: fast/medium paths skip the full pipeline for speed.
-		classifier := &cognitive.FastPathClassifier{}
-		queryPath := classifier.ClassifyQuery(input)
-
 		// Extract personal facts from user input (name, role, interests, etc.)
 		// Runs on every message — stores facts in long-term + working memory.
 		factExtractor := &cognitive.FactExtractor{LTM: ltm, WorkingMem: wm}
@@ -739,7 +746,24 @@ func main() {
 		responseStarted = false
 		start := time.Now()
 
+		// Try NLU/ActionRouter first — handles all 32 tools deterministically (0ms).
+		// Only falls through to LLM if the action needs language generation.
 		var answer string
+		nluResult := nlu.UnderstandWithContext(input, reasoner.Conv)
+		if nluResult.Confidence >= 0.5 {
+			actionResult := actions.Execute(nluResult, reasoner.Conv)
+			if actionResult.DirectResponse != "" {
+				answer = actionResult.DirectResponse
+				reasoner.Conv.User(input)
+				reasoner.Conv.Assistant(answer)
+			}
+		}
+
+		if answer == "" {
+		// Classify query: fast/medium paths skip the full pipeline for speed.
+		classifier := &cognitive.FastPathClassifier{}
+		queryPath := classifier.ClassifyQuery(input)
+
 		if queryPath == cognitive.PathFast || queryPath == cognitive.PathMedium {
 			// Fast/medium: single LLM call with optional knowledge context
 			llmSpinner.Start("thinking...")
@@ -772,6 +796,7 @@ func main() {
 			perceiver.Submit(input)
 			answer = waitForAnswerStr(board)
 		}
+		} // end if answer == ""
 		duration := time.Since(start)
 		if !responseStarted && strings.TrimSpace(answer) != "" {
 			fmt.Printf("  %s\n", strings.ReplaceAll(answer, "\n", "\n  "))
