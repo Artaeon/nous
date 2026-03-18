@@ -196,6 +196,9 @@ func RegisterBuiltins(r *Registry, workDir string, allowShell bool, undo ...*mem
 			return toolClipboard(args)
 		},
 	})
+
+	// Web search and knowledge tools
+	RegisterSearchTools(r)
 }
 
 // pushUndoForWrite records the state before a write operation.
