@@ -152,10 +152,16 @@ func TestEnsembleConfidenceBoostFormula(t *testing.T) {
 	}
 
 	if result.Source == "ensemble" {
-		// Formula: confidence = min(intentConf, cortexConf) * 1.3, capped at 0.95
-		expectedConf := min64(result.IntentConf, result.CortexConf) * 1.3
-		if expectedConf > 0.95 {
-			expectedConf = 0.95
+		var expectedConf float64
+		if result.IntentConf >= 0.8 {
+			// Case 1: intent confident + cortex agrees → intentConf * 1.1, capped at 0.98
+			expectedConf = min64(result.IntentConf*1.1, 0.98)
+		} else {
+			// Case 2: borderline intent + cortex agrees → min * 1.3, capped at 0.95
+			expectedConf = min64(result.IntentConf, result.CortexConf) * 1.3
+			if expectedConf > 0.95 {
+				expectedConf = 0.95
+			}
 		}
 		if math.Abs(result.Confidence-expectedConf) > 0.01 {
 			t.Errorf("ensemble confidence = %f, expected %f (intent=%f, cortex=%f)",
