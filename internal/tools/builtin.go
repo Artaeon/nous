@@ -199,6 +199,21 @@ func RegisterBuiltins(r *Registry, workDir string, allowShell bool, undo ...*mem
 	RegisterCalendarTools(r)
 	RegisterEmailTools(r)
 	RegisterScreenshotTools(r)
+
+	// Batch 2: Desktop, information, file, and process tools
+	RegisterVolumeTools(r)
+	RegisterBrightnessTools(r)
+	RegisterNotifyTools(r)
+	RegisterTimerTools(r)
+	RegisterAppTools(r)
+	RegisterHashTools(r)
+	RegisterDictTools(r)
+	RegisterNetCheckTools(r)
+	RegisterTranslateTools(r)
+	RegisterQRCodeTools(r)
+	RegisterArchiveTools(r)
+	RegisterDiskUsageTools(r)
+	RegisterProcessTools(r)
 }
 
 // pushUndoForWrite records the state before a write operation.

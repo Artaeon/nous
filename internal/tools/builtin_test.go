@@ -616,7 +616,7 @@ func TestRegisterBuiltinsRegistersAllTools(t *testing.T) {
 	r := NewRegistry()
 	RegisterBuiltins(r, dir, false)
 
-	expectedTools := []string{"read", "write", "edit", "glob", "grep", "ls", "shell", "mkdir", "tree", "fetch", "run", "sysinfo", "find_replace", "git", "patch", "replace_all", "diff", "clipboard", "websearch", "wikipedia", "weather", "convert", "currency", "notes", "todos", "filefinder", "summarize", "rss", "coderunner", "calendar", "email", "screenshot"}
+	expectedTools := []string{"read", "write", "edit", "glob", "grep", "ls", "shell", "mkdir", "tree", "fetch", "run", "sysinfo", "find_replace", "git", "patch", "replace_all", "diff", "clipboard", "websearch", "wikipedia", "weather", "convert", "currency", "notes", "todos", "filefinder", "summarize", "rss", "coderunner", "calendar", "email", "screenshot", "volume", "brightness", "notify", "timer", "app", "hash", "dict", "netcheck", "translate", "qrcode", "archive", "diskusage", "process"}
 	tools := r.List()
 
 	registered := map[string]bool{}
