@@ -441,6 +441,16 @@ func (n *NLU) mapAction(lower string, r *NLUResult) {
 		return
 	}
 
+	// Date questions: if a date entity is present and it's a question about time/day,
+	// route to compute (the date evaluator handles these without LLM).
+	if _, hasDate := r.Entities["date"]; hasDate {
+		if r.Intent == "question" || r.Intent == "explain" {
+			r.Action = "compute"
+			r.Entities["expr"] = r.Raw
+			return
+		}
+	}
+
 	switch r.Intent {
 	case "greeting", "farewell", "affirmation":
 		r.Action = "respond"
