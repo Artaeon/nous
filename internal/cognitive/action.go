@@ -114,8 +114,34 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 // Action handlers — each is pure code, no LLM.
 // -----------------------------------------------------------------------
 
-// handleRespond returns a canned response for greetings, farewells, etc.
+// metaResponses maps common meta questions to instant answers.
+var metaResponses = map[string]string{
+	"who are you":          "I'm Nous (νοῦς) — your personal AI running fully on your machine. I think locally, remember everything, and get smarter over time.",
+	"what are you":         "I'm Nous, a local AI assistant. I search the web, compute answers, remember your preferences, and help plan your day — all running on your hardware.",
+	"what can you do":      "I can answer questions, search the web, do math, remember things about you, read/write files, create documents, research topics, and help plan your day. Try asking me anything!",
+	"what is your name":    "I'm Nous (νοῦς) — Greek for 'mind'. I'm your personal AI.",
+	"what's your name":     "I'm Nous (νοῦς) — Greek for 'mind'. I'm your personal AI.",
+	"help":                 "Just ask me anything! I can: search the web, answer questions, do math, remember things, read/write files, research topics, create documents, and plan your day.",
+	"what do you know":     "I have a knowledge base, your conversation history, and can search the web for anything I don't know. Ask me anything!",
+	"how do you work":      "I use deterministic code for understanding and computing, and a small LLM only for natural language. Most answers need zero AI calls — I think in code, not tokens.",
+	"your capabilities":    "Web search, Wikipedia lookup, math, date calculations, file operations, memory, research, document generation, task planning, and natural conversation.",
+}
+
+// handleRespond returns a canned response for greetings, farewells, meta, etc.
 func (ar *ActionRouter) handleRespond(nlu *NLUResult) *ActionResult {
+	// Check meta responses first
+	if nlu.Intent == "meta" {
+		lower := strings.ToLower(strings.TrimRight(strings.TrimSpace(nlu.Raw), "?!."))
+		for pattern, response := range metaResponses {
+			if strings.Contains(lower, pattern) {
+				return &ActionResult{
+					DirectResponse: response,
+					Source:         "canned",
+				}
+			}
+		}
+	}
+
 	if quick := tryQuickResponse(nlu.Raw); quick != "" {
 		return &ActionResult{
 			DirectResponse: quick,
@@ -133,6 +159,9 @@ func (ar *ActionRouter) handleRespond(nlu *NLUResult) *ActionResult {
 // handleWebSearch executes a web search via the tools registry.
 func (ar *ActionRouter) handleWebSearch(nlu *NLUResult) *ActionResult {
 	query := nlu.Entities["query"]
+	if query == "" {
+		query = nlu.Entities["topic"]
+	}
 	if query == "" {
 		query = nlu.Raw
 	}
@@ -320,7 +349,22 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 	}
 
 	if len(parts) == 0 {
-		return &ActionResult{Data: "no relevant knowledge found", Source: "knowledge", NeedsLLM: true}
+		// Fall back to web search only for deep explanation requests.
+		// Simple factual questions (what is X, who is X) skip web search
+		// since the LLM can answer them quickly from parametric knowledge.
+		if nlu.Intent == "explain" || nlu.Intent == "research" {
+			lower := strings.ToLower(nlu.Raw)
+			needsDepth := strings.HasPrefix(lower, "explain ") ||
+				strings.HasPrefix(lower, "describe ") ||
+				strings.HasPrefix(lower, "how does ") ||
+				strings.HasPrefix(lower, "how do ") ||
+				strings.HasPrefix(lower, "tell me about ") ||
+				strings.HasPrefix(lower, "teach me ")
+			if needsDepth {
+				return ar.handleWebSearch(nlu)
+			}
+		}
+		return &ActionResult{Data: query, Source: "knowledge", NeedsLLM: true}
 	}
 	return &ActionResult{Data: strings.Join(parts, "\n"), Source: "knowledge", NeedsLLM: true}
 }
