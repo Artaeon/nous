@@ -549,16 +549,19 @@ func TestEnsureNumCtxNil(t *testing.T) {
 	if result == nil {
 		t.Fatal("expected non-nil result")
 	}
-	if result.NumCtx != 8192 {
-		t.Errorf("NumCtx = %d, want 8192", result.NumCtx)
+	if result.NumCtx != 2048 {
+		t.Errorf("NumCtx = %d, want 2048", result.NumCtx)
+	}
+	if result.NumPredict != 256 {
+		t.Errorf("NumPredict = %d, want 256", result.NumPredict)
 	}
 }
 
 func TestEnsureNumCtxZero(t *testing.T) {
 	opts := &ModelOptions{Temperature: 0.7}
 	result := ensureNumCtx(opts)
-	if result.NumCtx != 8192 {
-		t.Errorf("NumCtx = %d, want 8192", result.NumCtx)
+	if result.NumCtx != 2048 {
+		t.Errorf("NumCtx = %d, want 2048", result.NumCtx)
 	}
 	// Should not mutate the original
 	if opts.NumCtx != 0 {
@@ -571,13 +574,13 @@ func TestEnsureNumCtxZero(t *testing.T) {
 }
 
 func TestEnsureNumCtxAlreadySet(t *testing.T) {
-	opts := &ModelOptions{NumCtx: 4096}
+	opts := &ModelOptions{NumCtx: 4096, NumPredict: 256}
 	result := ensureNumCtx(opts)
-	if result != opts {
-		t.Error("expected same pointer when NumCtx already set")
-	}
 	if result.NumCtx != 4096 {
 		t.Errorf("NumCtx = %d, want 4096", result.NumCtx)
+	}
+	if result.NumPredict != 256 {
+		t.Errorf("NumPredict = %d, want 256", result.NumPredict)
 	}
 }
 
@@ -723,7 +726,7 @@ func TestChatRequestStructure(t *testing.T) {
 	if len(receivedReq.Messages) != 2 {
 		t.Errorf("Messages count = %d, want 2", len(receivedReq.Messages))
 	}
-	if receivedReq.KeepAlive != "30m" {
-		t.Errorf("KeepAlive = %q, want %q", receivedReq.KeepAlive, "30m")
+	if receivedReq.KeepAlive != "-1s" {
+		t.Errorf("KeepAlive = %q, want %q", receivedReq.KeepAlive, "-1s")
 	}
 }

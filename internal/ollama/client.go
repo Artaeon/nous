@@ -15,8 +15,8 @@ import (
 
 const (
 	DefaultHost    = "http://localhost:11434"
-	DefaultModel   = "qwen3:4b"
-	DefaultTimeout = 300 * time.Second
+	DefaultModel   = "qwen2.5:1.5b"
+	DefaultTimeout = 120 * time.Second
 )
 
 type Client struct {
@@ -159,6 +159,8 @@ type ModelOptions struct {
 	TopP          float64  `json:"top_p,omitempty"`
 	NumCtx        int      `json:"num_ctx,omitempty"`
 	NumPredict    int      `json:"num_predict,omitempty"`
+	NumThread     int      `json:"num_thread,omitempty"`  // CPU threads for inference (0 = auto)
+	NumGPU        int      `json:"num_gpu,omitempty"`     // GPU layers to offload (0 = CPU only)
 	Stop          []string `json:"stop,omitempty"`
 	RepeatPenalty float64  `json:"repeat_penalty,omitempty"`
 	RepeatLastN   int      `json:"repeat_last_n,omitempty"`
@@ -195,7 +197,7 @@ func (c *Client) ChatCtx(ctx context.Context, messages []Message, opts *ModelOpt
 		Messages:  messages,
 		Stream:    false,
 		Options:   opts,
-		KeepAlive: "30m",
+		KeepAlive: "-1s",
 	}
 	if c.noThink {
 		f := false
@@ -243,7 +245,7 @@ func (c *Client) ChatJSON(messages []Message, opts *ModelOptions) (*GenerateResp
 		Stream:    false,
 		Options:   opts,
 		Format:    "json",
-		KeepAlive: "30m",
+		KeepAlive: "-1s",
 	}
 
 	body, err := json.Marshal(req)
@@ -281,7 +283,7 @@ func (c *Client) ChatWithSchema(messages []Message, schema any, opts *ModelOptio
 		Stream:    false,
 		Options:   opts,
 		Format:    schema,
-		KeepAlive: "30m",
+		KeepAlive: "-1s",
 	}
 
 	body, err := json.Marshal(req)
@@ -318,7 +320,7 @@ func (c *Client) ChatWithTools(messages []Message, tools []Tool, opts *ModelOpti
 		Stream:    false,
 		Options:   opts,
 		Tools:     tools,
-		KeepAlive: "30m",
+		KeepAlive: "-1s",
 	}
 
 	// Disable thinking for CPU-optimized inference
@@ -379,7 +381,7 @@ func (c *Client) ChatStreamWithTools(messages []Message, tools []Tool, opts *Mod
 		Stream:    true,
 		Options:   opts,
 		Tools:     tools,
-		KeepAlive: "30m",
+		KeepAlive: "-1s",
 	}
 
 	body, err := json.Marshal(req)
@@ -424,18 +426,19 @@ func (c *Client) ChatStreamWithTools(messages []Message, tools []Tool, opts *Mod
 	return &final, nil
 }
 
-// ensureNumCtx sets a default NumCtx of 8192 if not already specified.
-// This ensures Ollama allocates enough context window for long conversations.
+// ensureNumCtx sets default context and prediction limits.
+// NumCtx 2048 is optimal for small models (1.5b-4b) — larger windows
+// waste memory and slow inference with no quality gain.
 func ensureNumCtx(opts *ModelOptions) *ModelOptions {
 	if opts == nil {
-		return &ModelOptions{NumCtx: 8192, NumPredict: 1024}
+		return &ModelOptions{NumCtx: 2048, NumPredict: 256}
 	}
 	copy := *opts
 	if copy.NumCtx == 0 {
-		copy.NumCtx = 8192
+		copy.NumCtx = 2048
 	}
 	if copy.NumPredict == 0 {
-		copy.NumPredict = 1024 // cap output to prevent runaway generation
+		copy.NumPredict = 256
 	}
 	return &copy
 }
