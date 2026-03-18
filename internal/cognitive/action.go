@@ -294,9 +294,20 @@ func (ar *ActionRouter) handleFetchURL(nlu *NLUResult) *ActionResult {
 	}
 	result, err := tool.Execute(map[string]string{"url": url})
 	if err != nil {
-		return &ActionResult{Data: fmt.Sprintf("fetch error: %v", err), Source: "web", NeedsLLM: true}
+		return &ActionResult{
+			DirectResponse: fmt.Sprintf("Could not fetch %s: %v", url, err),
+			Source:         "web",
+		}
 	}
-	return &ActionResult{Data: result, Source: "web", NeedsLLM: true}
+	// Truncate long content for direct display
+	content := result
+	if len(content) > 2000 {
+		content = content[:2000] + "\n... (truncated, showing first 2000 chars)"
+	}
+	return &ActionResult{
+		DirectResponse: fmt.Sprintf("Content from %s:\n\n%s", url, content),
+		Source:         "web",
+	}
 }
 
 // handleFileOp executes file operations (read, write, edit, grep, glob, ls).

@@ -501,6 +501,22 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 		}
 	}
 
+	// 4b. URL present → fetch or summarize (before verb matching to prevent "open URL" → file_op)
+	if _, hasURL := r.Entities["url"]; hasURL {
+		if strings.Contains(lower, "summarize") || strings.Contains(lower, "summarise") ||
+			strings.Contains(lower, "summary") || strings.Contains(lower, "tldr") ||
+			strings.Contains(lower, "tl;dr") {
+			r.Intent = "summarize"
+			r.Action = "summarize_url"
+			r.Confidence = 0.90
+			return
+		}
+		r.Intent = "fetch"
+		r.Action = "fetch_url"
+		r.Confidence = 0.85
+		return
+	}
+
 	// 5. Recall (before remember, since "do you remember" contains "remember")
 	for _, v := range n.recallVerbs {
 		if strings.Contains(lower, v) {
@@ -807,19 +823,7 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 		}
 	}
 
-	// 9. URL present → fetch or summarize
-	if _, hasURL := r.Entities["url"]; hasURL {
-		if strings.Contains(lower, "summarize") || strings.Contains(lower, "summarise") || strings.Contains(lower, "summary") || strings.Contains(lower, "tldr") {
-			r.Intent = "summarize"
-			r.Action = "summarize_url"
-			r.Confidence = 0.90
-			return
-		}
-		r.Intent = "command"
-		r.Action = "fetch_url"
-		r.Confidence = 0.85
-		return
-	}
+	// 9. (moved to 4b — URL detection now happens before verb matching)
 
 	// 10. Search verbs (before compute — explicit "search for X" wins over incidental math)
 	for _, v := range n.searchVerbs {
