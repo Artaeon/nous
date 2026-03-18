@@ -1,52 +1,89 @@
 services:
-  # To use Ollama inside Docker (with GPU), uncomment this service
-  # and change OLLAMA_HOST below to http://ollama:11434
-  #
-  # ollama:
-  #   image: ollama/ollama
-  #   restart: unless-stopped
-  #   volumes:
-  #     - ollama_data:/root/.ollama
-  #   deploy:
-  #     resources:
-  #       reservations:
-  #         devices:
-  #           - driver: nvidia
-  #             count: all
-  #             capabilities: [gpu]
-
-  nous:
+  app:
     build: .
-    restart: unless-stopped
-    network_mode: host
+    image: nous:local
+    container_name: nous-app
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
     environment:
+      - NOUS_MODEL=${NOUS_MODEL:-qwen2.5:1.5b}
+      - NOUS_OLLAMA_HOST=${NOUS_OLLAMA_HOST:-http://ollama:11434}
+      - NOUS_API_KEY=${NOUS_API_KEY:-}
       - NOUS_TELEGRAM_TOKEN=${NOUS_TELEGRAM_TOKEN:-}
     command:
       - "--serve"
+      - "--public"
       - "--port"
       - "3333"
-      - "--public"
       - "--model"
-      - "${NOUS_MODEL:-qwen3:4b}"
+      - "${NOUS_MODEL:-qwen2.5:1.5b}"
       - "--host"
-      - "http://127.0.0.1:11434"
+      - "${NOUS_OLLAMA_HOST:-http://ollama:11434}"
       - "--memory"
       - "/data"
       - "--trust"
-      - "--allow-shell"
       - "--api-key"
       - "${NOUS_API_KEY:-}"
     volumes:
       - nous_data:/data
       - nous_workspace:/workspace
     labels:
-      # Traefik integration — adjust domain to yours
       - "traefik.enable=true"
-      - "traefik.http.routers.nous.rule=Host(`nous.${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.nous.rule=Host(`${NOUS_DOMAIN:-nous.localhost}`)"
       - "traefik.http.routers.nous.entrypoints=websecure"
       - "traefik.http.routers.nous.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.nous.tls=true"
       - "traefik.http.services.nous.loadbalancer.server.port=3333"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3333/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - default
+      - nous-internal
+
+  # Ollama LLM backend — GPU recommended, CPU works
+  ollama:
+    image: ollama/ollama:latest
+    container_name: nous-ollama
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 6G
+        # Uncomment for GPU acceleration:
+        # reservations:
+        #   devices:
+        #     - driver: nvidia
+        #       count: all
+        #       capabilities: [gpu]
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - nous-internal
+
+networks:
+  default:
+    name: traefik_default
+    external: true
+  nous-internal:
+    name: nous-internal
+    driver: bridge
 
 volumes:
   nous_data:
   nous_workspace:
+  ollama_data:

@@ -33,6 +33,11 @@ Thumbs.db
 # Release binaries
 nous-*
 
+# Environment (secrets)
+.env
+.env.*
+!.env.example
+
 # Coverage
 cover.out
 coverage.html

@@ -1,0 +1,42 @@
+# Build artifacts
+nous
+nous-*
+*.exe
+bin/
+dist/
+
+# Runtime data
+.nous/
+*.mmap
+**/backups/
+**/episodes.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Docs
+*.md
+LICENSE
+
+# CI/CD
+.github/
+
+# Coverage
+cover.out
+coverage.html
+
+# Docker
+docker-compose*.yml
+.dockerignore

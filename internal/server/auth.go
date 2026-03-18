@@ -23,7 +23,8 @@ func AuthMiddleware(apiKey string, next http.Handler) http.Handler {
 		}
 
 		// Health endpoint is exempt so load balancers and monitors can probe it.
-		if r.URL.Path == "/api/health" {
+		// Root path serves the web UI login page which must load before auth.
+		if r.URL.Path == "/api/health" || r.URL.Path == "/" {
 			next.ServeHTTP(w, r)
 			return
 		}
