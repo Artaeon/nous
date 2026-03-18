@@ -74,7 +74,7 @@ User input: %s`, raw)
 		{Role: "user", Content: prompt},
 	}, &ollama.ModelOptions{
 		Temperature: 0.1,
-		NumPredict:  100,
+		NumPredict:  40,
 	})
 	if err != nil {
 		return blackboard.Percept{}, fmt.Errorf("perceiver llm: %w", err)

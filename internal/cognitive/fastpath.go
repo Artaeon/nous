@@ -66,8 +66,8 @@ var complexPatterns = []*regexp.Regexp{
 
 // fastPatterns match queries that are clearly conversational/simple — minimal context needed.
 var fastPatterns = []*regexp.Regexp{
-	// Greetings
-	regexp.MustCompile(`(?i)^(hi|hey|hello|howdy|yo|sup|greetings|good (morning|afternoon|evening)|hola|bonjour|guten tag|hallo)[!?.\s]*$`),
+	// Greetings (with optional "nous" / name after)
+	regexp.MustCompile(`(?i)^(hi|hey|hello|howdy|yo|sup|greetings|good (morning|afternoon|evening)|hola|bonjour|guten tag|hallo)(\s+nous)?[!?.\s]*$`),
 
 	// Thanks / farewell / acknowledgments
 	regexp.MustCompile(`(?i)^(thanks?|thank you|thx|bye|goodbye|see ya|ciao|cheers|great|awesome|perfect|nice|cool|ok|okay|got it|understood|noted|sure|yep|yeah|yup|nope|nah|no)[!?.\s]*$`),
@@ -170,12 +170,29 @@ func (c *FastPathClassifier) ClassifyQuery(query string) QueryPath {
 	}
 
 	// Short-ish messages (under 8 words) are medium (need some context).
-	if len(words) <= 7 {
+	if len(words) <= 8 {
 		return PathMedium
 	}
 
-	// Default: route to full pipeline for longer, ambiguous queries.
-	return PathFull
+	// Questions (starts with question word or ends with ?) → medium path.
+	// These are knowledge questions, not tool requests.
+	if strings.HasSuffix(strings.TrimSpace(query), "?") {
+		return PathMedium
+	}
+	lowerFirst := strings.ToLower(words[0])
+	questionWords := map[string]bool{
+		"what": true, "why": true, "how": true, "when": true, "where": true,
+		"who": true, "which": true, "is": true, "are": true, "can": true,
+		"could": true, "would": true, "should": true, "do": true, "does": true,
+		"did": true, "will": true, "tell": true, "describe": true, "explain": true,
+	}
+	if questionWords[lowerFirst] {
+		return PathMedium
+	}
+
+	// Longer conversational messages without tool keywords → medium path.
+	// Only route to full pipeline if complex patterns matched (checked above).
+	return PathMedium
 }
 
 // IsSimple returns true if the query can be handled by the fast path
@@ -198,18 +215,18 @@ type FastPathResponder struct {
 	ResponseCrystals *ResponseCrystalStore // semantic cache — learns from every LLM response
 }
 
-const fastPathSystemPrompt = `You are Nous (νοῦς), a personal AI running fully on the user's machine. Be warm, friendly, and natural. You have vast knowledge and grow with the user over time. Always respond warmly to greetings — you are a companion, not just a tool. If you don't know something, say so honestly.`
+const fastPathSystemPrompt = `You are Nous (νοῦς), a personal AI running fully on the user's machine. Be warm, friendly, and natural. Keep responses brief — 1-3 sentences for simple questions. If you don't know something, say so honestly.`
 
-const mediumPathSystemPrompt = `You are Nous (νοῦς), a personal AI running fully on the user's machine. You know the user, remember past conversations, and grow smarter over time. Be warm, helpful, and knowledgeable.
+const mediumPathSystemPrompt = `You are Nous (νοῦς), a personal AI running fully on the user's machine. You know the user, remember past conversations, and grow smarter over time.
 
 RULES:
-- For factual questions, use the knowledge context provided below to give accurate answers
-- For practical "how to" questions, give actionable steps and concrete advice
-- Never say "I don't have access to" — you DO have knowledge, memory, and tools
-- Be direct and helpful, not evasive
-- If the user asks you to help them DO something, give them a plan or template, don't ask clarifying questions
+- Be concise — answer in 2-5 sentences unless the user asks for detail
+- For factual questions, use the knowledge context below
+- For "how to" questions, give actionable steps
+- Never say "I don't have access to" — you have knowledge, memory, and tools
+- Be direct, not evasive
 
-Use the context below to give relevant, personalized answers.`
+Use the context below for relevant answers.`
 
 // Respond generates a response using a single LLM call with conversation context.
 // For "fast" path: minimal system prompt + query.
@@ -249,6 +266,8 @@ var quickGreetings = map[string][]string{
 // Returns empty string if no quick response is available.
 func tryQuickResponse(query string) string {
 	lower := strings.ToLower(strings.TrimRight(strings.TrimSpace(query), "!?."))
+	// Strip "nous" suffix — "hi nous", "hello nous", "hey nous" → "hi", "hello", "hey"
+	lower = strings.TrimRight(strings.TrimSuffix(lower, " nous"), " ")
 	if responses, ok := quickGreetings[lower]; ok {
 		// Simple deterministic selection based on query length
 		return responses[len(query)%len(responses)]
@@ -283,10 +302,10 @@ func (r *FastPathResponder) RespondWithPath(conv *Conversation, query string, pa
 	switch path {
 	case PathMedium:
 		sysPrompt = r.buildMediumPrompt(conv, query)
-		maxHistory = 10
+		maxHistory = 4
 	default: // PathFast
 		sysPrompt = fastPathSystemPrompt
-		maxHistory = 4
+		maxHistory = 2
 	}
 
 	// Build messages: system prompt + conversation history + new query.
@@ -309,18 +328,21 @@ func (r *FastPathResponder) RespondWithPath(conv *Conversation, query string, pa
 	// Add the current query.
 	msgs = append(msgs, ollama.Message{Role: "user", Content: query})
 
-	// Medium path gets more tokens for knowledge-rich answers.
-	// Fast path stays brief for greetings/acknowledgments.
-	numPredict := 512
+	// Token limits tuned for CPU inference (~7 tok/s on 1.5b).
+	// Small NumCtx = faster prefill. Fast path needs almost no context.
+	numPredict := 100
+	numCtx := 512
 	temp := 0.7
 	if path == PathMedium {
-		numPredict = 1024
+		numPredict = 150
+		numCtx = 1024
 		temp = 0.6
 	}
 
 	resp, err := r.LLM.Chat(msgs, &ollama.ModelOptions{
 		Temperature: temp,
 		NumPredict:  numPredict,
+		NumCtx:      numCtx,
 	})
 	if err != nil {
 		return "", err
@@ -330,8 +352,12 @@ func (r *FastPathResponder) RespondWithPath(conv *Conversation, query string, pa
 
 	// Learn from this response — cache it for future similar queries.
 	// Synchronous so the crystal is saved before the next request arrives.
-	if r.ResponseCrystals != nil && path == PathMedium && len(answer) > 20 {
-		r.ResponseCrystals.Learn(query, answer, 0.7)
+	if r.ResponseCrystals != nil && len(answer) > 20 {
+		quality := 0.65
+		if path == PathMedium {
+			quality = 0.7
+		}
+		r.ResponseCrystals.Learn(query, answer, quality)
 	}
 
 	// Post-generation fact-checking: verify answer against knowledge store.
@@ -376,10 +402,10 @@ func (r *FastPathResponder) RespondStreamWithPathFull(conv *Conversation, query 
 	switch path {
 	case PathMedium:
 		sysPrompt = r.buildMediumPrompt(conv, query)
-		maxHistory = 10
+		maxHistory = 4
 	default:
 		sysPrompt = fastPathSystemPrompt
-		maxHistory = 4
+		maxHistory = 2
 	}
 
 	msgs := make([]ollama.Message, 0, maxHistory+2)
@@ -398,17 +424,20 @@ func (r *FastPathResponder) RespondStreamWithPathFull(conv *Conversation, query 
 	}
 	msgs = append(msgs, ollama.Message{Role: "user", Content: query})
 
-	numPredict := 512
-	temp := 0.7
+	numPredict2 := 100
+	numCtx2 := 512
+	temp2 := 0.7
 	if path == PathMedium {
-		numPredict = 1024
-		temp = 0.6
+		numPredict2 = 150
+		numCtx2 = 1024
+		temp2 = 0.6
 	}
 
 	var fullAnswer strings.Builder
 	_, err := r.LLM.ChatStream(msgs, &ollama.ModelOptions{
-		Temperature: temp,
-		NumPredict:  numPredict,
+		Temperature: temp2,
+		NumPredict:  numPredict2,
+		NumCtx:      numCtx2,
 	}, func(token string, done bool) {
 		if !done {
 			fullAnswer.WriteString(token)
@@ -421,13 +450,14 @@ func (r *FastPathResponder) RespondStreamWithPathFull(conv *Conversation, query 
 
 	answer := strings.TrimSpace(fullAnswer.String())
 
-	// Learn from this response
-	if r.ResponseCrystals != nil && path == PathMedium && len(answer) > 20 {
-		r.ResponseCrystals.Learn(query, answer, 0.7)
+	// Learn from this response — all paths get cached for future instant hits.
+	if r.ResponseCrystals != nil && len(answer) > 20 {
+		quality := 0.65
+		if path == PathMedium {
+			quality = 0.7
+		}
+		r.ResponseCrystals.Learn(query, answer, quality)
 	}
-
-	// Fact-check (post-generation, but we already streamed — this is a trade-off)
-	// For streaming, we skip fact-checking since the user already saw the tokens.
 
 	conv.User(query)
 	conv.Assistant(answer)
@@ -440,21 +470,9 @@ func (r *FastPathResponder) buildMediumPrompt(conv *Conversation, query string) 
 	var sb strings.Builder
 	sb.WriteString(mediumPathSystemPrompt)
 
-	// Inject knowledge context — this is what makes medium-path answers accurate.
-	// Use distilled assembly when a distiller is configured for denser context.
-	if r.VCtx != nil {
-		assembly := r.VCtx.WeaveDistilled(query)
-		if prompt := assembly.FormatForPrompt(); prompt != "" {
-			sb.WriteString("\n\n[Knowledge]\n")
-			sb.WriteString(prompt)
-		}
-	} else if r.Knowledge != nil {
-		results, err := r.Knowledge.Search(query, 3)
-		if err == nil && len(results) > 0 {
-			sb.WriteString("\n\n[Knowledge]\n")
-			sb.WriteString(FormatKnowledgeContext(results))
-		}
-	}
+	// Knowledge context disabled for CPU speed — embedding search adds 500ms+
+	// and knowledge is already captured in response crystals after first query.
+	// TODO: re-enable when GPU is available or embeddings are faster.
 
 	// Inject personal growth context
 	if r.Growth != nil {
@@ -476,7 +494,7 @@ func (r *FastPathResponder) buildMediumPrompt(conv *Conversation, query string) 
 
 	if r.LongTermMem != nil {
 		entries := r.LongTermMem.All()
-		limit := 10
+		limit := 5
 		if len(entries) < limit {
 			limit = len(entries)
 		}

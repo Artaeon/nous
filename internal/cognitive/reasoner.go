@@ -21,12 +21,12 @@ import (
 )
 
 // maxToolIterations is the default maximum for complex queries.
-// Simple queries use fewer iterations; early exit reduces this further.
-const maxToolIterations = 8
+// Kept low for fast responses — most queries resolve in 1-2 iterations.
+const maxToolIterations = 4
 
 // confidenceThreshold determines when to exit early.
-// If confidence > 0.9 after at least 2 iterations, stop.
-const earlyExitConfidence = 0.9
+// If confidence > 0.85 after at least 1 iteration, stop.
+const earlyExitConfidence = 0.85
 
 // Reasoner performs autonomous chain-of-thought inference with tool use.
 // It listens for percepts, reasons about them, and can autonomously chain
@@ -374,9 +374,9 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 		default:
 		}
 
-		// Confidence-based early exit: if we have enough evidence after 2+ iterations,
+		// Confidence-based early exit: if we have enough evidence after 1+ iterations,
 		// generate final answer instead of continuing to call tools
-		if i >= 2 && pipe.StepCount() >= 2 {
+		if i >= 1 && pipe.StepCount() >= 1 {
 			hasReflectorIssues := false
 			if reflection, ok := r.Board.Get("reflection"); ok {
 				if msg, isStr := reflection.(string); isStr && msg != "" {
@@ -385,7 +385,7 @@ func (r *Reasoner) reason(ctx context.Context, percept blackboard.Percept) error
 			}
 			hasCrystalMatch := r.Crystals != nil && r.Crystals.Match(percept.Raw) != nil
 
-			if !hasReflectorIssues && (hasCrystalMatch || i >= 4) {
+			if !hasReflectorIssues && (hasCrystalMatch || i >= 2) {
 				r.emitStatus(fmt.Sprintf("  %s↳ early exit (iter %d, confident)%s", ColorDim, i, ColorReset))
 				break
 			}
@@ -1688,12 +1688,12 @@ func formatArgs(args map[string]string) string {
 
 // modelOpts returns tuned ModelOptions for small model reliability.
 // RepeatPenalty prevents the repetition loops that plague 1.5B models.
-// NumPredict is kept modest to encourage tool calls over long prose.
+// NumPredict is kept low to encourage tool calls over long prose.
 func (r *Reasoner) modelOpts() *ollama.ModelOptions {
 	return &ollama.ModelOptions{
-		Temperature:   0.5,
-		NumPredict:    512,
-		RepeatPenalty: 1.15,
+		Temperature:   0.4,
+		NumPredict:    150,
+		RepeatPenalty: 1.2,
 		RepeatLastN:   64,
 	}
 }

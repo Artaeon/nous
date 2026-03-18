@@ -77,7 +77,7 @@ Goal: %s`, goal.Description)
 		{Role: "user", Content: prompt},
 	}, &ollama.ModelOptions{
 		Temperature: 0.3,
-		NumPredict:  512,
+		NumPredict:  200,
 	})
 	if err != nil {
 		return fmt.Errorf("planner llm: %w", err)

@@ -42,7 +42,7 @@ func NewResponseCrystalStore(embedFunc func(string) ([]float64, error), storePat
 	s := &ResponseCrystalStore{
 		embedFunc: embedFunc,
 		path:      filepath.Join(storePath, "response_crystals.json"),
-		threshold: 0.82,
+		threshold: 0.78,
 		maxSize:   500,
 	}
 	s.load()
