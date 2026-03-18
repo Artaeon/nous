@@ -280,20 +280,22 @@ func TestNLUCompute(t *testing.T) {
 	nlu := NewNLU()
 	cases := []struct {
 		input      string
+		wantIntent string
+		wantAction string
 		hasExpr    bool
 		expression string
 	}{
-		{"what is 2 + 2", true, "2 + 2"},
-		{"calculate 15 * 3", true, "15 * 3"},
-		{"how much is 100 / 4", true, "100 / 4"},
+		{"what is 2 + 2", "compute", "compute", true, "2 + 2"},
+		{"calculate 15 * 3", "calculate", "calculate", false, ""},
+		{"how much is 100 / 4", "compute", "compute", true, "100 / 4"},
 	}
 	for _, c := range cases {
 		r := nlu.Understand(c.input)
-		if r.Intent != "compute" {
-			t.Errorf("Understand(%q): want intent=compute, got %q", c.input, r.Intent)
+		if r.Intent != c.wantIntent {
+			t.Errorf("Understand(%q): want intent=%s, got %q", c.input, c.wantIntent, r.Intent)
 		}
-		if r.Action != "compute" {
-			t.Errorf("Understand(%q): want action=compute, got %q", c.input, r.Action)
+		if r.Action != c.wantAction {
+			t.Errorf("Understand(%q): want action=%s, got %q", c.input, c.wantAction, r.Action)
 		}
 		if c.hasExpr {
 			if expr, ok := r.Entities["expression"]; !ok || expr != c.expression {

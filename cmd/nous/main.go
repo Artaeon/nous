@@ -746,16 +746,33 @@ func main() {
 		responseStarted = false
 		start := time.Now()
 
-		// Try NLU/ActionRouter first — handles all 32 tools deterministically (0ms).
+		// Try NLU/ActionRouter first — handles all 51 tools deterministically (0ms).
+		// Supports multi-intent: "do X and Y" splits into separate actions.
 		// Only falls through to LLM if the action needs language generation.
 		var answer string
-		nluResult := nlu.UnderstandWithContext(input, reasoner.Conv)
+		nluResult := nlu.UnderstandMultiWithContext(input, reasoner.Conv)
 		if nluResult.Confidence >= 0.5 {
-			actionResult := actions.Execute(nluResult, reasoner.Conv)
-			if actionResult.DirectResponse != "" {
-				answer = actionResult.DirectResponse
-				reasoner.Conv.User(input)
-				reasoner.Conv.Assistant(answer)
+			if len(nluResult.SubResults) > 0 {
+				// Multi-intent: execute each sub-result and combine responses
+				var parts []string
+				for _, sub := range nluResult.SubResults {
+					subAction := actions.Execute(sub, reasoner.Conv)
+					if subAction.DirectResponse != "" {
+						parts = append(parts, subAction.DirectResponse)
+					}
+				}
+				if len(parts) > 0 {
+					answer = strings.Join(parts, "\n\n")
+					reasoner.Conv.User(input)
+					reasoner.Conv.Assistant(answer)
+				}
+			} else {
+				actionResult := actions.Execute(nluResult, reasoner.Conv)
+				if actionResult.DirectResponse != "" {
+					answer = actionResult.DirectResponse
+					reasoner.Conv.User(input)
+					reasoner.Conv.Assistant(answer)
+				}
 			}
 		}
 

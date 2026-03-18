@@ -72,6 +72,12 @@ type NLU struct {
 	diskUsageWords  []string
 	processWords    []string
 	qrcodeWords     []string
+	calculatorWords []string
+	passwordWords   []string
+	bookmarkWords   []string
+	journalWords    []string
+	habitWords      []string
+	expenseWords    []string
 }
 
 // NewNLU creates a new deterministic NLU engine with all pattern tables initialized.
@@ -324,6 +330,41 @@ func NewNLU() *NLU {
 		qrcodeWords: []string{
 			"qr code", "qrcode", "generate qr", "create qr", "scan qr",
 			"read qr", "decode qr", "make qr",
+		},
+		calculatorWords: []string{
+			"calculate", "calculator", "compute", "evaluate", "solve",
+			"what is the result of", "math", "expression",
+			"square root", "factorial", "percent of", "% of", "% off",
+		},
+		passwordWords: []string{
+			"generate password", "random password", "new password",
+			"create password", "password generator", "strong password",
+			"passphrase", "generate passphrase", "random passphrase",
+			"generate pin", "random pin", "new pin",
+		},
+		bookmarkWords: []string{
+			"bookmark", "save link", "save url", "save this link",
+			"my bookmarks", "list bookmarks", "show bookmarks",
+			"delete bookmark", "remove bookmark", "search bookmarks",
+			"saved links",
+		},
+		journalWords: []string{
+			"journal", "diary", "diary entry", "journal entry",
+			"dear diary", "write journal", "my journal", "today's journal",
+			"log entry", "daily log", "write in journal", "write in diary",
+			"show journal", "journal today", "week journal", "weekly journal",
+		},
+		habitWords: []string{
+			"habit", "habits", "track habit", "habit tracker",
+			"create habit", "new habit", "check habit", "mark habit",
+			"did i", "habit streak", "habit status", "my habits",
+			"daily habit", "habit done", "complete habit",
+		},
+		expenseWords: []string{
+			"expense", "expenses", "spent", "purchase", "bought",
+			"cost me", "paid for", "add expense", "log expense",
+			"track expense", "my expenses", "spending", "how much spent",
+			"expense summary", "monthly expenses", "weekly expenses",
 		},
 		webLookupPatterns: []*regexp.Regexp{
 			regexp.MustCompile(`(?i)what(?:'s| is) the (?:weather|temperature|forecast)`),
@@ -672,6 +713,54 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 			return
 		}
 	}
+	for _, w := range n.calculatorWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "calculate"
+			r.Confidence = 0.85
+			return
+		}
+	}
+	for _, w := range n.passwordWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "password"
+			r.Confidence = 0.90
+			return
+		}
+	}
+	for _, w := range n.bookmarkWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "bookmark"
+			r.Confidence = 0.85
+			return
+		}
+	}
+	for _, w := range n.journalWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "journal"
+			r.Confidence = 0.85
+			return
+		}
+	}
+	for _, w := range n.habitWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "habit"
+			r.Confidence = 0.85
+			return
+		}
+	}
+	for _, w := range n.expenseWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "expense"
+			r.Confidence = 0.85
+			return
+		}
+	}
+
+	// 6f-fuzzy. Fuzzy fallback for tool word lists — synonym expansion + typo tolerance.
+	// Only fires when none of the exact tool checks above matched.
+	if n.fuzzyClassifyTools(lower, r) {
+		return
+	}
 
 	// 6g. Recommendation patterns
 	for _, v := range n.recommendVerbs {
@@ -950,6 +1039,18 @@ func (n *NLU) mapAction(lower string, r *NLUResult) {
 		r.Action = "process"
 	case "qrcode":
 		r.Action = "qrcode"
+	case "calculate":
+		r.Action = "calculate"
+	case "password":
+		r.Action = "password"
+	case "bookmark":
+		r.Action = "bookmark"
+	case "journal":
+		r.Action = "journal"
+	case "habit":
+		r.Action = "habit"
+	case "expense":
+		r.Action = "expense"
 
 	case "recommendation":
 		r.Action = "lookup_knowledge"
