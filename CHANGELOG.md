@@ -2,6 +2,40 @@
 
 All notable changes to Nous are documented here.
 
+## [0.9.0] - 2026-03-18
+
+### Added
+- **Deterministic NLU Engine**: Rule-based intent classification with 30+ categories, entity extraction, and confidence scoring — routes most queries in <1ms without any LLM call
+- **ActionRouter**: Direct tool dispatch from NLU results, returning DirectResponse for zero-LLM-call query handling
+- **27 new assistant tools** (total: 45 built-in tools):
+  - **Batch 1**: weather, convert, currency, notes, todos, filefinder, summarize, rss, coderunner, calendar, email, screenshot, websearch
+  - **Batch 2**: volume, brightness, notify, timer, app launcher, hash/encode, dictionary, netcheck, translate, qrcode, archive, diskusage, process manager
+- **handleGenericTool**: Reusable action handler pattern for simple tool delegation
+- **WeaveForPath**: Path-aware context assembly that filters code-indexed content from Q&A queries
+- **Response crystal normalization**: Strips question preambles for better cache hit rates
+- **Reverse conversion parsing**: Regex support for "how many km is 10 miles" format
+- **NLU word lists**: 20+ domain-specific word lists for deterministic intent matching (weatherWords, convertWords, volumeWords, brightnessWords, timerWords, translateWords, etc.)
+
+### Changed
+- Tools expanded from 18 to 45
+- Binary size: ~14 MB (from ~11 MB)
+- NLU checked before FastPath in REPL — most queries now bypass LLM entirely
+- Knowledge source relevance threshold raised from 0.3 to 0.5 (reduces noise)
+- Quick greetings expanded from 23 to 68 entries
+- LLM bypass rate on day 1: ~80% (up from ~65%)
+- Web search returns top 3 formatted results directly (no LLM needed)
+- Memory lookups return single facts directly (no LLM needed)
+- Schedule/reminder actions return formatted confirmations directly
+
+### Fixed
+- NLU misrouting: assistant features now checked before generic verb rules
+- Timer/reminder word conflict: "set a timer" no longer routes to reminders
+- Knowledge contamination: code-indexed content filtered from Q&A responses
+- CLI not routing through NLU: all channels now share NLU/ActionRouter
+- File finder case sensitivity on Linux for explicit paths
+- External IP response leaking HTML on some networks
+- Schedule action returning empty task text
+
 ## [0.6.0] - 2026-03-11
 
 ### Added

@@ -15,9 +15,9 @@ make test-short      # Quick subset
 
 | Metric | Value |
 |--------|-------|
-| Total test cases | **1,174** |
-| Test files | **73** |
-| Test lines of code | **19,643+** |
+| Total test functions | **1,841+** |
+| Test files | **142** |
+| Passing packages | **20** |
 | Race conditions | **0** |
 | External dependencies | **0** |
 | Fuzz targets | **7** |
@@ -37,7 +37,7 @@ Every package has unit tests covering:
 - **Predictor**: Cache hits/misses, expiry, eviction, concurrent access, prediction strategies
 - **Recipes**: Recording, deduplication, matching, replay, parameter substitution, pruning
 - **Memory systems**: Working memory decay, long-term persistence, episodic search
-- **Tools**: All 18 built-in tools, browser automation, HTML parsing
+- **Tools**: All 45 built-in tools, browser automation, HTML parsing
 - **Training**: Data collection, quality filtering, export formats, auto-tuning
 - **Server**: HTTP endpoints, fast path routing, job management
 - **Sentinel**: inotify watcher, event debouncing, recursive monitoring
@@ -98,7 +98,7 @@ All tests pass with Go's race detector (`-race` flag):
 
 ```bash
 go test ./... -race -count=1
-# All 19 packages pass, 0 data races
+# All 20 packages pass, 0 data races
 ```
 
 The predictor specifically has concurrent access tests that exercise simultaneous read/write operations on the prediction cache with the race detector enabled.
@@ -115,7 +115,7 @@ The predictor specifically has concurrent access tests that exercise simultaneou
 | Package | Test Coverage | Key Tests |
 |---------|--------------|-----------|
 | cognitive/ | High | 28 test files, benchmarks, fuzz tests |
-| tools/ | High | 1,478 lines of tool tests |
+| tools/ | High | 7,800+ lines of tool tests (45 tools) |
 | memory/ | High | Working, long-term, project, episodic |
 | ollama/ | High | 707 lines, mock server tests |
 | training/ | High | Collection, auto-tune, modelfile |

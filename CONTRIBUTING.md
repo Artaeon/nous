@@ -112,7 +112,7 @@ Open an issue describing:
 
 ### Medium Impact
 
-- **More tools** &mdash; Docker, Kubernetes, database clients, HTTP testing
+- **More tools** &mdash; Docker, Kubernetes, database clients, HTTP testing, Bluetooth, Wi-Fi management
 - **macOS/Windows sentinel** &mdash; FSEvents and ReadDirectoryChanges equivalents
 - **Fine-tuning datasets** &mdash; Curated training data for common coding tasks
 - **Web UI improvements** &mdash; Markdown rendering, code highlighting, file browser

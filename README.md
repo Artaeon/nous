@@ -11,11 +11,12 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.8.0-blue?style=flat-square" alt="v0.8.0">
+  <img src="https://img.shields.io/badge/version-0.9.0-blue?style=flat-square" alt="v0.9.0">
   <img src="https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.22+">
+  <img src="https://img.shields.io/badge/tools-45_built--in-orange?style=flat-square" alt="45 built-in tools">
   <img src="https://img.shields.io/badge/knowledge-669_chunks-blueviolet?style=flat-square" alt="669 knowledge chunks">
   <img src="https://img.shields.io/badge/virtual_context-66.9K_tokens-cyan?style=flat-square" alt="66.9K virtual tokens">
-  <img src="https://img.shields.io/badge/binary-~11_MB-blue?style=flat-square" alt="~11 MB binary">
+  <img src="https://img.shields.io/badge/binary-~14_MB-blue?style=flat-square" alt="~14 MB binary">
   <img src="https://img.shields.io/badge/deps-zero-brightgreen?style=flat-square" alt="Zero deps">
   <img src="https://img.shields.io/badge/cloud-not_required-green?style=flat-square" alt="No Cloud">
   <img src="https://img.shields.io/badge/license-MIT-brightgreen?style=flat-square" alt="MIT License">
@@ -32,23 +33,29 @@
 
 Nous is an open-source **personal AI assistant** that runs **entirely on your local hardware** via [Ollama](https://ollama.ai). It's not a chatbot &mdash; it's a **cognitive system** that thinks, remembers, learns, and grows with you over time.
 
-Built as a **concurrent cognitive architecture** with six independent processing streams, a knowledge engine with 669 encyclopedic chunks, and a virtual context system that makes a 1.5B model feel like it has 200K+ tokens of context.
+Built as a **concurrent cognitive architecture** with six independent processing streams, a deterministic NLU engine that handles most queries in under 1ms without any LLM call, 45 built-in tools, a knowledge engine with 669 encyclopedic chunks, and a virtual context system that makes a small model feel like it has 200K+ tokens of context.
 
-**One ~11 MB Go binary. Zero dependencies. Zero cloud. Your data never leaves your machine.**
+**One ~14 MB Go binary. Zero dependencies. Zero cloud. Your data never leaves your machine.**
 
 ### What Nous Can Do
 
+- **Understand you instantly** &mdash; deterministic NLU with 30+ intent categories routes queries in <1ms, most without any LLM call
 - **Answer knowledge questions** &mdash; science, history, philosophy, technology, math, health, arts, and daily life topics from its 669-chunk knowledge base
 - **Remember and grow** &mdash; learns your interests, preferences, and personal facts over time
-- **Manage your day** &mdash; reminders, tasks, routines, morning briefings, daily compass
-- **Search and research** &mdash; web lookups, file exploration, semantic memory search
-- **Work with files** &mdash; read, write, edit, grep, organize &mdash; with undo support
-- **Help with code** &mdash; when needed, with 18 built-in tools and Go AST indexing
+- **Manage your day** &mdash; reminders, timers, tasks, calendar, routines, morning briefings, daily compass
+- **Control your desktop** &mdash; volume, brightness, notifications, app launcher, screenshots
+- **Search and research** &mdash; web search, URL fetching, RSS feeds, file exploration, semantic memory search
+- **Work with files** &mdash; read, write, edit, grep, find, archive, disk usage &mdash; with undo support
+- **Help with code** &mdash; run code (Python/Go/JS/Bash), 45 built-in tools, Go AST indexing
+- **Translate and convert** &mdash; unit conversion, currency exchange, language translation, dictionary lookups
+- **Network and system** &mdash; ping, DNS, port checks, process management, system info, hashing/encoding
+- **Notes, todos, and email** &mdash; take notes, manage todo lists, check email
+- **Generate QR codes** &mdash; create and read QR codes
 - **Fine-tune itself** &mdash; learns from every interaction, can compile its experience into a custom model
 - **Run as a server** &mdash; HTTP API + web UI for remote access
 - **Deploy anywhere** &mdash; Docker, systemd, or one-line install
 
-All running on CPU with a 1.5B parameter model.
+All running on CPU with a small local model. No API keys needed.
 
 ---
 
@@ -128,15 +135,16 @@ Each stream runs as an independent goroutine, communicating through the blackboa
 | **Reflector** | Evaluate | Detects loops, hallucinations, quality issues |
 | **Learner** | Grow | Extracts behavioral patterns, trains neural cortex |
 
-### 3-Tier Query Classification
+### 4-Tier Query Classification
 
 Not every question needs the full pipeline:
 
 | Tier | Path | When | Latency |
 |------|------|------|---------|
+| **NLU Instant** | Deterministic NLU + tool dispatch | Weather, time, volume, translate, convert, timer, notes, todos, and 20+ more intents | **<1ms** (0 LLM calls) |
 | **Fast** | Single LLM call | Greetings, thanks, yes/no | ~1-2s |
 | **Medium** | LLM + knowledge context | Knowledge questions, explanations | ~3-5s |
-| **Full** | Complete cognitive pipeline | Tool use, file ops, complex tasks | ~5-15s |
+| **Full** | Complete cognitive pipeline | Complex reasoning, multi-step tasks | ~5-15s |
 
 ---
 
@@ -210,11 +218,24 @@ The #1 problem with small models: context fills up after 3-4 tool calls. Quality
 
 **Solution**: Each reasoning step gets a **fresh LLM conversation** with only the essentials. At step 8, context usage is ~15% instead of ~80%.
 
-### 7. Cognitive Grounding (Anti-Hallucination)
+### 7. Deterministic NLU Engine
+
+**Most queries never touch the LLM at all.**
+
+A rule-based Natural Language Understanding engine with 30+ intent categories classifies user input in microseconds using pattern matching, word lists, and entity extraction. The NLU feeds an ActionRouter that dispatches directly to tools, returning results as DirectResponse without any LLM call.
+
+```
+"what's the weather?"        → NLU → weather tool → result    (0 LLM calls, <100ms)
+"set a timer for 5 minutes"  → NLU → timer tool → started     (0 LLM calls, <1ms)
+"translate hello to spanish" → NLU → translate tool → "hola"   (0 LLM calls, <500ms)
+"convert 10 miles to km"     → NLU → convert tool → 16.09 km  (0 LLM calls, <1ms)
+```
+
+### 8. Cognitive Grounding (Anti-Hallucination)
 
 Five layers preventing the model from making things up:
 
-1. **Progressive Tool Disclosure** &mdash; 5-8 relevant tools per intent, not all 18
+1. **Progressive Tool Disclosure** &mdash; 5-8 relevant tools per intent, not all 45
 2. **Smart Truncation** &mdash; Tool-specific result shortening
 3. **Result Validation** &mdash; Checks for empty reads, missing files, errors
 4. **Context Budget** &mdash; Auto-compresses at 75%, forces answer at 85%
@@ -224,6 +245,8 @@ Five layers preventing the model from making things up:
 
 | Feature | What It Does |
 |---------|-------------|
+| **NLU Engine** | 30+ intent categories, deterministic routing, <1ms classification |
+| **ActionRouter** | Direct tool dispatch from NLU, zero LLM calls for most queries |
 | **Multi-Model Router** | Routes perception→tinyllama, reasoning→qwen2.5:1.5b |
 | **Tool Choreography** | Records successful tool sequences as reusable recipes |
 | **Predictive Cache** | Pre-computes likely follow-ups (read→test file, grep→read match) |
@@ -237,7 +260,7 @@ Five layers preventing the model from making things up:
 
 ---
 
-## 18 Built-in Tools
+## 45 Built-in Tools
 
 | Category | Tools |
 |----------|-------|
@@ -245,6 +268,12 @@ Five layers preventing the model from making things up:
 | **Modify** | `write`, `edit`, `patch`, `find_replace`, `replace_all`, `mkdir` |
 | **System** | `shell`, `run`, `sysinfo`, `clipboard`, `fetch` |
 | **Version Control** | `git`, `diff` |
+| **Desktop** | `volume`, `brightness`, `notify`, `screenshot`, `app` |
+| **Information** | `weather`, `dictionary`, `translate`, `websearch`, `rss`, `summarize` |
+| **Productivity** | `notes`, `todos`, `calendar`, `email`, `timer`, `reminder` |
+| **Convert & Compute** | `convert`, `currency`, `hash`, `qrcode`, `coderunner` |
+| **Files & Storage** | `filefinder`, `archive`, `diskusage` |
+| **Network & Processes** | `netcheck`, `process` |
 
 ---
 
@@ -319,10 +348,10 @@ Five layers preventing the model from making things up:
 $ ./nous
 
   ╭──────────────────────────────────────────────╮
-  │ Nous v0.8.0                                  │
+  │ Nous v0.9.0                                  │
   │ model   qwen2.5:1.5b                         │
   │ host    http://localhost:11434                │
-  │ tools   18 built-ins                          │
+  │ tools   45 built-ins                          │
   │ memory  64 working slots                      │
   │ context 66.9K virtual tokens                  │
   ╰──────────────────────────────────────────────╯
@@ -478,6 +507,8 @@ nous/
 │   │   ├── modelcompiler.go       # Model Compiler (experience → weights)
 │   │   ├── fastpath.go            # 3-tier query classification
 │   │   ├── grounding.go           # Anti-hallucination system
+│   │   ├── nlu.go                 # Deterministic NLU engine (30+ intents)
+│   │   ├── action.go              # ActionRouter (tool dispatch, 0 LLM calls)
 │   │   ├── router.go              # Multi-model routing
 │   │   ├── recipes.go             # Tool choreography
 │   │   ├── predictor.go           # Speculative pre-computation
@@ -489,7 +520,7 @@ nous/
 │   ├── sentinel/                  # inotify filesystem watcher
 │   ├── server/                    # HTTP API + web UI
 │   ├── training/                  # Self-improvement pipeline
-│   ├── tools/                     # 18 built-in tools
+│   ├── tools/                     # 45 built-in tools
 │   └── ollama/                    # Ollama HTTP client
 ├── Dockerfile
 ├── docker-compose.yml

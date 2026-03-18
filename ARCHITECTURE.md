@@ -1,13 +1,13 @@
 # Nous (νοῦς) — Architecture Reference
 
 **Native Orchestration of Unified Streams**
-Version 0.9.0 | Go 1.22+ | Zero External Dependencies | ~11MB Static Binary
+Version 0.9.0 | Go 1.22+ | Zero External Dependencies | ~14MB Static Binary | 45 Built-in Tools
 
 ---
 
 ## Overview
 
-Nous is a fully local AI assistant that treats the LLM as a peripheral device, not the brain. Deterministic code handles 70-95% of queries without any LLM call. The system gets faster the more you use it — every LLM response teaches Nous to answer that type of question instantly next time.
+Nous is a fully local AI assistant that treats the LLM as a peripheral device, not the brain. A deterministic NLU engine with 30+ intent categories and 45 built-in tools handles 70-95% of queries without any LLM call. The system gets faster the more you use it — every LLM response teaches Nous to answer that type of question instantly next time.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -16,6 +16,19 @@ Nous is a fully local AI assistant that treats the LLM as a peripheral device, n
 └──────────────────────┬───────────────────────────────────────────┘
                        │
                        ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                     NLU ENGINE (first pass)                       │
+│         Deterministic intent classification, <1ms                 │
+│         30+ intent categories, entity extraction                  │
+│                                                                  │
+│  Confidence ≥ 0.5 → ActionRouter → Direct tool dispatch          │
+│  weather, convert, timer, translate, volume, notes, todos,       │
+│  calendar, hash, dict, network, process, app, brightness,        │
+│  archive, diskusage, qrcode, screenshot, email, news, ...        │
+│  → 0 LLM calls, <1ms-500ms                                      │
+└──────┬───────────────────────────────────────────────────────────┘
+       │ (NLU miss or low confidence)
+       ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │                     QUERY CLASSIFICATION                         │
 │              FastPathClassifier (51 regex patterns)               │
@@ -29,12 +42,11 @@ Nous is a fully local AI assistant that treats the LLM as a peripheral device, n
    FAST PATH      MEDIUM PATH              FULL PATH
    (0-5s)         (0ms-10s)                (200ms-40s)
        │              │                        │
-       │              │                        │
        ▼              ▼                        ▼
 ┌─────────────┐ ┌──────────────┐  ┌────────────────────────────┐
 │ Canned      │ │ Response     │  │ Exocortex 3-Tier Engine    │
 │ Greetings   │ │ Crystals     │  │                            │
-│ (22 entries)│ │ (semantic    │  │ Tier 1: Intent Compiler    │
+│ (68 entries)│ │ (semantic    │  │ Tier 1: Intent Compiler    │
 │             │ │  cache, 0ms) │  │   33 patterns → tool call  │
 │ 0ms         │ │              │  │   → Response Synthesizer   │
 │             │ │ HIT? → done  │  │   → 0ms, no LLM           │
@@ -130,35 +142,39 @@ The core insight: **the more you use Nous, the faster it gets.** Every LLM respo
 
 | Layer | What it handles | Speed | Coverage |
 |-------|----------------|-------|----------|
-| 1. Canned greetings | "hello", "thanks", "bye" (22 entries) | **0ms** | 5-10% |
-| 2. Intent compiler | "read file", "show commits" (33 patterns) | **200ms** | 30-40% |
-| 3. Response synthesizer | Tool result formatting (8 tool types) | **instant** | (part of #2) |
-| 4. Response crystals | Previously-answered questions (500 cache) | **28ms** | **grows over time** |
-| 5. Phantom chain cache | Repeated tool chains (200 LRU, 60s TTL) | **instant** | varies |
-| 6. Crystal recipes | Learned tool sequences (50 recipes) | **instant** | varies |
-| 7. Speculative pre-computation | Follow-up predictions (20 LRU, 30s TTL) | **pre-loaded** | varies |
-| 8. Fast-path LLM | New simple questions | **3-10s** | 10-15% |
-| 9. Full pipeline LLM | Complex/creative (up to 6 tool iterations) | **8-40s** | 5-10% |
+| 1. NLU + ActionRouter | 30+ intents: weather, convert, timer, translate, volume, notes, todos, etc. | **<1ms** | **40-60%** |
+| 2. Canned greetings | "hello", "thanks", "bye" (68 entries) | **0ms** | 5-10% |
+| 3. Intent compiler | "read file", "show commits" (33 patterns) | **200ms** | 10-20% |
+| 4. Response synthesizer | Tool result formatting (8 tool types) | **instant** | (part of #3) |
+| 5. Response crystals | Previously-answered questions (500 cache) | **28ms** | **grows over time** |
+| 6. Phantom chain cache | Repeated tool chains (200 LRU, 60s TTL) | **instant** | varies |
+| 7. Crystal recipes | Learned tool sequences (50 recipes) | **instant** | varies |
+| 8. Speculative pre-computation | Follow-up predictions (20 LRU, 30s TTL) | **pre-loaded** | varies |
+| 9. Fast-path LLM | New simple questions | **3-10s** | 5-10% |
+| 10. Full pipeline LLM | Complex/creative (up to 6 tool iterations) | **8-40s** | 3-5% |
 
 ### Measured Performance
 
 ```
+NLU instant:  "what's the weather?"  → NLU → tool → 67ms     (0 LLM calls)
+NLU instant:  "convert 5 km to mi"   → NLU → tool → <1ms     (0 LLM calls)
+NLU instant:  "set timer 5 min"      → NLU → tool → <1ms     (0 LLM calls)
+NLU instant:  "disk usage"           → NLU → tool → 8ms      (0 LLM calls)
+NLU instant:  "check network"        → NLU → tool → 637ms    (0 LLM calls)
 First time:   "what is relativity?"  → LLM → 12 seconds
 Second time:  "explain relativity"   → crystal hit → 28 milliseconds (464x faster)
-
 Greetings:    "hello"                → canned → 0ms
 Tool queries: "show recent commits"  → exo-bypass → 200ms
-File ops:     "read main.go"         → exo-bypass → 200ms
 ```
 
 ### Projected LLM Bypass Rate Over Time
 
 ```
-Day 1:    65% bypass (built-in patterns only)
-Week 1:   75% bypass (50 response crystals learned)
-Week 2:   82% bypass (100 crystals + recipe patterns)
-Month 1:  90% bypass (200 crystals covering daily patterns)
-Month 3:  95% bypass (500 crystals, full vocabulary cached)
+Day 1:    80% bypass (NLU handles 30+ intents + built-in patterns)
+Week 1:   87% bypass (50 response crystals learned)
+Week 2:   91% bypass (100 crystals + recipe patterns)
+Month 1:  95% bypass (200 crystals covering daily patterns)
+Month 3:  98% bypass (500 crystals, full vocabulary cached)
 ```
 
 ---
@@ -237,7 +253,9 @@ Layer 5: Post-Generation Validation
 
 ---
 
-## Tool System: 18 Built-In Tools
+## Tool System: 45 Built-In Tools
+
+### Core File Tools
 
 | Tool | Function | Undo |
 |------|----------|------|
@@ -257,20 +275,62 @@ Layer 5: Post-Generation Validation
 | `shell` | Shell execution (requires --trust) | — |
 | `run` | Command execution (60s timeout) | — |
 | `fetch` | Fetch URL content (1MB limit, 30s timeout) | — |
-| `sysinfo` | OS, CPU, disk, hostname | — |
+| `sysinfo` | OS, CPU, disk, hostname, IP | — |
 | `clipboard` | Read/write system clipboard | — |
 
-### Exocortex Bypass
+### Assistant Tools (Batch 1)
 
-33 intent patterns compile queries directly to tool calls without LLM:
+| Tool | Function |
+|------|----------|
+| `weather` | Weather via wttr.in (current, forecast) |
+| `convert` | Unit conversion (length, weight, temperature, volume, speed, data) |
+| `currency` | Currency exchange rates via frankfurter.app |
+| `notes` | Create, list, search, delete notes |
+| `todos` | Create, list, complete, delete todo items |
+| `filefinder` | Smart file search with extension and directory awareness |
+| `summarize` | Summarize URL content |
+| `rss` | RSS/Atom feed reader |
+| `coderunner` | Run code snippets (Python, Go, JavaScript, Bash) |
+| `calendar` | Calendar events and date calculations |
+| `email` | Check email via IMAP |
+| `screenshot` | Take screenshots via grim/scrot |
+| `websearch` | Web search via DuckDuckGo/SearXNG |
+
+### Assistant Tools (Batch 2)
+
+| Tool | Function |
+|------|----------|
+| `volume` | System volume control via pactl |
+| `brightness` | Screen brightness via brightnessctl/sysfs |
+| `notify` | Desktop notifications via notify-send |
+| `timer` | Countdown timer with pomodoro support |
+| `app` | App launcher, process finder/killer (.desktop files) |
+| `hash` | Hash/encode: md5, sha256, base64, url, hex |
+| `dict` | Dictionary definitions via dictionaryapi.dev |
+| `netcheck` | Ping, DNS lookup, port check, connectivity test |
+| `translate` | Language translation via Lingva API |
+| `qrcode` | QR code generation/reading via qrencode/zbarimg |
+| `archive` | Compress/extract tar.gz and zip archives |
+| `diskusage` | Directory size analysis with top-N breakdown |
+| `process` | Process list, search, kill, top (by memory/CPU) |
+
+### NLU-Driven Tool Dispatch
+
+30+ intent categories route queries directly to tools without LLM:
 
 ```
-"read main.go"           → read(path="main.go")           → 200ms
-"show recent commits"    → git(args="log --oneline -15")   → 200ms
-"find test files"        → glob(pattern="**/*_test*")      → 200ms
-"how many go files?"     → glob(pattern="**/*.go") + count → 200ms
-"search for TODO"        → grep(pattern="TODO")            → 200ms
-"show project structure" → tree(path=".")                  → 200ms
+"what's the weather?"          → NLU → weather tool          → <100ms
+"convert 10 miles to km"       → NLU → convert tool          → <1ms
+"set a timer for 5 minutes"    → NLU → timer tool            → <1ms
+"translate hello to spanish"   → NLU → translate tool         → <500ms
+"turn up the volume"           → NLU → volume tool            → <100ms
+"define serendipity"           → NLU → dict tool              → <500ms
+"ping google.com"              → NLU → netcheck tool          → <1s
+"hash this with sha256"        → NLU → hash tool              → <1ms
+"show disk usage"              → NLU → diskusage tool         → <100ms
+"open firefox"                 → NLU → app tool               → <100ms
+"read main.go"                 → Exocortex → read(path=...)   → <200ms
+"show recent commits"          → Exocortex → git(log...)      → <200ms
 ```
 
 ---
@@ -428,19 +488,21 @@ All data stored as plain JSON with atomic writes and automatic backups:
 
 ## What Makes Nous Different
 
-1. **LLM-as-peripheral**: Deterministic code is the brain. LLM is called only when reasoning is needed. No other local assistant does this.
+1. **LLM-as-peripheral**: Deterministic code is the brain. A rule-based NLU engine with 30+ intent categories and 45 tools handles most queries without any LLM call. The LLM is only invoked when reasoning is genuinely needed.
 
-2. **Progressive compilation**: Every LLM response becomes a cached crystal. The system gets faster over time — from 65% bypass on day 1 to 95% after months.
+2. **NLU-first architecture**: Every query hits the NLU engine first (<1ms). Pattern matching, word lists, and entity extraction route to tools directly. Only queries the NLU can't handle fall through to the LLM pipeline.
 
-3. **Zero dependencies**: Single Go binary, no Python, no npm, no Docker required for the binary itself.
+3. **Progressive compilation**: Every LLM response becomes a cached crystal. The system gets faster over time — from 80% bypass on day 1 to 98% after months.
 
-4. **Self-improving**: 8 learning systems evolve tool descriptions, cache patterns, collect training data, fine-tune models, and learn from failures.
+4. **Zero dependencies**: Single Go binary, no Python, no npm, no Docker required for the binary itself. 45 tools implemented in pure Go + standard Linux utilities.
 
-5. **Tiny model effectiveness**: Makes qwen3:4b (2.5GB) genuinely useful through scaffolding, grounding, bypass, and caching.
+5. **Self-improving**: 8 learning systems evolve tool descriptions, cache patterns, collect training data, fine-tune models, and learn from failures.
 
-6. **True personalization**: Onboarding → LTM → system prompt injection → anti-hallucination grounding. Knows your name, interests, and work across sessions.
+6. **Tiny model effectiveness**: Makes qwen3:4b (2.5GB) genuinely useful through NLU bypass, scaffolding, grounding, and caching.
 
-7. **Multi-channel, single brain**: Terminal, Web UI, Telegram, Discord, Matrix — all access the same memory, learning, and crystals.
+7. **True personalization**: Onboarding → LTM → system prompt injection → anti-hallucination grounding. Knows your name, interests, and work across sessions.
+
+8. **Multi-channel, single brain**: Terminal, Web UI, Telegram, Discord, Matrix — all access the same NLU engine, memory, learning, and crystals.
 
 ---
 

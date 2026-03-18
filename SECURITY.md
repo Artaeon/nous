@@ -18,8 +18,13 @@ All tools are classified as safe or dangerous at registration time:
 | Safe (no confirmation) | Dangerous (requires confirmation) |
 |----------------------|----------------------------------|
 | read, ls, tree, glob, grep | write, edit, patch, find_replace |
-| sysinfo, diff, clipboard | shell, mkdir |
-| git (read operations), fetch | |
+| sysinfo, diff, clipboard, fetch | shell, mkdir, run |
+| git (read operations) | app (kill), process (kill) |
+| weather, convert, currency, dict | volume, brightness |
+| translate, hash, netcheck, qrcode | archive (extract/compress) |
+| notes, todos, calendar, timer | notify, email |
+| websearch, rss, summarize | screenshot, coderunner |
+| diskusage, filefinder | |
 
 When `--trust` flag is not set, dangerous tools require explicit user confirmation before execution. The confirmation prompt shows the action and details.
 
