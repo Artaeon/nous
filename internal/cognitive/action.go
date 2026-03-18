@@ -33,6 +33,7 @@ type NLUResult struct {
 	Entities   map[string]string
 	Confidence float64
 	Raw        string
+	SubResults []*NLUResult // populated for multi-intent queries; nil for single-intent
 }
 
 // ActionRouter executes deterministic actions based on NLU results.
@@ -153,6 +154,18 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 		return ar.handleGenericTool(nlu, "process")
 	case "qrcode":
 		return ar.handleGenericTool(nlu, "qrcode")
+	case "calculate":
+		return ar.handleGenericTool(nlu, "calculator")
+	case "password":
+		return ar.handleGenericTool(nlu, "password")
+	case "bookmark":
+		return ar.handleGenericTool(nlu, "bookmarks")
+	case "journal":
+		return ar.handleGenericTool(nlu, "journal")
+	case "habit":
+		return ar.handleGenericTool(nlu, "habits")
+	case "expense":
+		return ar.handleGenericTool(nlu, "expenses")
 	default:
 		// Unknown action — let the LLM handle it.
 		return &ActionResult{
