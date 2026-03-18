@@ -526,3 +526,27 @@ func (ar *ActionRouter) handleScreenshot(nlu *NLUResult) *ActionResult {
 	}
 	return &ActionResult{DirectResponse: result, Source: "screenshot"}
 }
+
+// handleGenericTool is a reusable handler for tools that accept the raw query.
+// It passes the full message as "query" and all entities as individual args.
+func (ar *ActionRouter) handleGenericTool(nlu *NLUResult, toolName string) *ActionResult {
+	if ar.Tools == nil {
+		return &ActionResult{Data: toolName + " unavailable", Source: toolName, NeedsLLM: true}
+	}
+	tool, err := ar.Tools.Get(toolName)
+	if err != nil {
+		return &ActionResult{Data: toolName + " not found", Source: toolName, NeedsLLM: true}
+	}
+
+	args := make(map[string]string)
+	args["query"] = nlu.Raw
+	for k, v := range nlu.Entities {
+		args[k] = v
+	}
+
+	result, err := tool.Execute(args)
+	if err != nil {
+		return &ActionResult{Data: fmt.Sprintf("%s error: %v", toolName, err), Source: toolName, NeedsLLM: true}
+	}
+	return &ActionResult{DirectResponse: result, Source: toolName}
+}

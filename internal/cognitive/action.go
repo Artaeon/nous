@@ -129,6 +129,30 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 		return ar.handleCheckEmail(nlu)
 	case "screenshot":
 		return ar.handleScreenshot(nlu)
+	case "volume":
+		return ar.handleGenericTool(nlu, "volume")
+	case "brightness":
+		return ar.handleGenericTool(nlu, "brightness")
+	case "timer":
+		return ar.handleGenericTool(nlu, "timer")
+	case "app":
+		return ar.handleGenericTool(nlu, "app")
+	case "hash":
+		return ar.handleGenericTool(nlu, "hash")
+	case "dict":
+		return ar.handleGenericTool(nlu, "dict")
+	case "network":
+		return ar.handleGenericTool(nlu, "netcheck")
+	case "translate":
+		return ar.handleGenericTool(nlu, "translate")
+	case "archive":
+		return ar.handleGenericTool(nlu, "archive")
+	case "disk_usage":
+		return ar.handleGenericTool(nlu, "diskusage")
+	case "process":
+		return ar.handleGenericTool(nlu, "process")
+	case "qrcode":
+		return ar.handleGenericTool(nlu, "qrcode")
 	default:
 		// Unknown action — let the LLM handle it.
 		return &ActionResult{
@@ -147,7 +171,7 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 var metaResponses = map[string]string{
 	"who are you":          "I'm Nous (νοῦς) — your personal AI running fully on your machine. I think locally, remember everything, and get smarter over time.",
 	"what are you":         "I'm Nous, a local AI assistant. I search the web, compute answers, remember your preferences, and help plan your day — all running on your hardware.",
-	"what can you do":      "I can: check weather, run code (Python/bash/JS), manage notes and todos, convert units, set reminders, take screenshots, check news, find files, show system info, read clipboard, search the web, do math, remember things, read/write files, and more. All instant, all local.",
+	"what can you do":      "I can: check weather, run code, manage notes/todos, convert units, set timers/reminders, take screenshots, check news, find files, control volume/brightness, translate text, hash/encode data, look up words, manage processes, check network, compress/extract archives, analyze disk usage, generate QR codes, search the web, do math, and more. All instant, all local.",
 	"what is your name":    "I'm Nous (νοῦς) — Greek for 'mind'. I'm your personal AI.",
 	"what's your name":     "I'm Nous (νοῦς) — Greek for 'mind'. I'm your personal AI.",
 	"help":                 "Just ask me anything! I can: weather, run code, notes, todos, reminders, screenshots, news, file search, system info, clipboard, unit conversion, web search, math, memory, file I/O, research, and more.",

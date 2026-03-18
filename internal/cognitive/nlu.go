@@ -58,6 +58,20 @@ type NLU struct {
 	screenshotWords  []string
 	codeRunWords     []string
 	fileFinderWords  []string
+
+	// Batch 2 tools
+	volumeWords     []string
+	brightnessWords []string
+	timerWords      []string
+	appWords        []string
+	hashWords       []string
+	dictWords       []string
+	networkWords    []string
+	translateWords  []string
+	archiveWords    []string
+	diskUsageWords  []string
+	processWords    []string
+	qrcodeWords     []string
 }
 
 // NewNLU creates a new deterministic NLU engine with all pattern tables initialized.
@@ -183,8 +197,8 @@ func NewNLU() *NLU {
 			"mph to", "bytes to", "mb to", "gb to",
 		},
 		reminderWords: []string{
-			"remind me", "set a reminder", "set reminder", "set a timer", "set timer",
-			"timer for", "alarm for", "wake me",
+			"remind me", "set a reminder", "set reminder",
+			"alarm for", "wake me",
 		},
 		sysinfoWords: []string{
 			"disk space", "free space", "storage space",
@@ -246,6 +260,70 @@ func NewNLU() *NLU {
 			"execute this", "execute code", "execute python", "execute script",
 			"python code:", "bash code:", "javascript code:",
 			"```python", "```bash", "```javascript", "```node",
+		},
+		volumeWords: []string{
+			"volume", "sound level", "turn up", "turn down", "louder", "quieter",
+			"mute", "unmute", "audio",
+		},
+		brightnessWords: []string{
+			"brightness", "screen brightness", "dim", "brighten", "brighter", "dimmer",
+			"backlight",
+		},
+		timerWords: []string{
+			"start a timer", "set a timer", "start timer", "set timer",
+			"timer for", "countdown", "stopwatch", "pomodoro",
+			"how much time left", "cancel timer", "stop timer",
+		},
+		appWords: []string{
+			"open app", "launch app", "start app", "open application",
+			"launch application", "kill app", "close app",
+			"running apps", "running applications", "what apps",
+			"open firefox", "open chrome", "open terminal",
+			"open spotify", "open slack", "open discord",
+			"open vscode", "open code",
+		},
+		hashWords: []string{
+			"hash", "md5", "sha256", "sha1", "sha512",
+			"base64 encode", "base64 decode", "base64",
+			"url encode", "url decode", "urlencode", "urldecode",
+			"hex encode", "hex decode", "checksum",
+		},
+		dictWords: []string{
+			"define ", "definition of", "meaning of", "what does the word",
+			"synonym", "synonyms", "antonym", "antonyms",
+			"thesaurus", "dictionary",
+		},
+		networkWords: []string{
+			"ping ", "is the server", "is the site", "is it down",
+			"dns lookup", "dns resolve", "port check", "check port",
+			"am i online", "internet connection", "connectivity",
+			"network check", "net check",
+		},
+		translateWords: []string{
+			"translate", "translation", "in spanish", "in french", "in german",
+			"in japanese", "in chinese", "in korean", "in italian",
+			"in portuguese", "in russian", "in arabic", "in hindi",
+			"how do you say", "what is the translation",
+		},
+		archiveWords: []string{
+			"zip ", "unzip", "compress", "decompress", "extract",
+			"tar ", "untar", "archive", "create archive",
+			"extract archive",
+		},
+		diskUsageWords: []string{
+			"disk usage", "disk space", "storage space", "what's taking space",
+			"what is using space", "largest folders", "largest directories",
+			"folder size", "directory size", "space used",
+		},
+		processWords: []string{
+			"list processes", "running processes", "top processes",
+			"kill process", "stop process", "what's using cpu",
+			"what is using cpu", "what's using memory", "what is using memory",
+			"process list", "task manager",
+		},
+		qrcodeWords: []string{
+			"qr code", "qrcode", "generate qr", "create qr", "scan qr",
+			"read qr", "decode qr", "make qr",
 		},
 		webLookupPatterns: []*regexp.Regexp{
 			regexp.MustCompile(`(?i)what(?:'s| is) the (?:weather|temperature|forecast)`),
@@ -500,7 +578,102 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 		}
 	}
 
-	// 6e. Recommendation patterns
+	// 6e. Desktop/system control tools
+	for _, w := range n.volumeWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "volume"
+			r.Confidence = 0.90
+			return
+		}
+	}
+	for _, w := range n.brightnessWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "brightness"
+			r.Confidence = 0.90
+			return
+		}
+	}
+	for _, w := range n.timerWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "timer"
+			r.Confidence = 0.90
+			r.Entities["topic"] = n.extractTopicGeneral(lower)
+			return
+		}
+	}
+	for _, w := range n.appWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "app"
+			r.Confidence = 0.85
+			r.Entities["topic"] = n.extractTopicGeneral(lower)
+			return
+		}
+	}
+	for _, w := range n.hashWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "hash"
+			r.Confidence = 0.90
+			r.Entities["topic"] = n.extractTopicGeneral(lower)
+			return
+		}
+	}
+	for _, w := range n.dictWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "dict"
+			r.Confidence = 0.85
+			r.Entities["topic"] = n.extractTopicGeneral(lower)
+			return
+		}
+	}
+	for _, w := range n.networkWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "network"
+			r.Confidence = 0.85
+			r.Entities["topic"] = n.extractTopicGeneral(lower)
+			return
+		}
+	}
+	for _, w := range n.translateWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "translate"
+			r.Confidence = 0.90
+			r.Entities["topic"] = n.extractTopicGeneral(lower)
+			return
+		}
+	}
+	for _, w := range n.archiveWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "archive"
+			r.Confidence = 0.85
+			r.Entities["topic"] = n.extractTopicGeneral(lower)
+			return
+		}
+	}
+	for _, w := range n.diskUsageWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "disk_usage"
+			r.Confidence = 0.85
+			r.Entities["topic"] = n.extractTopicGeneral(lower)
+			return
+		}
+	}
+	for _, w := range n.processWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "process"
+			r.Confidence = 0.85
+			r.Entities["topic"] = n.extractTopicGeneral(lower)
+			return
+		}
+	}
+	for _, w := range n.qrcodeWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "qrcode"
+			r.Confidence = 0.85
+			return
+		}
+	}
+
+	// 6g. Recommendation patterns
 	for _, v := range n.recommendVerbs {
 		if strings.Contains(lower, v) {
 			r.Intent = "recommendation"
@@ -752,6 +925,31 @@ func (n *NLU) mapAction(lower string, r *NLUResult) {
 		r.Action = "run_code"
 	case "find_files":
 		r.Action = "find_files"
+
+	case "volume":
+		r.Action = "volume"
+	case "brightness":
+		r.Action = "brightness"
+	case "timer":
+		r.Action = "timer"
+	case "app":
+		r.Action = "app"
+	case "hash":
+		r.Action = "hash"
+	case "dict":
+		r.Action = "dict"
+	case "network":
+		r.Action = "network"
+	case "translate":
+		r.Action = "translate"
+	case "archive":
+		r.Action = "archive"
+	case "disk_usage":
+		r.Action = "disk_usage"
+	case "process":
+		r.Action = "process"
+	case "qrcode":
+		r.Action = "qrcode"
 
 	case "recommendation":
 		r.Action = "lookup_knowledge"
