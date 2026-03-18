@@ -5,15 +5,52 @@ func BuiltinHands() []Hand {
 	return []Hand{
 		{
 			Name:        "researcher",
-			Description: "Takes a topic and uses fetch, grep, and read tools to gather information, then produces a summary report.",
-			Schedule:    "",   // manual trigger only by default
-			Enabled:     false,
+			Description: "Deep research: searches the web, reads Wikipedia, gathers multiple sources, and produces a comprehensive report with citations.",
+			Schedule:    "",
+			Enabled:     true,
 			Config: HandConfig{
-				MaxSteps: 8,
+				MaxSteps: 12,
 				Timeout:  300,
-				Tools:    []string{"fetch", "read", "grep", "glob", "write"},
+				Tools:    []string{"websearch", "wikipedia", "fetch", "read", "write", "grep"},
 			},
-			Prompt: "Research the assigned topic thoroughly. Use the fetch tool to retrieve relevant web content, grep and read to analyze local files for context, then write a comprehensive summary report to ~/.nous/hands/researcher/reports/latest.md. Include key findings, sources, and actionable insights.",
+			Prompt: `You are a research assistant. Your task is to deeply research the assigned topic.
+
+Steps:
+1. Search the web for the topic using the websearch tool (3-5 searches with different angles)
+2. Look up the main concept on Wikipedia using the wikipedia tool
+3. Fetch 2-3 of the most promising URLs from search results using fetch
+4. Synthesize all findings into a comprehensive, well-structured report
+5. Write the report to ~/.nous/research/TOPIC.md
+
+The report should include:
+- Executive summary (2-3 sentences)
+- Key findings (bullet points)
+- Detailed analysis (organized by subtopic)
+- Sources (URLs with brief descriptions)
+
+Be thorough but concise. Cite sources inline.`,
+		},
+		{
+			Name:        "docwriter",
+			Description: "Creates well-structured documents on any topic by researching and synthesizing information.",
+			Schedule:    "",
+			Enabled:     true,
+			Config: HandConfig{
+				MaxSteps: 10,
+				Timeout:  240,
+				Tools:    []string{"websearch", "wikipedia", "fetch", "read", "write"},
+			},
+			Prompt: `You are a document writer. Create a professional document on the assigned topic.
+
+Steps:
+1. Search the web and Wikipedia for key information
+2. Outline the document structure
+3. Write the full document with clear sections, examples, and explanations
+4. Save to ~/.nous/documents/TOPIC.md
+
+Format: Use markdown with headers, bullet points, code blocks (if technical), and emphasis.
+Tone: Professional but accessible. Explain complex concepts simply.
+Length: Comprehensive but not verbose — aim for quality over quantity.`,
 		},
 		{
 			Name:        "collector",
