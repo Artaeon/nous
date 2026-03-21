@@ -19,9 +19,9 @@ import (
 	"github.com/artaeon/nous/internal/blackboard"
 	"github.com/artaeon/nous/internal/cognitive"
 	"github.com/artaeon/nous/internal/compress"
+	"github.com/artaeon/nous/internal/hands"
 	"github.com/artaeon/nous/internal/index"
 	"github.com/artaeon/nous/internal/memory"
-	"github.com/artaeon/nous/internal/ollama"
 	"github.com/artaeon/nous/internal/sentinel"
 	"github.com/artaeon/nous/internal/server"
 	"github.com/artaeon/nous/internal/channels"
@@ -29,19 +29,20 @@ import (
 	"github.com/artaeon/nous/internal/training"
 )
 
+// pkgLoader is the global package loader, accessible from handleCommand.
+var pkgLoader *cognitive.PackageLoader
+
 // channelHandler builds a MessageHandler that routes channel messages through
 // the same cognitive pipeline as the REPL: classify → extract facts → respond → record.
 func channelHandler(
-	llm *ollama.Client,
-	router *cognitive.ModelRouter,
-	reasoner *cognitive.Reasoner,
-	perceiver *cognitive.Perceiver,
+	nlu *cognitive.NLU,
+	actions *cognitive.ActionRouter,
+	conv *cognitive.Conversation,
 	board *blackboard.Blackboard,
 	wm *memory.WorkingMemory,
 	ltm *memory.LongTermMemory,
 	episodic *memory.EpisodicMemory,
 	collector *training.Collector,
-	crystals *cognitive.ResponseCrystalStore,
 ) channels.MessageHandler {
 	return func(channel, chatID, userID, text string) (string, error) {
 		text = strings.TrimSpace(text)
@@ -53,36 +54,28 @@ func channelHandler(
 		fe := &cognitive.FactExtractor{LTM: ltm, WorkingMem: wm}
 		fe.Extract(text)
 
-		// Classify and route
-		classifier := &cognitive.FastPathClassifier{}
-		path := classifier.ClassifyQuery(text)
-
 		start := time.Now()
 		var answer string
 
-		if path == cognitive.PathFast || path == cognitive.PathMedium {
-			fastLLM := llm
-			if router != nil {
-				fastLLM = router.ClientForQuery(text)
+		nluResult := nlu.Understand(text)
+		if nluResult.Confidence >= 0.5 {
+			actionResult := actions.Execute(nluResult, conv)
+			if actionResult.DirectResponse != "" {
+				answer = actionResult.DirectResponse
 			}
-			resp := &cognitive.FastPathResponder{
-				LLM:              fastLLM,
-				WorkingMem:        wm,
-				LongTermMem:       ltm,
-				Knowledge:         reasoner.Knowledge,
-				VCtx:              reasoner.VCtx,
-				Growth:            reasoner.Growth,
-				ResponseCrystals:  crystals,
+		}
+
+		if answer == "" && actions.Composer != nil {
+			respType := actions.ClassifyForComposer(text)
+			ctx := actions.BuildComposeContext()
+			resp := actions.Composer.Compose(text, respType, ctx)
+			if resp != nil && resp.Text != "" {
+				answer = resp.Text
 			}
-			var err error
-			answer, err = resp.RespondWithPath(reasoner.Conv, text, path)
-			if err != nil {
-				perceiver.Submit(text)
-				answer = waitForAnswerStr(board)
-			}
-		} else {
-			perceiver.Submit(text)
-			answer = waitForAnswerStr(board)
+		}
+
+		if answer == "" {
+			answer = "I'm not sure how to answer that — could you rephrase?"
 		}
 
 		duration := time.Since(start)
@@ -97,7 +90,7 @@ func channelHandler(
 		})
 
 		// Collect training data
-		msgs := reasoner.Conv.Messages()
+		msgs := conv.Messages()
 		sysPrompt := ""
 		if len(msgs) > 0 {
 			sysPrompt = msgs[0].Content
@@ -109,12 +102,11 @@ func channelHandler(
 	}
 }
 
-const version = "0.9.0"
+const version = "1.0.0"
 
 func main() {
 	// Flags
-	model := flag.String("model", ollama.DefaultModel, "Ollama model to use")
-	host := flag.String("host", ollama.DefaultHost, "Ollama server address")
+	model := flag.String("model", "nous-cognitive", "Engine identifier")
 	memoryPath := flag.String("memory", defaultMemoryPath(), "Path for persistent memory storage")
 	allowShell := flag.Bool("allow-shell", false, "Enable shell command execution")
 	trustMode := flag.Bool("trust", false, "Skip confirmation prompts for file operations")
@@ -132,46 +124,6 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Initialize Ollama client
-	llm := ollama.New(
-		ollama.WithHost(*host),
-		ollama.WithModel(*model),
-		ollama.WithNoThink(), // disable thinking mode for CPU-optimized inference
-	)
-
-	// Check Ollama connectivity with spinner
-	spinner := cognitive.NewSpinner()
-	spinner.Start("connecting...")
-	if err := llm.Ping(); err != nil {
-		spinner.Stop()
-		fmt.Printf("  %s%s%s\n", cognitive.ColorRed, err, cognitive.ColorReset)
-		fmt.Printf("  %sollama serve%s to start\n", cognitive.ColorDim, cognitive.ColorReset)
-		os.Exit(1)
-	}
-	spinner.Stop()
-
-	// Verify model is available
-	models, err := llm.ListModels()
-	if err == nil {
-		found := false
-		for _, m := range models {
-			if strings.HasPrefix(m.Name, *model) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			fmt.Printf("  %smodel '%s' not found — ollama pull %s%s\n", cognitive.ColorYellow, *model, *model, cognitive.ColorReset)
-		}
-	}
-
-	// Multi-model routing
-	router := cognitive.NewModelRouter(*host, *model)
-	if err := router.Discover(context.Background()); err != nil {
-		// silently use default
-		_ = err
-	}
-
 	// Get working directory
 	workDir, _ := os.Getwd()
 	cognitive.WorkDir = workDir
@@ -187,7 +139,7 @@ func main() {
 
 	// Filesystem Sentinel — ambient file watching with inotify
 	var fileWatcher *sentinel.Watcher
-	fileWatcher, err = sentinel.NewWatcher(workDir, 500*time.Millisecond, func(events []sentinel.FileEvent) {
+	fileWatcher, err := sentinel.NewWatcher(workDir, 500*time.Millisecond, func(events []sentinel.FileEvent) {
 		// Auto-update codebase index on Go file changes
 		if projectInfo.Language == "Go" {
 			changed := sentinel.ChangedGoFiles(events)
@@ -223,14 +175,26 @@ func main() {
 
 	// Memory systems
 	wm := memory.NewWorkingMemory(64)
-	wm.SetEmbedFunc(llm.Embed) // enable semantic retrieval
+	// Built-in embeddings — wired after Composer is initialized below
 	ltm := memory.NewLongTermMemory(*memoryPath)
+
+	// Ensure user name is stored for the Composer's personal greetings
+	if _, ok := ltm.Retrieve("user_name"); !ok {
+		if u, err := os.UserHomeDir(); err == nil {
+			name := filepath.Base(u)
+			// Capitalize first letter
+			if len(name) > 0 {
+				name = strings.ToUpper(name[:1]) + name[1:]
+			}
+			ltm.Store("user_name", name, "identity")
+		}
+	}
 
 	// Project-level memory (stored in the project's .nous/ directory)
 	projMem := memory.NewProjectMemory(workDir)
 
 	// Episodic memory — remembers every interaction forever (semantic search via embeddings)
-	episodic := memory.NewEpisodicMemory(nousDir, llm.Embed)
+	episodic := memory.NewEpisodicMemory(nousDir, nil)
 	assistantStore := assistant.NewStore(*memoryPath)
 
 	// Wire memory into action router
@@ -238,13 +202,71 @@ func main() {
 	actions.LongTermMem = ltm
 	actions.EpisodicMem = episodic
 	actions.Reminders = cognitive.NewReminderManager()
+	actions.Tracker = cognitive.NewConversationTrackerPersistent(filepath.Join(nousDir, "facts.json"))
+	actions.CogGraph = cognitive.NewCognitiveGraph(filepath.Join(nousDir, "cognitive_graph.json"))
+	actions.Patterns = cognitive.NewPatternDetector()
+	actions.Semantic = cognitive.NewSemanticEngine()
+	actions.Reasoner = cognitive.NewReasoningEngine(actions.CogGraph, actions.Semantic)
+	actions.Causal = cognitive.NewCausalEngine()
+	actions.Composer = cognitive.NewComposer(actions.CogGraph, actions.Semantic, actions.Causal, actions.Patterns)
+	actions.Inference = cognitive.NewInferenceEngine(actions.CogGraph)
+	actions.Analogy = cognitive.NewAnalogyEngine(actions.CogGraph, actions.Semantic)
+	actions.Thinker = cognitive.NewThinkingEngine(actions.CogGraph, actions.Composer)
+	actions.Reasoner.Analogy = actions.Analogy
+	actions.CausalReasoner = cognitive.NewGraphCausalReasoner(actions.CogGraph)
+	actions.Pipeline = cognitive.NewReasoningPipeline(
+		actions.CogGraph, actions.Inference, actions.Reasoner,
+		actions.Thinker, actions.CausalReasoner, actions.Composer,
+		actions.Semantic, actions.Analogy,
+	)
+
+	// Wire built-in embeddings for semantic memory (reuse Composer's embeddings)
+	embedFn := cognitive.MakeEmbedFunc(actions.Composer.Generative.Embeddings())
+	wm.SetEmbedFunc(embedFn)
+
+	// Load knowledge packages — instant world knowledge and vocabulary expansion
+	packDir := filepath.Join(workDir, "packages")
+	pkgLoader = cognitive.NewPackageLoader(actions.CogGraph, actions.Composer.Generative, actions.Composer, packDir)
+	actions.Packages = pkgLoader
+	if _, err := os.Stat(packDir); err == nil {
+		results, err := pkgLoader.LoadAll()
+		if err == nil && len(results) > 0 {
+			totalFacts, totalVocab := 0, 0
+			for _, r := range results {
+				totalFacts += r.FactsLoaded
+				totalVocab += r.VocabLoaded
+			}
+			fmt.Printf("  loaded %d knowledge packages (%d facts, %d vocab)\n", len(results), totalFacts, totalVocab)
+		}
+	}
+
+	// Conversational Learning Engine — Nous learns from every interaction
+	learningEngine := cognitive.NewLearningEngine(actions.CogGraph, actions.Composer, nousDir)
+
+	// Decay stale knowledge on startup
+	learningEngine.DecayKnowledge()
+
+	// Consolidate on startup — the AI "dreams", discovering new connections
+	if actions.CogGraph.NodeCount() > 0 {
+		consolidator := cognitive.NewConsolidator(actions.CogGraph)
+		insights := consolidator.Consolidate()
+		if len(insights) > 0 {
+			actions.CogGraph.Save()
+		}
+
+		// Run abstraction discovery
+		ae := cognitive.NewAbstractionEngine(actions.CogGraph)
+		abstractions := ae.Discover()
+		_ = abstractions // abstractions are available for reasoning
+	}
+
+	// PersonalResp is wired after Growth is initialized (see below)
 
 	// Training data collector — gathers successful interactions for fine-tuning
 	collector := training.NewCollector(nousDir)
 
 	// Auto-tuner — monitors training data and triggers Modelfile-based tuning
 	autoTuner := training.NewAutoTuner(collector, *model).
-		WithCreator(llm).
 		WithCallback(func(msg string) {
 			fmt.Printf("  %s%s%s\n", cognitive.ColorDim, msg, cognitive.ColorReset)
 		})
@@ -270,20 +292,18 @@ func main() {
 	}
 
 	// Create cognitive streams
-	perceiver := cognitive.NewPerceiver(board, llm)
-	perceiver.Router = router
-	learner := cognitive.NewLearner(board, llm, *memoryPath)
-	reasoner := cognitive.NewReasoner(board, llm, toolReg)
+	perceiver := cognitive.NewPerceiver(board, nil)
+	learner := cognitive.NewLearner(board, nil, *memoryPath)
+	reasoner := cognitive.NewReasoner(board, nil, toolReg)
 	reasoner.WorkingMem = wm
 	reasoner.LongTermMem = ltm
 	reasoner.ProjectMem = projMem
-	reasoner.Compressor = compress.NewCompressor(llm)
+	reasoner.Compressor = compress.NewCompressor(nil)
 	reasoner.CodeIndex = codeIndex
 	reasoner.Recipes = recipeBook
 	reasoner.Predictor = predictor
 	reasoner.Learner = learner
 	reasoner.EpisodicMem = episodic
-	reasoner.Router = router
 
 	// --- Cognitive Prosthetics: 8 innovations for small-model enhancement ---
 
@@ -292,10 +312,10 @@ func main() {
 	reasoner.Intent = intentCompiler
 
 	// 2. Grammar-Constrained Decoding — dynamic JSON schemas for structured output
-	reasoner.Grammar = cognitive.NewGrammarDecoder(llm)
+	reasoner.Grammar = cognitive.NewGrammarDecoder(nil)
 
 	// 3. Decomposed Micro-Inference — break complex LLM calls into micro-steps
-	reasoner.MicroInfer = cognitive.NewMicroInference(llm)
+	reasoner.MicroInfer = cognitive.NewMicroInference(nil)
 
 	// 4. Speculative Multi-Tool Execution — fire plausible tools in parallel
 	reasoner.Speculator = cognitive.NewSpeculativeExecutor(toolReg, intentCompiler)
@@ -311,14 +331,7 @@ func main() {
 
 	// 7. Embedding-Driven Grounding — semantic secondary brain
 	embedGrounder := cognitive.NewEmbedGrounder(func(text string) ([]float64, error) {
-		// Use nomic-embed-text if available, fallback to current model
-		embedClient := llm.Clone("nomic-embed-text")
-		vec, err := embedClient.Embed(text)
-		if err != nil {
-			// Fallback to main model's embeddings
-			return llm.Embed(text)
-		}
-		return vec, nil
+		return actions.Composer.Generative.Embeddings().SentenceEmbed(text)
 	})
 	reasoner.EmbedGround = embedGrounder
 
@@ -361,12 +374,7 @@ func main() {
 	// 14. Knowledge Vector Store — unlimited knowledge via vector search
 	// Knowledge embedding uses nomic-embed-text (fast, purpose-built for embeddings)
 	knowledgeEmbedFn := func(text string) ([]float64, error) {
-		ec := llm.Clone("nomic-embed-text")
-		vec, err := ec.Embed(text)
-		if err != nil {
-			return llm.Embed(text) // fallback to main model
-		}
-		return vec, nil
+		return actions.Composer.Generative.Embeddings().SentenceEmbed(text)
 	}
 	reasoner.Knowledge = cognitive.NewKnowledgeVec(
 		knowledgeEmbedFn,
@@ -427,6 +435,14 @@ func main() {
 		filepath.Join(nousDir, "growth.json"),
 	)
 
+	// Wire PersonalResponseGenerator into ActionRouter and ResponseFormatter
+	personalResp := &cognitive.PersonalResponseGenerator{
+		Growth:  reasoner.Growth,
+		Tracker: actions.Tracker,
+	}
+	actions.PersonalResp = personalResp
+	actions.Growth = reasoner.Growth
+
 	// 17. Virtual Context Engine — makes 4k tokens feel like 200k+
 	reasoner.VCtx = cognitive.NewVirtualContext(1500)
 	reasoner.VCtx.AddSource(cognitive.KnowledgeSource(reasoner.Knowledge))
@@ -455,9 +471,9 @@ func main() {
 	reasoner.AssistantAnswer = func(input string, recent string) (string, bool) {
 		return answerAssistantQuery(assistantStore, input, recent, time.Now())
 	}
-	planner := cognitive.NewPlanner(board, llm)
-	executor := cognitive.NewExecutor(board, llm, toolReg)
-	reflector := cognitive.NewReflector(board, llm)
+	planner := cognitive.NewPlanner(board, nil)
+	executor := cognitive.NewExecutor(board, nil, toolReg)
+	reflector := cognitive.NewReflector(board, nil)
 
 	// Set up confirmation for dangerous actions
 	if *trustMode {
@@ -589,6 +605,52 @@ func main() {
 		}()
 	}
 
+	// Start Hands system — autonomous background agents
+	handsDir := filepath.Join(nousDir, "hands")
+	os.MkdirAll(handsDir, 0755)
+	handStore := hands.NewStore(handsDir)
+	handStateStore, _ := hands.NewHandStateStore(handsDir)
+	handRunner := hands.NewRunnerWithState(nil, board, toolReg, handStateStore)
+	handManager := hands.NewManager(handStore, handRunner, board)
+	// Register builtin hands (only if not already persisted)
+	for _, h := range hands.BuiltinHands() {
+		if _, err := handManager.Status(h.Name); err != nil {
+			handManager.Register(h)
+		}
+	}
+	go func() {
+		if err := handManager.Run(ctx); err != nil && err != context.Canceled {
+			fmt.Fprintf(os.Stderr, "  %shands: %v%s\n", cognitive.ColorRed, err, cognitive.ColorReset)
+		}
+	}()
+
+	// Proactive Engine — surfaces suggestions during idle time (non-blocking)
+	proactive := cognitive.NewProactiveEngine(board)
+
+	// Dream Engine — background cognitive processing during idle time
+	// Runs consolidation, pattern mining, and abstraction discovery
+	go func() {
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if actions.CogGraph != nil && actions.CogGraph.NodeCount() > 0 {
+					consolidator := cognitive.NewConsolidator(actions.CogGraph)
+					insights := consolidator.Consolidate()
+					if len(insights) > 0 {
+						actions.CogGraph.Save()
+					}
+					// Run abstraction discovery
+					ae := cognitive.NewAbstractionEngine(actions.CogGraph)
+					ae.Discover()
+				}
+			}
+		}
+	}()
+
 	// Print startup banner
 	toolList := toolReg.List()
 	vctxSize := ""
@@ -603,7 +665,7 @@ func main() {
 			vctxSize = fmt.Sprintf("%d", totalVTokens)
 		}
 	}
-	fmt.Print(cognitive.BannerFull(version, *model, *host, len(toolList), 64, vctxSize))
+	fmt.Print(cognitive.BannerFull(version, "cognitive", "local", len(toolList), 64, vctxSize))
 
 	// Handle graceful shutdown — save session + episodic memory
 	sigCh := make(chan os.Signal, 1)
@@ -616,6 +678,9 @@ func main() {
 		assistantStore.Save()
 		episodic.Save()
 		collector.Save()
+		if actions.CogGraph != nil {
+			actions.CogGraph.Save()
+		}
 		if fileWatcher != nil {
 			fileWatcher.Stop()
 		}
@@ -639,7 +704,7 @@ func main() {
 			}
 		}
 		if err == nil || chCfg != nil {
-			handler := channelHandler(llm, router, reasoner, perceiver, board, wm, ltm, episodic, collector, responseCrystals)
+			handler := channelHandler(nlu, actions, reasoner.Conv, board, wm, ltm, episodic, collector)
 			chManager := channels.NewManager(handler)
 
 			if chCfg.Telegram != nil && chCfg.Telegram.Enabled && chCfg.Telegram.Token != "" {
@@ -684,7 +749,7 @@ func main() {
 		fmt.Printf("  serving on http://%s\n\n", addr)
 		srv := server.New(addr, board, perceiver, assistantStore, *apiKey)
 		srv.SetFastPath(&cognitive.FastPathResponder{
-			LLM:              llm,
+			LLM:              nil,
 			WorkingMem:        wm,
 			LongTermMem:       ltm,
 			Knowledge:         reasoner.Knowledge,
@@ -692,6 +757,8 @@ func main() {
 			Growth:            reasoner.Growth,
 			ResponseCrystals:  responseCrystals,
 		}, reasoner.Conv)
+		srv.SetPersonalResp(personalResp)
+		srv.SetComposer(actions.Composer)
 		srv.SetDataSources(wm, ltm, episodic, toolReg, collector, sessionStore)
 		if err := srv.Start(version, *model, len(toolList)); err != nil {
 			fmt.Fprintf(os.Stderr, "server error: %v\n", err)
@@ -731,7 +798,45 @@ func main() {
 
 		// Handle commands
 		if strings.HasPrefix(input, "/") {
-			if handleCommand(input, board, llm, toolReg, wm, ltm, projMem, undoStack, sessionStore, currentSession, reasoner, learner, projectInfo, episodic, collector, autoTuner, assistantStore) {
+			// /learn — show what Nous has learned from conversations
+			if strings.TrimSpace(strings.ToLower(input)) == "/learn" {
+				fmt.Printf("  %s\n", strings.ReplaceAll(learningEngine.FormatLearningReport(), "\n", "\n  "))
+				continue
+			}
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(input)), "/import-wikidata") {
+				cmdParts := strings.Fields(input)
+				if len(cmdParts) < 2 {
+					fmt.Println("  Usage: /import-wikidata <domain> [limit]")
+					fmt.Println("  Domains: philosophy, science, history, technology, geography, art, music, literature, mathematics, biology")
+				} else {
+					domain := cmdParts[1]
+					limit := 500
+					if len(cmdParts) > 2 {
+						fmt.Sscanf(cmdParts[2], "%d", &limit)
+					}
+					fmt.Printf("  Importing %s from Wikidata (limit %d)...\n", domain, limit)
+					importer := cognitive.NewWikidataImporter()
+					pkg, err := importer.ImportDomain(domain, limit)
+					if err != nil {
+						fmt.Printf("  Error: %v\n", err)
+					} else {
+						pDir := filepath.Join(workDir, "packages")
+						if err := importer.SavePackage(pkg, pDir); err != nil {
+							fmt.Printf("  Error saving: %v\n", err)
+						} else {
+							if pkgLoader != nil {
+								pkgLoader.Install(pkg)
+							}
+							fmt.Printf("  Imported %d facts into %s\n", len(pkg.Facts), domain)
+							if actions.CogGraph != nil {
+								fmt.Printf("  Knowledge graph: %d nodes, %d edges\n", actions.CogGraph.NodeCount(), actions.CogGraph.EdgeCount())
+							}
+						}
+					}
+				}
+				continue
+			}
+			if handleCommand(input, board, model, toolReg, wm, ltm, projMem, undoStack, sessionStore, currentSession, reasoner, learner, projectInfo, episodic, collector, autoTuner, assistantStore, handManager) {
 				continue
 			}
 		}
@@ -740,6 +845,9 @@ func main() {
 		// Runs on every message — stores facts in long-term + working memory.
 		factExtractor := &cognitive.FactExtractor{LTM: ltm, WorkingMem: wm}
 		factExtractor.Extract(input)
+
+		// Record activity for proactive engine
+		proactive.RecordInput()
 
 		fmt.Println()
 		firstToken = true
@@ -776,44 +884,18 @@ func main() {
 			}
 		}
 
-		if answer == "" {
-		// Classify query: fast/medium paths skip the full pipeline for speed.
-		classifier := &cognitive.FastPathClassifier{}
-		queryPath := classifier.ClassifyQuery(input)
-
-		if queryPath == cognitive.PathFast || queryPath == cognitive.PathMedium {
-			// Fast/medium: single LLM call with optional knowledge context
-			llmSpinner.Start("thinking...")
-			fastLLM := llm
-			if router != nil {
-				fastLLM = router.ClientForQuery(input)
+		// Composer engine: generates ALL responses without any LLM.
+		// Zero external dependencies. Instant. Unique every time.
+		if answer == "" && actions.Composer != nil {
+			respType := actions.ClassifyForComposer(input)
+			ctx := actions.BuildComposeContext()
+			resp := actions.Composer.Compose(input, respType, ctx)
+			if resp != nil && resp.Text != "" {
+				answer = resp.Text
+				reasoner.Conv.User(input)
+				reasoner.Conv.Assistant(answer)
 			}
-			fastResp := &cognitive.FastPathResponder{
-				LLM:              fastLLM,
-				WorkingMem:        wm,
-				LongTermMem:       ltm,
-				Knowledge:         reasoner.Knowledge,
-				VCtx:              reasoner.VCtx,
-				Growth:            reasoner.Growth,
-				ResponseCrystals:  responseCrystals,
-			}
-			var err error
-			answer, err = fastResp.RespondWithPath(reasoner.Conv, input, queryPath)
-			llmSpinner.Stop()
-			if err != nil {
-				// Fallback to full pipeline on error only (not terse answers)
-				llmSpinner.Start("thinking...")
-				perceiver.Submit(input)
-				answer = waitForAnswerStr(board)
-				llmSpinner.Stop()
-			}
-		} else {
-			// Full pipeline: autonomous tool-calling agent
-			llmSpinner.Start("thinking...")
-			perceiver.Submit(input)
-			answer = waitForAnswerStr(board)
 		}
-		} // end if answer == ""
 		duration := time.Since(start)
 		if !responseStarted && strings.TrimSpace(answer) != "" {
 			fmt.Printf("  %s\n", strings.ReplaceAll(answer, "\n", "\n  "))
@@ -821,6 +903,15 @@ func main() {
 
 		// Show timing footer
 		fmt.Printf("\n%s\n\n", cognitive.TimingFooter(duration))
+
+		// Record turn in Composer for conversation context
+		if actions.Composer != nil {
+			actions.Composer.RecordTurn(input, answer)
+		}
+
+		// Conversational learning — extract facts, patterns, preferences
+		// from every user message. Async, no latency impact.
+		go learningEngine.LearnFromConversation(input)
 
 		// Record in episodic memory (remembers everything forever)
 		go episodic.Record(memory.Episode{
@@ -843,13 +934,23 @@ func main() {
 		// Check if auto-tuning should trigger (non-blocking)
 		go autoTuner.CheckQuiet()
 
+		// Feed the learner from direct NLU tool usage (async, no latency)
+		if nluResult.Action != "" && nluResult.Action != "llm_chat" {
+			go learner.LearnFromTools(input, []string{nluResult.Action})
+		}
+
+		// Proactive suggestions — only shown during idle, never blocks
+		if suggestions := proactive.Check(); len(suggestions) > 0 {
+			fmt.Print(cognitive.FormatSuggestions(suggestions))
+		}
+
 		// Auto-save session after each exchange
 		currentSession.Messages = reasoner.Conv.Messages()
 		go sessionStore.Save(currentSession)
 	}
 }
 
-func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Client, toolReg *tools.Registry, wm *memory.WorkingMemory, ltm *memory.LongTermMemory, projMem *memory.ProjectMemory, undoStack *memory.UndoStack, sessions *cognitive.SessionStore, current *cognitive.Session, reasoner *cognitive.Reasoner, learner *cognitive.Learner, project *cognitive.ProjectInfo, episodic *memory.EpisodicMemory, collector *training.Collector, autoTuner *training.AutoTuner, assistantStore *assistant.Store) bool {
+func handleCommand(input string, board *blackboard.Blackboard, model *string, toolReg *tools.Registry, wm *memory.WorkingMemory, ltm *memory.LongTermMemory, projMem *memory.ProjectMemory, undoStack *memory.UndoStack, sessions *cognitive.SessionStore, current *cognitive.Session, reasoner *cognitive.Reasoner, learner *cognitive.Learner, project *cognitive.ProjectInfo, episodic *memory.EpisodicMemory, collector *training.Collector, autoTuner *training.AutoTuner, assistantStore *assistant.Store, handManager *hands.Manager) bool {
 	parts := strings.Fields(input)
 	cmd := strings.ToLower(parts[0])
 
@@ -1005,6 +1106,97 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 		fmt.Print(cognitive.KeyValue("Conversation", reasoner.Conv.Summary()))
 		fmt.Print(cognitive.KeyValue("Session", fmt.Sprintf("%s (%s)", current.Name, current.ID)))
 
+	case "/hand", "/hands":
+		if len(parts) < 2 {
+			// List all hands
+			allHands := handManager.List()
+			if len(allHands) == 0 {
+				fmt.Println("  no hands registered")
+			} else {
+				fmt.Print(cognitive.Section("Hands"))
+				for _, h := range allHands {
+					status := "idle"
+					if !h.Enabled {
+						status = "disabled"
+					} else if h.State == hands.HandRunning {
+						status = "running"
+					}
+					sched := h.Schedule
+					if sched == "" {
+						sched = "manual"
+					}
+					fmt.Printf("  %-12s  %s  [%s]  %s\n", h.Name, sched, status, h.Description)
+				}
+			}
+		} else {
+			subCmd := strings.ToLower(parts[1])
+			switch subCmd {
+			case "run":
+				if len(parts) < 3 {
+					fmt.Println("  usage: /hand run <name>")
+				} else {
+					name := parts[2]
+					if err := handManager.RunNow(context.Background(), name); err != nil {
+						fmt.Printf("  %serror: %v%s\n", cognitive.ColorRed, err, cognitive.ColorReset)
+					} else {
+						fmt.Printf("  %sstarted hand %q%s\n", cognitive.ColorGreen, name, cognitive.ColorReset)
+					}
+				}
+			case "enable":
+				if len(parts) < 3 {
+					fmt.Println("  usage: /hand enable <name>")
+				} else {
+					if err := handManager.Activate(parts[2]); err != nil {
+						fmt.Printf("  %serror: %v%s\n", cognitive.ColorRed, err, cognitive.ColorReset)
+					} else {
+						fmt.Printf("  enabled %s\n", parts[2])
+					}
+				}
+			case "disable":
+				if len(parts) < 3 {
+					fmt.Println("  usage: /hand disable <name>")
+				} else {
+					if err := handManager.Deactivate(parts[2]); err != nil {
+						fmt.Printf("  %serror: %v%s\n", cognitive.ColorRed, err, cognitive.ColorReset)
+					} else {
+						fmt.Printf("  disabled %s\n", parts[2])
+					}
+				}
+			case "status":
+				if len(parts) < 3 {
+					fmt.Println("  usage: /hand status <name>")
+				} else {
+					h, err := handManager.Status(parts[2])
+					if err != nil {
+						fmt.Printf("  %serror: %v%s\n", cognitive.ColorRed, err, cognitive.ColorReset)
+					} else {
+						fmt.Printf("  %s: %s (enabled=%v, schedule=%s)\n", h.Name, h.State, h.Enabled, h.Schedule)
+						if h.LastError != "" {
+							fmt.Printf("  last error: %s\n", h.LastError)
+						}
+					}
+				}
+			case "history":
+				if len(parts) < 3 {
+					fmt.Println("  usage: /hand history <name>")
+				} else {
+					records := handManager.History(parts[2])
+					if len(records) == 0 {
+						fmt.Println("  no history")
+					}
+					for _, r := range records {
+						status := "ok"
+						if !r.Success {
+							status = "FAIL"
+						}
+						fmt.Printf("  [%s] %s (%dms) %s\n", r.StartedAt.Format("Jan 02 15:04"), status, r.Duration, truncate(r.Output, 80))
+					}
+				}
+			default:
+				fmt.Println("  usage: /hand [run|enable|disable|status|history] <name>")
+			}
+		}
+
 	case "/memory":
 		items := wm.MostRelevant(10)
 		if len(items) == 0 {
@@ -1033,15 +1225,10 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 		}
 
 	case "/model":
-		fmt.Print(cognitive.Section("Model routing"))
-		fmt.Print(cognitive.KeyValue("Active model", llm.Model()))
-		models, err := llm.ListModels()
-		if err == nil {
-			fmt.Print(cognitive.Section("Available local models"))
-			for _, m := range models {
-				fmt.Printf("  • %s%s%s  %s%.1f MB%s\n", cognitive.ColorCyan, m.Name, cognitive.ColorReset, cognitive.ColorDim, float64(m.Size)/(1024*1024), cognitive.ColorReset)
-			}
-		}
+		fmt.Print(cognitive.Section("Cognitive engine"))
+		fmt.Print(cognitive.KeyValue("Active engine", *model))
+		fmt.Print(cognitive.KeyValue("Mode", "local cognitive (no LLM)"))
+		fmt.Print(cognitive.KeyValue("Pipeline", "NLU → ActionRouter → ReasoningPipeline → Composer"))
 
 	case "/tools":
 		fmt.Print(renderToolCatalog(toolReg))
@@ -1272,7 +1459,7 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 		}
 
 	case "/finetune":
-		cfg := training.DefaultModelfileConfig(llm.Model())
+		cfg := training.DefaultModelfileConfig(*model)
 		cfg.System = training.NousSystemPrompt()
 		mfPath := filepath.Join(cognitive.WorkDir, ".nous", "Modelfile")
 		if err := training.WriteModelfile(mfPath, cfg); err != nil {
@@ -1348,6 +1535,34 @@ func handleCommand(input string, board *blackboard.Blackboard, llm *ollama.Clien
 			} else {
 				for _, r := range results {
 					fmt.Printf("  [%.2f] %s (%s)\n", r.Score, truncate(r.Text, 80), r.Source)
+				}
+			}
+		}
+
+	case "/packages":
+		if pkgLoader == nil {
+			fmt.Println("  package loader not initialized")
+			break
+		}
+		loaded := pkgLoader.ListLoaded()
+		if len(loaded) == 0 {
+			fmt.Println("  no packages loaded")
+			fmt.Println("  place .json packages in ./packages/ and restart")
+		} else {
+			fmt.Printf("  %d packages loaded:\n", len(loaded))
+			for name, version := range loaded {
+				fmt.Printf("    %s v%s\n", name, version)
+			}
+		}
+		if len(parts) > 1 {
+			// /packages load <file>
+			if parts[1] == "load" && len(parts) > 2 {
+				path := strings.Join(parts[2:], " ")
+				result, err := pkgLoader.LoadFile(path)
+				if err != nil {
+					fmt.Printf("  error: %v\n", err)
+				} else {
+					fmt.Printf("  %s\n", result)
 				}
 			}
 		}
@@ -3285,3 +3500,4 @@ func defaultMemoryPath() string {
 	}
 	return filepath.Join(home, ".nous")
 }
+
