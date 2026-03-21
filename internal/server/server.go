@@ -155,6 +155,11 @@ func (s *Server) SetComposer(c *cognitive.Composer) {
 	s.composer = c
 }
 
+// SetNLU replaces the server's NLU instance (e.g. with one that has a trained neural classifier).
+func (s *Server) SetNLU(nlu *cognitive.NLU) {
+	s.nlu = nlu
+}
+
 // SetDataSources connects memory, tools, training, and session subsystems
 // for the dashboard and memory API endpoints.
 func (s *Server) SetDataSources(wm *memory.WorkingMemory, ltm *memory.LongTermMemory, em *memory.EpisodicMemory, tr *tools.Registry, col *training.Collector, sess *cognitive.SessionStore) {

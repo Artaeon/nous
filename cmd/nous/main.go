@@ -164,6 +164,13 @@ func main() {
 
 	// NLU + ActionRouter: deterministic intent → action pipeline (shared with HTTP API)
 	nlu := cognitive.NewNLU()
+
+	// Initialize neural intent classifier (loads saved model or trains from scratch)
+	neuralModelPath := filepath.Join(filepath.Dir(*memoryPath), "nous_neural.bin")
+	if err := nlu.InitNeural(neuralModelPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: neural classifier init failed: %v (falling back to pattern matching)\n", err)
+	}
+
 	actions := cognitive.NewActionRouter()
 	actions.Tools = toolReg
 
@@ -220,6 +227,7 @@ func main() {
 		actions.Semantic, actions.Analogy,
 	)
 
+	actions.Creative = cognitive.NewCreativeEngine(actions.CogGraph, actions.Composer)
 	actions.Dialogue = cognitive.NewDialogueManager()
 	actions.Transformer = cognitive.NewTextTransformer(actions.Composer.Generative.Embeddings())
 
@@ -760,6 +768,7 @@ func main() {
 			Growth:            reasoner.Growth,
 			ResponseCrystals:  responseCrystals,
 		}, reasoner.Conv)
+		srv.SetNLU(nlu)
 		srv.SetPersonalResp(personalResp)
 		srv.SetComposer(actions.Composer)
 		srv.SetDataSources(wm, ltm, episodic, toolReg, collector, sessionStore)
