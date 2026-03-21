@@ -125,7 +125,10 @@ func (ar *ActionRouter) handleReminder(nlu *NLUResult) *ActionResult {
 	// or "set a timer for 5 minutes"
 	dur, err := ar.Reminders.ParseDuration(nlu.Raw)
 	if err != nil {
-		return &ActionResult{DirectResponse: nlu.Raw, Source: "reminder"}
+		return &ActionResult{
+			DirectResponse: "I couldn't figure out when to remind you. Try something like: \"remind me in 30 minutes to call mom\" or \"remind me tomorrow to buy groceries\".",
+			Source:         "reminder",
+		}
 	}
 
 	msg := extractReminderMessage(nlu.Raw)
@@ -570,11 +573,80 @@ func (ar *ActionRouter) handleGenericTool(nlu *NLUResult, toolName string) *Acti
 		args[k] = v
 	}
 
+	// Map NLU entities to tool-specific argument names.
+	// The NLU extracts a "topic" but each tool has its own arg names.
+	topic := nlu.Entities["topic"]
+	switch toolName {
+	case "dict":
+		// dict expects "word" (required) and "action" (define/synonyms/antonyms)
+		if topic != "" {
+			args["word"] = topic
+		}
+		if args["action"] == "" {
+			args["action"] = "define"
+		}
+	case "translate":
+		// translate expects "text" (required) and "to" (required)
+		ar.extractTranslateArgs(nlu.Raw, args)
+	}
+
 	result, err := tool.Execute(args)
 	if err != nil {
 		return &ActionResult{DirectResponse: fmt.Sprintf("%s error: %v", toolName, err), Source: toolName}
 	}
 	return &ActionResult{DirectResponse: result, Source: toolName}
+}
+
+// extractTranslateArgs parses "translate X to Y" or "X in Y" patterns.
+func (ar *ActionRouter) extractTranslateArgs(raw string, args map[string]string) {
+	lower := strings.ToLower(raw)
+
+	// Pattern: "translate X to/into Y"
+	for _, sep := range []string{" to ", " into "} {
+		idx := strings.LastIndex(lower, sep)
+		if idx > 0 {
+			textPart := raw[:idx]
+			langPart := strings.TrimSpace(raw[idx+len(sep):])
+
+			// Strip "translate" prefix from text
+			textLower := strings.ToLower(textPart)
+			for _, prefix := range []string{"translate ", "can you translate ", "please translate "} {
+				if strings.HasPrefix(textLower, prefix) {
+					textPart = textPart[len(prefix):]
+					break
+				}
+			}
+			textPart = strings.TrimSpace(textPart)
+			if textPart != "" && langPart != "" {
+				args["text"] = textPart
+				args["to"] = langPart
+				return
+			}
+		}
+	}
+
+	// Pattern: "how do you say X in Y" / "X in spanish"
+	for _, sep := range []string{" in "} {
+		idx := strings.LastIndex(lower, sep)
+		if idx > 0 {
+			langPart := strings.TrimSpace(raw[idx+len(sep):])
+			textPart := raw[:idx]
+			// Strip common prefixes
+			textLower := strings.ToLower(textPart)
+			for _, prefix := range []string{"how do you say ", "how to say ", "say "} {
+				if strings.HasPrefix(textLower, prefix) {
+					textPart = textPart[len(prefix):]
+					break
+				}
+			}
+			textPart = strings.TrimSpace(textPart)
+			if textPart != "" && langPart != "" {
+				args["text"] = textPart
+				args["to"] = langPart
+				return
+			}
+		}
+	}
 }
 
 // handleCalculate extracts a math expression from natural language and evaluates it.

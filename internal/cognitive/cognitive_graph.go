@@ -192,6 +192,170 @@ func (cg *CognitiveGraph) GetNode(id string) *CogNode {
 	return cg.nodes[id]
 }
 
+// LookupDescription returns the longest described_as fact for a topic.
+// Prefers longer descriptions (e.g., full Wikipedia summaries over short labels).
+func (cg *CognitiveGraph) LookupDescription(topic string) string {
+	cg.mu.RLock()
+	defer cg.mu.RUnlock()
+
+	lower := strings.ToLower(strings.TrimSpace(topic))
+	best := ""
+	if ids, ok := cg.byLabel[lower]; ok {
+		for _, id := range ids {
+			for _, edge := range cg.outEdges[id] {
+				if edge.Relation == RelDescribedAs {
+					if target, ok := cg.nodes[edge.To]; ok {
+						if len(target.Label) > len(best) {
+							best = target.Label
+						}
+					}
+				}
+			}
+		}
+	}
+	// Clean HTML entities and wiki markup remnants
+	best = strings.ReplaceAll(best, "&nbsp;", " ")
+	best = strings.ReplaceAll(best, "&amp;", "&")
+	best = strings.ReplaceAll(best, "&lt;", "<")
+	best = strings.ReplaceAll(best, "&gt;", ">")
+	best = strings.ReplaceAll(best, "&quot;", "\"")
+	best = strings.ReplaceAll(best, "]]", "")
+	best = strings.ReplaceAll(best, "[[", "")
+	// Trim leading junk (image captions, markup artifacts).
+	// If there's a newline within the first ~120 chars and the first line
+	// doesn't contain the topic name, it's likely a caption — skip it.
+	if idx := strings.Index(best, "\n"); idx > 0 && idx < 120 {
+		firstLine := strings.TrimSpace(best[:idx])
+		rest := strings.TrimSpace(best[idx+1:])
+		// Skip if first line doesn't look like content about the topic
+		topicLower := strings.ToLower(strings.TrimSpace(lower))
+		if !strings.Contains(strings.ToLower(firstLine), topicLower) && rest != "" {
+			best = rest
+		}
+	}
+	return strings.TrimSpace(best)
+}
+
+// LookupFacts returns up to maxFacts short facts about a topic (excluding described_as).
+func (cg *CognitiveGraph) LookupFacts(topic string, maxFacts int) []string {
+	cg.mu.RLock()
+	defer cg.mu.RUnlock()
+
+	lower := strings.ToLower(strings.TrimSpace(topic))
+	ids, ok := cg.byLabel[lower]
+	if !ok {
+		return nil
+	}
+
+	var facts []string
+	for _, id := range ids {
+		for _, edge := range cg.outEdges[id] {
+			if edge.Relation == RelDescribedAs {
+				continue // skip — handled separately
+			}
+			if target, ok := cg.nodes[edge.To]; ok {
+				subj := cg.nodes[id].Label
+				obj := target.Label
+				fact := edgeToNaturalLanguage(subj, edge.Relation, obj)
+				if fact != "" && len(fact) < 200 {
+					facts = append(facts, fact)
+				}
+			}
+			if len(facts) >= maxFacts {
+				break
+			}
+		}
+		if len(facts) >= maxFacts {
+			break
+		}
+	}
+	return facts
+}
+
+// RandomFact returns a random interesting fact from the knowledge graph.
+// Uses time-based selection to give different results each call.
+func (cg *CognitiveGraph) RandomFact() string {
+	cg.mu.RLock()
+	defer cg.mu.RUnlock()
+
+	if len(cg.edges) == 0 {
+		return ""
+	}
+
+	// Use time to pick a pseudo-random starting position
+	start := int(time.Now().UnixNano() % int64(len(cg.edges)))
+
+	// Scan from that position for a good described_as fact
+	for i := 0; i < len(cg.edges); i++ {
+		idx := (start + i) % len(cg.edges)
+		edge := cg.edges[idx]
+		if edge.Relation != RelDescribedAs {
+			continue
+		}
+		from, ok1 := cg.nodes[edge.From]
+		to, ok2 := cg.nodes[edge.To]
+		if !ok1 || !ok2 {
+			continue
+		}
+		desc := to.Label
+		// Skip short/uninteresting descriptions
+		if len(desc) < 30 {
+			continue
+		}
+		return from.Label + " — " + desc
+	}
+
+	// Fallback: any non-described_as edge as a simple fact
+	for i := 0; i < len(cg.edges); i++ {
+		idx := (start + i) % len(cg.edges)
+		edge := cg.edges[idx]
+		if edge.Relation == RelDescribedAs {
+			continue
+		}
+		from, ok1 := cg.nodes[edge.From]
+		to, ok2 := cg.nodes[edge.To]
+		if !ok1 || !ok2 {
+			continue
+		}
+		fact := edgeToNaturalLanguage(from.Label, edge.Relation, to.Label)
+		if fact != "" {
+			return fact
+		}
+	}
+
+	return ""
+}
+
+// edgeToNaturalLanguage converts a graph edge to a simple sentence.
+func edgeToNaturalLanguage(subj string, rel RelType, obj string) string {
+	switch rel {
+	case RelIsA:
+		return subj + " is " + obj + "."
+	case RelHas:
+		return subj + " has " + obj + "."
+	case RelLocatedIn:
+		return subj + " is located in " + obj + "."
+	case RelPartOf:
+		return subj + " is part of " + obj + "."
+	case RelCreatedBy:
+		return subj + " was created by " + obj + "."
+	case RelFoundedBy:
+		return subj + " was founded by " + obj + "."
+	case RelFoundedIn:
+		return subj + " was founded in " + obj + "."
+	case RelUsedFor:
+		return subj + " is used for " + obj + "."
+	case RelOffers:
+		return subj + " offers " + obj + "."
+	case RelRelatedTo:
+		return subj + " is related to " + obj + "."
+	case RelCauses:
+		return subj + " causes " + obj + "."
+	default:
+		return subj + " — " + obj + "."
+	}
+}
+
 // FindNodes finds nodes whose label contains the query.
 func (cg *CognitiveGraph) FindNodes(query string) []*CogNode {
 	cg.mu.RLock()

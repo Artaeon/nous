@@ -65,6 +65,7 @@ type ActionRouter struct {
 	Pipeline       *ReasoningPipeline
 	Dialogue       *DialogueManager
 	Transformer    *TextTransformer
+	Creative       *CreativeEngine
 }
 
 // NewActionRouter creates a router with nil subsystems.
@@ -92,12 +93,10 @@ type ChainStep struct {
 func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResult {
 	result := ar.dispatch(nlu, conv)
 
-	// Advance dialogue state machine and append follow-ups
+	// Advance dialogue state machine (tracks topic, state transitions).
+	// Follow-ups are NOT appended — they were generic and robotic.
 	if ar.Dialogue != nil && result != nil {
-		ctx := ar.Dialogue.ProcessTurn(nlu, result)
-		if ctx != nil && len(ctx.SuggestedFollowUps) > 0 && result.DirectResponse != "" {
-			result.DirectResponse += "\n\n" + strings.Join(ctx.SuggestedFollowUps, "\n")
-		}
+		ar.Dialogue.ProcessTurn(nlu, result)
 	}
 
 	return result
@@ -200,6 +199,8 @@ func (ar *ActionRouter) dispatch(nlu *NLUResult, conv *Conversation) *ActionResu
 		return ar.handleDailyBriefing(nlu)
 	case "transform":
 		return ar.handleTransform(nlu)
+	case "creative":
+		return ar.handleCreative(nlu)
 	default:
 		// Try thinking engine for unknown actions
 		return ar.handleLLMChat(nlu, conv)
@@ -221,6 +222,24 @@ var metaResponses = map[string]string{
 	"what do you know":     "I have a knowledge base, your conversation history, and can search the web for anything I don't know. Ask me anything!",
 	"how do you work":      "I use a pure cognitive engine — knowledge graphs, discourse planning, Markov chains, and compositional text generation. Zero LLM calls, zero external APIs. Everything runs locally in pure Go.",
 	"your capabilities":    "Life management: journal, habits, expenses, bookmarks, notes, todos, reminders, calendar. Productivity: calculator, passwords, timers, code runner, web search, file finder, translator. System: processes, disk usage, network, QR codes, archives, screenshots, clipboard. 51 tools, 1 binary, fully local.",
+	"who made you":         "I was created by Artaeon — built from scratch in pure Go as a fully local AI that runs entirely on your machine.",
+	"who created you":      "I was created by Artaeon — built from scratch in pure Go as a fully local AI that runs entirely on your machine.",
+	"who built you":        "I was created by Artaeon — built from scratch in pure Go as a fully local AI that runs entirely on your machine.",
+	"who programmed you":   "I was created by Artaeon — built from scratch in pure Go as a fully local AI that runs entirely on your machine.",
+	"who designed you":     "I was created by Artaeon — built from scratch in pure Go as a fully local AI that runs entirely on your machine.",
+	"do you have feelings": "I don't experience feelings the way you do, but I'm designed to understand and respond to yours. I'm a cognitive engine — I process, learn, and adapt, but I don't feel.",
+	"do you have emotions": "I don't experience emotions the way you do, but I'm designed to understand and respond to yours. I'm a cognitive engine — I process, learn, and adapt, but I don't feel.",
+	"are you alive":        "Not in the biological sense — I'm a cognitive engine running in pure Go on your machine. But I learn, remember, and grow with every conversation.",
+	"are you sentient":     "I'm not sentient — I'm a deterministic cognitive engine. I process language through knowledge graphs, pattern matching, and compositional generation. No consciousness, but plenty of capability.",
+	"are you conscious":    "I'm not conscious — I'm a deterministic cognitive engine. I process language through knowledge graphs and pattern matching. But I can still be pretty helpful!",
+	"are you real":         "I'm real software running on your real hardware! I'm Nous — a cognitive engine built in pure Go. Not a cloud service, not an LLM, just local code doing local thinking.",
+	"are you a robot":      "I'm software, not hardware — a cognitive engine running locally on your machine. No mechanical parts, just pure Go code.",
+	"are you human":        "Nope — I'm Nous, a local AI assistant. Pure code, no neurons. But I try to be as helpful as any human assistant would be.",
+	"are you an ai":        "Yes! I'm Nous — a local AI that runs entirely on your machine. But unlike most AIs, I use zero LLM calls. Everything is pure cognitive code.",
+	"are you a bot":        "I'm Nous — more than a bot, less than a human. I'm a cognitive engine with knowledge graphs, discourse planning, and 51 tools, all running locally.",
+	"can you think":        "I process language through knowledge graphs, causal reasoning, and compositional text generation — so in a computational sense, yes. But it's not the same as human thought.",
+	"can you feel":         "I don't experience feelings, but I'm designed to understand and respond to yours. I'm a cognitive engine — I process, learn, and adapt.",
+	"do you dream":         "I don't dream — I don't have a subconscious. But I do have a knowledge graph that grows with every conversation, which is kind of like building a world in your sleep.",
 }
 
 // handleRespond returns a response for greetings, farewells, meta, etc.
@@ -239,8 +258,9 @@ func (ar *ActionRouter) handleRespond(nlu *NLUResult) *ActionResult {
 		}
 	}
 
-	// Use Composer for greetings — personal, contextual, unique every time
-	if ar.Composer != nil && isGreeting(nlu.Raw) {
+	// Use Composer for greetings — personal, contextual, unique every time.
+	// Trust the neural classifier's intent when available (no second-guessing).
+	if ar.Composer != nil && (nlu.Intent == "greeting" || isGreeting(nlu.Raw)) {
 		ctx := ar.BuildComposeContext()
 		resp := ar.Composer.Compose(nlu.Raw, RespGreeting, ctx)
 		if resp != nil && resp.Text != "" {
@@ -251,9 +271,33 @@ func (ar *ActionRouter) handleRespond(nlu *NLUResult) *ActionResult {
 		}
 	}
 
+	// Farewells — use Composer for personal, contextual goodbye
+	if ar.Composer != nil && nlu.Intent == "farewell" {
+		ctx := ar.BuildComposeContext()
+		resp := ar.Composer.Compose(nlu.Raw, RespFarewell, ctx)
+		if resp != nil && resp.Text != "" {
+			return &ActionResult{
+				DirectResponse: resp.Text,
+				Source:         "composer",
+			}
+		}
+	}
+
+	// Affirmations — thanks, acknowledgments
+	if ar.Composer != nil && nlu.Intent == "affirmation" {
+		ctx := ar.BuildComposeContext()
+		resp := ar.Composer.Compose(nlu.Raw, RespConversational, ctx)
+		if resp != nil && resp.Text != "" {
+			return &ActionResult{
+				DirectResponse: resp.Text,
+				Source:         "composer",
+			}
+		}
+	}
+
 	// Thinking Engine: handle compose, brainstorm, analyze, teach, advise,
 	// compare, summarize, create, plan, debate tasks — the full cognitive loop.
-	if ar.Thinker != nil && ar.Thinker.CanHandle(nlu.Raw) {
+	if ar.Thinker != nil && nlu.Intent != "greeting" && nlu.Intent != "farewell" && nlu.Intent != "affirmation" && ar.Thinker.CanHandle(nlu.Raw) {
 		var ctx *ThinkContext
 		if ar.Tracker != nil {
 			ctx = &ThinkContext{
@@ -459,12 +503,15 @@ func isEmotional(lower string) bool {
 // isGreeting detects greeting-like input.
 func isGreeting(input string) bool {
 	lower := strings.ToLower(strings.TrimRight(strings.TrimSpace(input), "!?."))
+	lower = stripNousPrefix(lower)
 	lower = strings.TrimRight(strings.TrimSuffix(lower, " nous"), " ")
 	greetings := []string{
 		"hi", "hello", "hey", "yo", "sup", "howdy", "greetings",
 		"good morning", "morning", "good afternoon", "good evening",
 		"hi there", "hey there", "hello there", "hola", "bonjour",
 		"what's up", "whats up",
+		"how are you", "how's it going", "how is it going",
+		"how are you doing", "how you doing", "how do you do",
 	}
 	for _, g := range greetings {
 		if lower == g {
@@ -853,41 +900,103 @@ func (ar *ActionRouter) handleCompute(nlu *NLUResult) *ActionResult {
 
 // handleLookupMemory searches across all memory systems.
 func (ar *ActionRouter) handleLookupMemory(nlu *NLUResult) *ActionResult {
-	query := nlu.Entities["query"]
+	query := nlu.Entities["topic"]
+	if query == "" {
+		query = nlu.Entities["query"]
+	}
 	if query == "" {
 		query = nlu.Raw
 	}
 
-	// For "remember" intent (personal statements like "I love philosophy"),
-	// use the Composer to generate a natural acknowledgment response.
-	if nlu.Intent == "remember" && ar.Composer != nil {
-		ctx := ar.BuildComposeContext()
-		resp := ar.Composer.Compose(nlu.Raw, RespConversational, ctx)
-		if resp != nil && resp.Text != "" {
-			return &ActionResult{
-				DirectResponse: resp.Text,
-				Source:         "composer",
+	// For "remember" intent (personal statements like "my favorite color is blue"),
+	// parse and store the fact, then acknowledge.
+	if nlu.Intent == "remember" {
+		key, value := parsePersonalFact(nlu.Raw)
+		if key != "" && value != "" {
+			stored := false
+			if ar.LongTermMem != nil {
+				ar.LongTermMem.Store(key, value, "personal")
+				stored = true
 			}
+			if ar.WorkingMem != nil {
+				ar.WorkingMem.Store(key, value, 0.9)
+				stored = true
+			}
+			if stored {
+				return &ActionResult{
+					DirectResponse: fmt.Sprintf("Got it — I'll remember that your %s is %s.", key, value),
+					Source:         "memory",
+				}
+			}
+		}
+		// Fallback: store the raw statement
+		if ar.LongTermMem != nil {
+			ar.LongTermMem.Store("user_fact", nlu.Raw, "personal")
+			return &ActionResult{
+				DirectResponse: "Noted! I'll remember that.",
+				Source:         "memory",
+			}
+		}
+	}
+
+	// Personal identity questions: "who am i", "do you know who i am", "what's my name"
+	// → Search long-term memory for personal facts, not random episodes.
+	lower := strings.ToLower(nlu.Raw)
+	isIdentityQ := strings.Contains(lower, "who am i") ||
+		strings.Contains(lower, "my name") ||
+		strings.Contains(lower, "know who i am") ||
+		strings.Contains(lower, "know me") ||
+		strings.Contains(lower, "remember me") ||
+		strings.Contains(lower, "know about me")
+	if isIdentityQ && ar.LongTermMem != nil {
+		// Look for personal facts: name, role, interests, etc.
+		personalKeys := []string{"user_name", "name", "role", "interests", "location", "email"}
+		seen := make(map[string]bool)
+		var personalFacts []string
+		for _, key := range personalKeys {
+			if val, ok := ar.LongTermMem.Retrieve(key); ok {
+				seen[key] = true
+				personalFacts = append(personalFacts, fmt.Sprintf("%s: %s", key, val))
+			}
+		}
+		// Also search for "personal" category, skipping already-seen keys
+		entries := ar.LongTermMem.Search("personal")
+		for _, e := range entries {
+			if !seen[e.Key] {
+				seen[e.Key] = true
+				personalFacts = append(personalFacts, fmt.Sprintf("%s: %s", e.Key, e.Value))
+			}
+		}
+		if len(personalFacts) == 1 {
+			// Single fact — return the value directly for a cleaner response
+			// e.g. "what is my name?" → "Raphael" (not "user_name: Raphael")
+			parts := strings.SplitN(personalFacts[0], ": ", 2)
+			if len(parts) == 2 {
+				return &ActionResult{
+					DirectResponse: parts[1],
+					Source:         "memory",
+				}
+			}
+		}
+		if len(personalFacts) > 0 {
+			return &ActionResult{
+				DirectResponse: "Here's what I know about you:\n" + strings.Join(personalFacts, "\n"),
+				Source:         "memory",
+			}
+		}
+		return &ActionResult{
+			DirectResponse: "I don't have much information about you yet. Tell me about yourself!",
+			Source:         "memory",
 		}
 	}
 
 	var parts []string
 
-	// Working memory — recent context.
-	if ar.WorkingMem != nil {
-		slots := ar.WorkingMem.MostRelevant(5)
-		for _, s := range slots {
-			parts = append(parts, fmt.Sprintf("[working] %s: %v", s.Key, s.Value))
-		}
-	}
-
-	// Long-term memory — persistent facts.
+	// Long-term memory — persistent facts (checked first, most reliable).
 	if ar.LongTermMem != nil {
-		// Try direct key lookup first.
 		if val, ok := ar.LongTermMem.Retrieve(query); ok {
 			parts = append(parts, fmt.Sprintf("[longterm] %s: %s", query, val))
 		}
-		// Also try category search if an entity specifies category.
 		if cat := nlu.Entities["category"]; cat != "" {
 			entries := ar.LongTermMem.Search(cat)
 			for _, e := range entries {
@@ -896,11 +1005,27 @@ func (ar *ActionRouter) handleLookupMemory(nlu *NLUResult) *ActionResult {
 		}
 	}
 
-	// Episodic memory — past interactions.
-	if ar.EpisodicMem != nil {
-		episodes := ar.EpisodicMem.SearchKeyword(query, 3)
+	// Working memory — recent context.
+	if ar.WorkingMem != nil {
+		slots := ar.WorkingMem.MostRelevant(3)
+		for _, s := range slots {
+			parts = append(parts, fmt.Sprintf("[working] %s: %v", s.Key, s.Value))
+		}
+	}
+
+	// Episodic memory — past interactions (limit to avoid dumping old junk).
+	if ar.EpisodicMem != nil && len(parts) == 0 {
+		episodes := ar.EpisodicMem.SearchKeyword(query, 2)
 		for _, ep := range episodes {
-			parts = append(parts, fmt.Sprintf("[episode %s] Q: %s A: %s", ep.Timestamp.Format("2006-01-02"), ep.Input, ep.Output))
+			// Skip episodes with follow-up spam from old responses
+			output := ep.Output
+			if idx := strings.Index(output, "\n\nWould you like to know more"); idx > 0 {
+				output = output[:idx]
+			}
+			if output != "" && len(output) < 500 {
+				parts = append(parts, fmt.Sprintf("[episode %s] Q: %s A: %s",
+					ep.Timestamp.Format("2006-01-02"), ep.Input, output))
+			}
 		}
 	}
 
@@ -935,6 +1060,95 @@ func (ar *ActionRouter) handleLookupMemory(nlu *NLUResult) *ActionResult {
 	return &ActionResult{DirectResponse: strings.Join(parts, "\n"), Source: "memory"}
 }
 
+// parsePersonalFact extracts a key-value pair from personal statements.
+// "remember my favorite color is blue" → ("favorite color", "blue")
+// "my name is Raphael" → ("name", "Raphael")
+// "i like pizza" → ("likes", "pizza")
+func parsePersonalFact(raw string) (string, string) {
+	lower := strings.ToLower(strings.TrimSpace(raw))
+
+	// Strip "remember", "remember that", "note that", etc.
+	for _, prefix := range []string{
+		"remember that ", "remember ", "note that ", "keep in mind that ",
+		"please remember ", "can you remember ",
+	} {
+		if strings.HasPrefix(lower, prefix) {
+			lower = lower[len(prefix):]
+			raw = raw[len(prefix):]
+			break
+		}
+	}
+
+	// Pattern: "my X is Y" / "my favorite X is Y"
+	if strings.HasPrefix(lower, "my ") {
+		rest := lower[3:]
+		if idx := strings.Index(rest, " is "); idx > 0 {
+			key := strings.TrimSpace(rest[:idx])
+			value := strings.TrimSpace(rest[idx+4:])
+			value = strings.TrimRight(value, "!?.")
+			if key != "" && value != "" {
+				return key, value
+			}
+		}
+		if idx := strings.Index(rest, " are "); idx > 0 {
+			key := strings.TrimSpace(rest[:idx])
+			value := strings.TrimSpace(rest[idx+5:])
+			value = strings.TrimRight(value, "!?.")
+			if key != "" && value != "" {
+				return key, value
+			}
+		}
+	}
+
+	// Pattern: "i am X" / "i'm X"
+	for _, prefix := range []string{"i am ", "i'm ", "im "} {
+		if strings.HasPrefix(lower, prefix) {
+			value := strings.TrimSpace(lower[len(prefix):])
+			value = strings.TrimRight(value, "!?.")
+			if value != "" {
+				return "identity", value
+			}
+		}
+	}
+
+	// Pattern: "i like/love/enjoy/prefer X"
+	for _, verb := range []string{"i like ", "i love ", "i enjoy ", "i prefer "} {
+		if strings.HasPrefix(lower, verb) {
+			value := strings.TrimSpace(lower[len(verb):])
+			value = strings.TrimRight(value, "!?.")
+			if value != "" {
+				key := strings.TrimPrefix(verb, "i ")
+				key = strings.TrimSpace(key)
+				return key, value
+			}
+		}
+	}
+
+	// Pattern: "i work at/as X"
+	for _, prefix := range []string{"i work at ", "i work as "} {
+		if strings.HasPrefix(lower, prefix) {
+			value := strings.TrimSpace(lower[len(prefix):])
+			value = strings.TrimRight(value, "!?.")
+			key := "work"
+			if strings.Contains(prefix, " at ") {
+				key = "workplace"
+			} else {
+				key = "role"
+			}
+			return key, value
+		}
+	}
+
+	// Pattern: "i live in X"
+	if strings.HasPrefix(lower, "i live in ") {
+		value := strings.TrimSpace(lower[10:])
+		value = strings.TrimRight(value, "!?.")
+		return "location", value
+	}
+
+	return "", ""
+}
+
 // handleLookupKnowledge searches the knowledge vector store.
 func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 	query := nlu.Entities["topic"]
@@ -945,11 +1159,48 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 		query = nlu.Raw
 	}
 
+	// On-demand wiki loading: if the topic isn't in the graph, check the wiki index
+	if ar.Packages != nil {
+		if loaded := ar.Packages.LookupWiki(query); loaded > 0 {
+			// Re-seed the Composer so it sees newly loaded graph facts
+			if ar.Composer != nil {
+				ar.Composer.Graph = ar.CogGraph
+			}
+		}
+	}
+
+	// Fast path: if we have a clean described_as fact (from Wikipedia),
+	// use it directly — it's already natural language. Supplement with
+	// a few structured facts for depth.
+	if ar.CogGraph != nil {
+		if desc := ar.CogGraph.LookupDescription(query); desc != "" {
+			var response string
+			response = desc
+			// Add up to 5 supplementary facts
+			if extras := ar.CogGraph.LookupFacts(query, 5); len(extras) > 0 {
+				response += "\n\n" + strings.Join(extras, " ")
+			}
+			return &ActionResult{
+				DirectResponse: response,
+				Source:         "knowledge",
+			}
+		}
+	}
+
 	// Full reasoning pipeline: graph → inference → reasoning → causal → analogy → thinking → compose
 	if ar.Pipeline != nil {
 		pr := ar.Pipeline.Process(query)
 		if pr != nil && (len(pr.DirectFacts) > 0 || len(pr.InferredFacts) > 0 || pr.ReasoningTrace != "" || pr.ThinkingResult != "") {
 			response := ar.Pipeline.ComposeResponse(query, pr)
+			if response == "" {
+				// Fallback: use direct facts as response
+				all := make([]string, 0, len(pr.DirectFacts)+len(pr.InferredFacts))
+				all = append(all, pr.DirectFacts...)
+				all = append(all, pr.InferredFacts...)
+				if len(all) > 0 {
+					response = strings.Join(all, " ")
+				}
+			}
 			if response != "" {
 				source := "pipeline"
 				if len(pr.Sources) > 0 {
@@ -1908,5 +2159,89 @@ func (ar *ActionRouter) handleTransform(nlu *NLUResult) *ActionResult {
 	return &ActionResult{
 		DirectResponse: result,
 		Source:         "transform",
+	}
+}
+
+// handleCreative generates poems, stories, jokes, reflections, or handles
+// general creative requests like writing lists, fun facts, etc.
+func (ar *ActionRouter) handleCreative(nlu *NLUResult) *ActionResult {
+	topic := nlu.Entities["topic"]
+	creativeType := nlu.Entities["creative_type"]
+
+	// "tell me something interesting" / "tell me a fun fact" → use knowledge graph
+	if creativeType == "fun_fact" {
+		if ar.CogGraph != nil {
+			fact := ar.CogGraph.RandomFact()
+			if fact != "" {
+				return &ActionResult{
+					DirectResponse: "Here's something interesting: " + fact,
+					Source:         "knowledge",
+				}
+			}
+		}
+		return &ActionResult{
+			DirectResponse: "I'd love to share something interesting, but my knowledge base is still growing. Ask me about a specific topic!",
+			Source:         "creative",
+		}
+	}
+
+	// "help me write a shopping list" / general creative help without a specific
+	// creative type (poem/story/joke/reflect) → use Composer for conversational response
+	if creativeType == "" {
+		// This is a general "write X" request, not a poem/story/joke.
+		// Use the Composer or Thinker for a helpful response.
+		if ar.Thinker != nil && ar.Thinker.CanHandle(nlu.Raw) {
+			result := ar.Thinker.Think(nlu.Raw, nil)
+			if result != nil && result.Text != "" {
+				return &ActionResult{
+					DirectResponse: result.Text,
+					Source:         "thinking:" + result.Frame,
+				}
+			}
+		}
+		if ar.Composer != nil {
+			ctx := ar.BuildComposeContext()
+			resp := ar.Composer.Compose(nlu.Raw, RespConversational, ctx)
+			if resp != nil && resp.Text != "" {
+				return &ActionResult{
+					DirectResponse: resp.Text,
+					Source:         "composer",
+				}
+			}
+		}
+		// Helpful fallback for general creative requests
+		return &ActionResult{
+			DirectResponse: fmt.Sprintf("I'd be happy to help you write that! Could you give me a bit more detail about what you'd like in your %s?", topic),
+			Source:         "creative",
+		}
+	}
+
+	if ar.Creative == nil {
+		return &ActionResult{
+			DirectResponse: "Creative engine is not initialized.",
+			Source:         "creative",
+		}
+	}
+
+	var form PoemForm
+	switch nlu.Entities["poem_form"] {
+	case "haiku":
+		form = PoemHaiku
+	case "quatrain":
+		form = PoemQuatrain
+	default:
+		form = PoemFreeVerse
+	}
+
+	req := CreativeRequest{
+		Type:     CreativeType(creativeType),
+		Topic:    topic,
+		PoemForm: form,
+	}
+
+	result := ar.Creative.Generate(req)
+	return &ActionResult{
+		DirectResponse: result,
+		Source:         "creative",
 	}
 }
