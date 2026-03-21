@@ -88,23 +88,29 @@ func NewNLU() *NLU {
 			"good morning", "good afternoon", "good evening", "good night",
 			"morning", "evening", "afternoon",
 			"what's up", "whats up", "sup", "greetings", "salutations",
+			"how are you", "how's it going", "how is it going",
+			"how are you doing", "how you doing", "how do you do",
+			"how have you been", "how's your day", "how is your day",
+			"what's going on", "whats going on", "what's new",
 		},
 		farewells: []string{
 			"bye", "goodbye", "good bye", "see ya", "see you", "later",
 			"farewell", "ciao", "adios", "peace", "take care",
 			"good night", "gn", "ttyl", "talk later",
-			"gotta go", "catch you later",
+			"gotta go", "catch you later", "ok bye", "okay bye",
+			"bye bye", "night", "nite",
 		},
 		affirmatives: []string{
 			"yes", "yeah", "yep", "yup", "sure", "ok", "okay", "k",
-			"thanks", "thank you", "thx", "ty", "great", "good", "nice",
+			"thanks", "thank you", "thx", "ty", "thanks a lot", "thanks so much",
+			"thank you so much", "great", "good", "nice",
 			"awesome", "cool", "perfect", "exactly", "correct", "right",
 			"got it", "understood", "makes sense", "agreed", "absolutely",
 			"no", "nope", "nah", "not really", "negative",
 		},
 		metaPatterns: []string{
 			"what can you do", "who are you", "what are you",
-			"help", "how do you work", "what do you know",
+			"how do you work", "what do you know",
 			"tell me about yourself", "your capabilities",
 			"what's your name", "whats your name",
 		},
@@ -142,7 +148,10 @@ func NewNLU() *NLU {
 		},
 		memoryVerbs: []string{
 			"remember", "memorize", "store", "save that",
-			"my name is", "i work at", "i live in", "i like", "i prefer",
+			"my name is", "i am a", "i'm a", "i work at", "i work as",
+			"i live in", "i like", "i love", "i enjoy", "i prefer",
+			"i'm interested in", "i am interested in",
+			"i'm building", "i am building",
 			"note that", "keep in mind",
 		},
 		recallVerbs: []string{
@@ -337,10 +346,9 @@ func NewNLU() *NLU {
 			"square root", "factorial", "percent of", "% of", "% off",
 		},
 		passwordWords: []string{
-			"generate password", "random password", "new password",
-			"create password", "password generator", "strong password",
-			"passphrase", "generate passphrase", "random passphrase",
-			"generate pin", "random pin", "new pin",
+			"password", "passphrase",
+			"generate pin", "generate a pin", "random pin", "new pin",
+			"create a pin", "pin code", "pin number",
 		},
 		bookmarkWords: []string{
 			"bookmark", "save link", "save url", "save this link",
@@ -457,6 +465,21 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 		return unicode.IsPunct(r) || unicode.IsSpace(r)
 	})
 
+	// 0. Daily briefing — intercepts morning greetings and explicit requests
+	briefingTriggers := []string{
+		"good morning", "daily briefing", "my day", "brief me",
+		"morning briefing", "daily summary", "start my day",
+		"what's on today", "whats on today", "how's my day",
+		"hows my day", "my morning", "morning report",
+	}
+	for _, t := range briefingTriggers {
+		if stripped == t || strings.HasPrefix(lower, t+" ") || strings.HasPrefix(lower, t+"!") || strings.HasPrefix(lower, t+",") {
+			r.Intent = "daily_briefing"
+			r.Confidence = 0.95
+			return
+		}
+	}
+
 	// 1. Exact/prefix match: greetings
 	for _, g := range n.greetings {
 		if stripped == g || strings.HasPrefix(lower, g+" ") || strings.HasPrefix(lower, g+",") || strings.HasPrefix(lower, g+"!") {
@@ -493,6 +516,11 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 	}
 
 	// 4. Meta queries
+	if stripped == "help" || stripped == "help me" {
+		r.Intent = "meta"
+		r.Confidence = 0.90
+		return
+	}
 	for _, m := range n.metaPatterns {
 		if strings.Contains(lower, m) {
 			r.Intent = "meta"
@@ -515,6 +543,21 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 		r.Action = "fetch_url"
 		r.Confidence = 0.85
 		return
+	}
+
+	// 4c. Follow-up / continuation detection
+	// Only catch explicit continuations here. Context-aware follow-ups
+	// like "elaborate" and "more details" are handled by UnderstandWithContext.
+	for _, marker := range []string{
+		"tell me more", "go on", "continue",
+		"what else", "anything else", "dig deeper",
+	} {
+		if lower == marker || strings.HasPrefix(lower, marker+" ") {
+			r.Intent = "follow_up"
+			r.Action = "llm_chat" // will be intercepted by tracker
+			r.Confidence = 0.85
+			return
+		}
 	}
 
 	// 5. Recall (before remember, since "do you remember" contains "remember")
@@ -974,13 +1017,25 @@ func (n *NLU) mapAction(lower string, r *NLUResult) {
 		return
 	}
 
-	// Date questions: if a date entity is present and it's a question about time/day,
+	// Date questions: if a date entity is present and the query is ABOUT dates/time,
 	// route to compute (the date evaluator handles these without LLM).
 	if _, hasDate := r.Entities["date"]; hasDate {
 		if r.Intent == "question" || r.Intent == "explain" {
-			r.Action = "compute"
-			r.Entities["expr"] = r.Raw
-			return
+			// Only route to compute if the query is actually asking about dates
+			dateQuestions := []string{"what day", "what date", "when is", "when was",
+				"how many days", "how long until", "what time", "what year"}
+			isDateQuestion := false
+			for _, dq := range dateQuestions {
+				if strings.Contains(lower, dq) {
+					isDateQuestion = true
+					break
+				}
+			}
+			if isDateQuestion {
+				r.Action = "compute"
+				r.Entities["expr"] = r.Raw
+				return
+			}
 		}
 	}
 
@@ -1055,6 +1110,8 @@ func (n *NLU) mapAction(lower string, r *NLUResult) {
 		r.Action = "habit"
 	case "expense":
 		r.Action = "expense"
+	case "daily_briefing":
+		r.Action = "daily_briefing"
 
 	case "recommendation":
 		r.Action = "lookup_knowledge"

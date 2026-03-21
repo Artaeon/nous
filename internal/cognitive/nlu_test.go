@@ -7,7 +7,7 @@ import (
 func TestNLUGreetings(t *testing.T) {
 	nlu := NewNLU()
 	cases := []string{
-		"hi", "hello", "hey", "howdy", "good morning",
+		"hi", "hello", "hey", "howdy",
 		"good afternoon", "Hi there!", "Hello!",
 		"Hey, how are you?", "Greetings",
 	}
