@@ -8,10 +8,8 @@ services:
       resources:
         limits:
           cpus: '2.0'
-          memory: 1G
+          memory: 256M
     environment:
-      - NOUS_MODEL=${NOUS_MODEL:-qwen2.5:1.5b}
-      - NOUS_OLLAMA_HOST=${NOUS_OLLAMA_HOST:-http://ollama:11434}
       - NOUS_API_KEY=${NOUS_API_KEY:-}
       - NOUS_TELEGRAM_TOKEN=${NOUS_TELEGRAM_TOKEN:-}
     command:
@@ -19,10 +17,6 @@ services:
       - "--public"
       - "--port"
       - "3333"
-      - "--model"
-      - "${NOUS_MODEL:-qwen2.5:1.5b}"
-      - "--host"
-      - "${NOUS_OLLAMA_HOST:-http://ollama:11434}"
       - "--memory"
       - "/data"
       - "--trust"
@@ -46,44 +40,12 @@ services:
       start_period: 10s
     networks:
       - default
-      - nous-internal
-
-  # Ollama LLM backend — GPU recommended, CPU works
-  ollama:
-    image: ollama/ollama:latest
-    container_name: nous-ollama
-    restart: always
-    deploy:
-      resources:
-        limits:
-          cpus: '4.0'
-          memory: 6G
-        # Uncomment for GPU acceleration:
-        # reservations:
-        #   devices:
-        #     - driver: nvidia
-        #       count: all
-        #       capabilities: [gpu]
-    volumes:
-      - ollama_data:/root/.ollama
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    networks:
-      - nous-internal
 
 networks:
   default:
     name: traefik_default
     external: true
-  nous-internal:
-    name: nous-internal
-    driver: bridge
 
 volumes:
   nous_data:
   nous_workspace:
-  ollama_data:

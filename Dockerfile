@@ -12,7 +12,7 @@ RUN apk --no-cache add ca-certificates git
 
 WORKDIR /app
 COPY --from=builder /build/nous .
-COPY knowledge/ /app/knowledge/
+COPY packages/ /app/packages/
 
 VOLUME ["/data", "/workspace"]
 

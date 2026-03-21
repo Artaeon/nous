@@ -1,7 +1,6 @@
 [Unit]
-Description=Nous - Cognitive Architecture
-After=network.target ollama.service
-Wants=ollama.service
+Description=Nous - Pure Cognitive Engine
+After=network.target
 
 [Service]
 Type=simple
