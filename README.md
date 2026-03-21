@@ -1,70 +1,129 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="Nous Banner" width="800">
+  <img src="assets/banner.svg" alt="Nous Banner" width="100%">
 </p>
 
 <p align="center">
-  <strong>The AI That Thinks Without an LLM</strong>
+  <strong>Local-first cognitive infrastructure for reasoning, memory, and action without an LLM stack.</strong>
 </p>
 
 <p align="center">
-  <em>Pure cognitive engine. Zero LLM. Zero cloud. Zero API keys. Fully local.</em>
+  <a href="#quick-start">Quick Start</a> |
+  <a href="#why-nous-feels-different">Why Nous Feels Different</a> |
+  <a href="ARCHITECTURE.md">Architecture</a> |
+  <a href="BENCHMARKS.md">Benchmarks</a> |
+  <a href="TESTING.md">Testing</a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.0.0-blue?style=flat-square" alt="v1.0.0">
+  <img src="https://img.shields.io/badge/version-1.0.0-0f766e?style=flat-square" alt="v1.0.0">
   <img src="https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.22+">
-  <img src="https://img.shields.io/badge/LLM-none_required-brightgreen?style=flat-square" alt="No LLM">
-  <img src="https://img.shields.io/badge/tools-51_built--in-orange?style=flat-square" alt="51 built-in tools">
-  <img src="https://img.shields.io/badge/binary-~14_MB-blue?style=flat-square" alt="~14 MB binary">
-  <img src="https://img.shields.io/badge/deps-zero-brightgreen?style=flat-square" alt="Zero deps">
-  <img src="https://img.shields.io/badge/cloud-not_required-green?style=flat-square" alt="No Cloud">
-  <img src="https://img.shields.io/badge/license-MIT-brightgreen?style=flat-square" alt="MIT License">
+  <img src="https://img.shields.io/badge/runtime-one_static_binary-155e75?style=flat-square" alt="One static binary">
+  <img src="https://img.shields.io/badge/latency-sub_15ms-0891b2?style=flat-square" alt="Sub 15ms pipeline">
+  <img src="https://img.shields.io/badge/tools-51_local_tools-c2410c?style=flat-square" alt="51 local tools">
+  <img src="https://img.shields.io/badge/memory-6_layers-0d9488?style=flat-square" alt="6-layer memory">
+  <img src="https://img.shields.io/badge/LLM-none_required-16a34a?style=flat-square" alt="No LLM required">
+  <img src="https://img.shields.io/badge/cloud-not_required-15803d?style=flat-square" alt="No cloud required">
+  <img src="https://img.shields.io/badge/license-MIT-65a30d?style=flat-square" alt="MIT License">
 </p>
 
 ---
 
 > *"It is the active intellect that makes all things."*
-> &mdash; Aristotle, *De Anima*, on nous (νοῦς)
+> 
+> Aristotle, *De Anima*, on nous
 
 ---
 
-## What Is Nous
+## What Nous Is
 
-Nous is an open-source **personal AI** that runs **entirely on your local hardware** with **zero LLM dependency**. It's not a chatbot wrapper &mdash; it's a **pure cognitive engine** that thinks, reasons, composes, remembers, and grows with you over time.
+Nous is an open-source **cognitive system** that runs **entirely on your own machine**. It is not an interface bolted onto a remote model. It is a native stack for **understanding intent, planning discourse, reasoning over knowledge, using tools, and learning from use**.
 
-Built from the ground up with a **Thinking Engine** (intent classification → frame selection → section generation), **Rhetorical Structure Theory discourse planning**, **knowledge graph reasoning**, **compositional text generation**, **Markov chains**, **word embeddings**, and a **conversational learning engine** &mdash; all in pure Go. No neural network inference. No external model. No API calls.
+The core idea is simple: if you want local AI to feel trustworthy, fast, and durable, you need more than offline inference. You need architecture. Nous builds that architecture directly in Go with a deterministic pipeline:
 
-**One ~14 MB Go binary. Zero dependencies. Zero cloud. Your data never leaves your machine.**
+- **Deterministic NLU and routing** for fast tool dispatch and task classification
+- **Thinking Engine** for frame selection and structured response generation
+- **RST discourse planning** so answers are organized before text is written
+- **Knowledge graph reasoning** for semantic lookup, causal links, and multi-hop chains
+- **Compositional generation** using clause patterns, templates, Markov fluency, and embeddings
+- **Persistent memory layers** that let the system accumulate useful context over time
 
-### How Is This Possible?
+The result is a system that writes, explains, compares, plans, searches, remembers, and operates your local environment from a single binary with **zero external dependencies, zero model downloads, and zero cloud requirement**.
 
-Traditional AI assistants are just LLM wrappers &mdash; they send your text to a neural network and hope for the best. Nous takes a fundamentally different approach:
+## Why Nous Feels Different
 
-1. **Thinking Engine** &mdash; Classifies your intent (12 task types, 35+ signal patterns), selects a structural frame, generates each section with purpose
-2. **Discourse Planner** &mdash; Plans rhetorical structure before generating text (RST-based: hook → define → elaborate → conclude), producing coherent prose instead of fact salad
-3. **Knowledge Graph** &mdash; 15 semantic relations, spreading activation search, multi-hop reasoning chains, causal inference
-4. **Compositional Generation** &mdash; 10 clause patterns, 6 realization strategies, tone-aware phrase pools, Markov chains for fluency
-5. **Word Embeddings** &mdash; 50-dimensional vectors for semantic word selection, taxonomy-seeded + co-occurrence trained
+Most "local AI" projects are still organized like hosted assistants: prompt in, model out, hope for the best. Nous is built around a different bet: **high-quality behavior can come from deliberate cognitive architecture, not just bigger inference.**
 
-The result: Nous writes emails, brainstorms ideas, explains concepts, compares options, gives advice, tells stories, writes poetry, plans projects, and debates topics &mdash; all without a single LLM call.
+| Typical assistant stack | Nous |
+|---|---|
+| Remote or embedded model is the product | The cognitive system is the product |
+| Prompt shaping is the control plane | Deterministic routing, frames, and planners are the control plane |
+| Memory is usually bolt-on retrieval | Memory is a first-class subsystem with multiple layers |
+| Tool use is an afterthought | Tool orchestration is part of the reasoning surface |
+| Repeated tasks cost repeated inference | Crystals, recipes, and caches make repeated work faster |
 
-### What Nous Can Do
+That makes Nous useful in a different way: it behaves less like a black box and more like a compact, inspectable operating layer for personal intelligence.
 
-- **Think and compose** &mdash; write emails, brainstorm, explain concepts, compare options, plan projects, give advice, debate, create stories and poetry
-- **Understand you instantly** &mdash; deterministic NLU with 30+ intent categories routes queries in <1ms
-- **Answer knowledge questions** &mdash; science, history, philosophy, technology, math, health, arts, and daily life from its knowledge graph
-- **Remember and grow** &mdash; learns your interests, preferences, and personal facts over time
-- **Manage your day** &mdash; reminders, timers, tasks, calendar, routines, morning briefings, daily compass
-- **Control your desktop** &mdash; volume, brightness, notifications, app launcher, screenshots
-- **Search and research** &mdash; web search, URL fetching, RSS feeds, file exploration, semantic memory search
-- **Work with files** &mdash; read, write, edit, grep, find, archive, disk usage &mdash; with undo support
-- **Help with code** &mdash; run code (Python/Go/JS/Bash), Go AST indexing, 51 built-in tools
-- **Translate and convert** &mdash; unit conversion, currency exchange, language translation, dictionary lookups
-- **Network and system** &mdash; ping, DNS, port checks, process management, system info, hashing/encoding
-- **Life management** &mdash; journal, habits, expenses, bookmarks, notes, todos, passwords
-- **Fine-tune its knowledge** &mdash; learns from every conversation, knowledge packages for instant domain expertise
+## Innovation At A Glance
 
-All instant. All local. All in one binary.
+| System | What it contributes | Why it matters |
+|---|---|---|
+| **Thinking Engine** | Maps a query to one of 12 task types and a structural frame | Responses have intent-specific shape instead of generic prose |
+| **Discourse Planner** | Uses Rhetorical Structure Theory to order sections and transitions | Prevents "fact salad" and improves coherence without an LLM |
+| **Knowledge Graph** | 15 semantic relations, spreading activation, causal search | Enables reasoning chains instead of flat lookup |
+| **Compositional Generator** | Clause patterns, realization strategies, Markov fluency, embeddings | Produces varied text from symbolic structure |
+| **Response Crystals** | Stores successful outputs for semantic instant reuse | The system gets faster and more consistent with use |
+| **Tool-Native Action Layer** | 51 built-in tools routed by deterministic NLU | Lets Nous act on the machine, not just talk about it |
+| **Six-Layer Memory** | Working, long-term, episodic, project, knowledge, personal | Preserves context across sessions without external services |
+
+## What Happens On Every Query
+
+1. **Intent is classified** in under 1ms by the NLU engine.
+2. **The router decides** whether the query is a direct tool action, cached response, or open-ended cognitive task.
+3. **The Thinking Engine selects a frame** such as explanation, comparison, planning, or debate.
+4. **The discourse planner organizes the answer** into rhetorical moves before text generation starts.
+5. **Knowledge, memory, and tools are pulled in** as needed.
+6. **The composer realizes the final answer** with deterministic generation strategies.
+
+This is why Nous can answer a knowledge question, edit files, search memory, plan a project, or create a piece of writing without changing its architectural identity.
+
+## What Nous Can Do
+
+### Cognitive work
+
+- Write emails, explanations, summaries, comparisons, plans, stories, and poetry
+- Brainstorm options, debate tradeoffs, and give structured advice
+- Answer questions from built-in knowledge and learned context
+
+### Operate locally
+
+- Route across 51 built-in tools for files, shell, desktop controls, system inspection, and information tasks
+- Search the web, inspect URLs, read RSS, explore files, and index code
+- Read, write, edit, patch, and undo file operations locally
+
+### Remember and improve
+
+- Track interests, preferences, project facts, and prior interactions
+- Store episodic, project, and long-term memory in local files
+- Reuse successful responses through crystals, recipes, and semantic caches
+
+### Support daily life
+
+- Manage reminders, routines, timers, notes, todos, journal entries, bookmarks, habits, and expenses
+- Provide briefings, dashboards, and "what matters now" views
+- Offer a local personal AI workflow without subscriptions or service lock-in
+
+## System Snapshot
+
+| Dimension | Details |
+|---|---|
+| **Binary** | One ~14 MB Go binary |
+| **Dependencies** | Zero external runtime dependencies |
+| **Latency** | Under 15ms total pipeline for cognitive generation paths |
+| **Memory** | ~50 MB RAM, no model to load |
+| **Interfaces** | REPL, HTTP server, slash commands, and channel integrations |
+| **Privacy** | Your data stays on your machine unless you explicitly connect external services |
+
+All local. All inspectable. All designed as a system, not a demo.
 
 ---
 
