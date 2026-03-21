@@ -1,207 +1,131 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="800" height="200" viewBox="0 0 800 200">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
+  <title id="title">Nous banner</title>
+  <desc id="desc">A local-first cognitive engine banner showing deterministic reasoning, memory, and tool orchestration.</desc>
   <defs>
-    <!-- Glow filter for text -->
-    <filter id="textGlow" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur in="SourceGraphic" stdDeviation="6" result="blur"/>
-      <feColorMatrix in="blur" type="matrix"
-        values="0 0 0 0 0.024
-                0 0 0 0 0.714
-                0 0 0 0 0.831
-                0 0 0 0.6 0" result="glow"/>
-      <feMerge>
-        <feMergeNode in="glow"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
-    <!-- Subtle glow for nodes -->
-    <filter id="nodeGlow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="3" result="blur"/>
-      <feColorMatrix in="blur" type="matrix"
-        values="0 0 0 0 0.024
-                0 0 0 0 0.714
-                0 0 0 0 0.831
-                0 0 0 0.5 0" result="glow"/>
-      <feMerge>
-        <feMergeNode in="glow"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
-    <!-- Cognitive core glow -->
-    <filter id="coreGlow" x="-100%" y="-100%" width="300%" height="300%">
-      <feGaussianBlur stdDeviation="8" result="blur"/>
-      <feColorMatrix in="blur" type="matrix"
-        values="0 0 0 0 0.024
-                0 0 0 0 0.714
-                0 0 0 0 0.831
-                0 0 0 0.4 0" result="glow"/>
-      <feMerge>
-        <feMergeNode in="glow"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
-    <!-- Gradient for background depth -->
-    <radialGradient id="bgGrad" cx="50%" cy="50%" r="60%">
-      <stop offset="0%" stop-color="#161b22"/>
-      <stop offset="100%" stop-color="#0d1117"/>
-    </radialGradient>
-    <!-- Gradient for accent line -->
-    <linearGradient id="lineGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#0d1117"/>
-      <stop offset="30%" stop-color="#06b6d4"/>
-      <stop offset="70%" stop-color="#06b6d4"/>
-      <stop offset="100%" stop-color="#0d1117"/>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#09141c"/>
+      <stop offset="45%" stop-color="#102433"/>
+      <stop offset="100%" stop-color="#071018"/>
     </linearGradient>
-    <!-- Cognitive pulse gradient -->
-    <radialGradient id="pulseGrad" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.3"/>
-      <stop offset="60%" stop-color="#06b6d4" stop-opacity="0.08"/>
-      <stop offset="100%" stop-color="#06b6d4" stop-opacity="0"/>
+    <radialGradient id="auroraLeft" cx="25%" cy="25%" r="55%">
+      <stop offset="0%" stop-color="#19d3c5" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#19d3c5" stop-opacity="0"/>
     </radialGradient>
+    <radialGradient id="auroraRight" cx="78%" cy="38%" r="45%">
+      <stop offset="0%" stop-color="#ff8a3d" stop-opacity="0.24"/>
+      <stop offset="100%" stop-color="#ff8a3d" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="panelStroke" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#59f0e3" stop-opacity="0.65"/>
+      <stop offset="100%" stop-color="#ff9f5c" stop-opacity="0.45"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#59f0e3"/>
+      <stop offset="55%" stop-color="#b2fff5"/>
+      <stop offset="100%" stop-color="#ff9f5c"/>
+    </linearGradient>
+    <filter id="softGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="textGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M 32 0 L 0 0 0 32" fill="none" stroke="#8ecfc9" stroke-opacity="0.08" stroke-width="1"/>
+    </pattern>
   </defs>
 
-  <!-- Background -->
-  <rect width="800" height="200" fill="url(#bgGrad)"/>
+  <rect width="1200" height="420" rx="28" fill="url(#bg)"/>
+  <rect width="1200" height="420" rx="28" fill="url(#grid)"/>
+  <rect width="1200" height="420" rx="28" fill="url(#auroraLeft)"/>
+  <rect width="1200" height="420" rx="28" fill="url(#auroraRight)"/>
 
-  <!-- Cognitive graph — left hemisphere (knowledge graph) -->
-  <g opacity="0.4" filter="url(#nodeGlow)">
-    <circle cx="85" cy="45" r="2.5" fill="#06b6d4"/>
-    <circle cx="130" cy="70" r="3.5" fill="#06b6d4"/>
-    <circle cx="60" cy="90" r="2" fill="#06b6d4"/>
-    <circle cx="110" cy="110" r="2.5" fill="#06b6d4"/>
-    <circle cx="150" cy="40" r="2" fill="#06b6d4"/>
-    <circle cx="45" cy="55" r="1.8" fill="#06b6d4"/>
-    <circle cx="100" cy="150" r="2.2" fill="#06b6d4"/>
-    <circle cx="140" cy="140" r="1.8" fill="#06b6d4"/>
-    <circle cx="70" cy="135" r="2" fill="#06b6d4"/>
-    <circle cx="160" cy="95" r="3" fill="#06b6d4"/>
-    <circle cx="50" cy="160" r="1.5" fill="#06b6d4"/>
-    <circle cx="120" cy="30" r="1.8" fill="#06b6d4"/>
-    <!-- Extra nodes for density -->
-    <circle cx="175" cy="55" r="2" fill="#06b6d4"/>
-    <circle cx="180" cy="130" r="1.8" fill="#06b6d4"/>
-    <circle cx="30" cy="120" r="1.5" fill="#06b6d4"/>
-  </g>
-  <g opacity="0.18" stroke="#06b6d4" stroke-width="0.8">
-    <line x1="85" y1="45" x2="130" y2="70"/>
-    <line x1="85" y1="45" x2="60" y2="90"/>
-    <line x1="130" y1="70" x2="110" y2="110"/>
-    <line x1="60" y1="90" x2="110" y2="110"/>
-    <line x1="150" y1="40" x2="130" y2="70"/>
-    <line x1="45" y1="55" x2="85" y2="45"/>
-    <line x1="45" y1="55" x2="60" y2="90"/>
-    <line x1="110" y1="110" x2="100" y2="150"/>
-    <line x1="110" y1="110" x2="140" y2="140"/>
-    <line x1="100" y1="150" x2="70" y2="135"/>
-    <line x1="70" y1="135" x2="60" y2="90"/>
-    <line x1="140" y1="140" x2="160" y2="95"/>
-    <line x1="160" y1="95" x2="130" y2="70"/>
-    <line x1="50" y1="160" x2="70" y2="135"/>
-    <line x1="120" y1="30" x2="150" y2="40"/>
-    <line x1="120" y1="30" x2="85" y2="45"/>
-    <line x1="100" y1="150" x2="140" y2="140"/>
-    <line x1="150" y1="40" x2="160" y2="95"/>
-    <line x1="175" y1="55" x2="150" y2="40"/>
-    <line x1="175" y1="55" x2="160" y2="95"/>
-    <line x1="180" y1="130" x2="160" y2="95"/>
-    <line x1="180" y1="130" x2="140" y2="140"/>
-    <line x1="30" y1="120" x2="60" y2="90"/>
-    <line x1="30" y1="120" x2="50" y2="160"/>
-  </g>
-
-  <!-- Cognitive graph — right hemisphere (discourse + reasoning) -->
-  <g opacity="0.4" filter="url(#nodeGlow)">
-    <circle cx="640" cy="50" r="2" fill="#06b6d4"/>
-    <circle cx="690" cy="35" r="2.5" fill="#06b6d4"/>
-    <circle cx="720" cy="75" r="3.5" fill="#06b6d4"/>
-    <circle cx="660" cy="100" r="3" fill="#06b6d4"/>
-    <circle cx="750" cy="45" r="1.8" fill="#06b6d4"/>
-    <circle cx="700" cy="120" r="2.2" fill="#06b6d4"/>
-    <circle cx="740" cy="140" r="2" fill="#06b6d4"/>
-    <circle cx="670" cy="145" r="2.5" fill="#06b6d4"/>
-    <circle cx="760" cy="105" r="2" fill="#06b6d4"/>
-    <circle cx="650" cy="160" r="1.8" fill="#06b6d4"/>
-    <circle cx="720" cy="165" r="1.5" fill="#06b6d4"/>
-    <circle cx="755" cy="160" r="2" fill="#06b6d4"/>
-    <!-- Extra nodes -->
-    <circle cx="625" cy="75" r="1.5" fill="#06b6d4"/>
-    <circle cx="770" cy="70" r="1.8" fill="#06b6d4"/>
-    <circle cx="630" cy="135" r="2" fill="#06b6d4"/>
-  </g>
-  <g opacity="0.18" stroke="#06b6d4" stroke-width="0.8">
-    <line x1="640" y1="50" x2="690" y2="35"/>
-    <line x1="690" y1="35" x2="720" y2="75"/>
-    <line x1="640" y1="50" x2="660" y2="100"/>
-    <line x1="720" y1="75" x2="660" y2="100"/>
-    <line x1="750" y1="45" x2="720" y2="75"/>
-    <line x1="750" y1="45" x2="690" y2="35"/>
-    <line x1="720" y1="75" x2="700" y2="120"/>
-    <line x1="660" y1="100" x2="700" y2="120"/>
-    <line x1="700" y1="120" x2="740" y2="140"/>
-    <line x1="700" y1="120" x2="670" y2="145"/>
-    <line x1="660" y1="100" x2="670" y2="145"/>
-    <line x1="740" y1="140" x2="760" y2="105"/>
-    <line x1="760" y1="105" x2="720" y2="75"/>
-    <line x1="670" y1="145" x2="650" y2="160"/>
-    <line x1="740" y1="140" x2="720" y2="165"/>
-    <line x1="740" y1="140" x2="755" y2="160"/>
-    <line x1="755" y1="160" x2="760" y2="105"/>
-    <line x1="650" y1="160" x2="720" y2="165"/>
-    <line x1="625" y1="75" x2="640" y2="50"/>
-    <line x1="625" y1="75" x2="660" y2="100"/>
-    <line x1="770" y1="70" x2="750" y2="45"/>
-    <line x1="770" y1="70" x2="760" y2="105"/>
-    <line x1="630" y1="135" x2="660" y2="100"/>
-    <line x1="630" y1="135" x2="670" y2="145"/>
-    <line x1="630" y1="135" x2="650" y2="160"/>
-  </g>
-
-  <!-- Central cognitive pulse — the thinking core -->
-  <circle cx="400" cy="85" r="45" fill="url(#pulseGrad)" filter="url(#coreGlow)"/>
-
-  <!-- Scattered ambient dots — synaptic field -->
   <g opacity="0.12">
-    <circle cx="200" cy="30" r="1" fill="#06b6d4"/>
-    <circle cx="250" cy="170" r="1.2" fill="#06b6d4"/>
-    <circle cx="550" cy="25" r="1" fill="#06b6d4"/>
-    <circle cx="580" cy="175" r="1.3" fill="#06b6d4"/>
-    <circle cx="300" cy="180" r="0.8" fill="#06b6d4"/>
-    <circle cx="500" cy="20" r="1" fill="#06b6d4"/>
-    <circle cx="220" cy="165" r="0.8" fill="#06b6d4"/>
-    <circle cx="570" cy="35" r="0.9" fill="#06b6d4"/>
-    <circle cx="350" cy="15" r="0.7" fill="#06b6d4"/>
-    <circle cx="450" cy="185" r="0.9" fill="#06b6d4"/>
+    <path d="M0 322 C175 274 275 358 426 296 C575 236 718 332 874 280 C980 246 1076 255 1200 212" fill="none" stroke="#59f0e3" stroke-width="2"/>
+    <path d="M0 350 C142 312 259 391 415 338 C571 286 721 380 876 336 C1010 298 1088 327 1200 291" fill="none" stroke="#ff9f5c" stroke-width="2"/>
   </g>
 
-  <!-- Bridge connections — left hemisphere to core to right hemisphere -->
-  <g opacity="0.08" stroke="#06b6d4" stroke-width="0.6">
-    <line x1="180" y1="130" x2="355" y2="85"/>
-    <line x1="175" y1="55" x2="355" y2="75"/>
-    <line x1="625" y1="75" x2="445" y2="80"/>
-    <line x1="630" y1="135" x2="445" y2="90"/>
+  <g transform="translate(72 56)">
+    <rect x="0" y="0" width="112" height="30" rx="15" fill="#0f2731" stroke="#59f0e3" stroke-opacity="0.35"/>
+    <text x="56" y="20" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="2" fill="#b9fff7">LOCAL-FIRST AI</text>
+
+    <text x="0" y="108" font-family="Segoe UI, Arial, sans-serif" font-size="88" font-weight="800" letter-spacing="10" fill="#f5fffd" filter="url(#textGlow)">NOUS</text>
+    <rect x="2" y="126" width="420" height="5" rx="2.5" fill="url(#accent)"/>
+
+    <text x="0" y="170" font-family="Segoe UI, Arial, sans-serif" font-size="26" font-weight="700" fill="#d9f8f4">Deterministic cognition for reasoning, memory, and action.</text>
+    <text x="0" y="206" font-family="Segoe UI, Arial, sans-serif" font-size="19" fill="#b7d3d1">No cloud dependency. No model downloads. No wrapper theater.</text>
+    <text x="0" y="236" font-family="Segoe UI, Arial, sans-serif" font-size="19" fill="#b7d3d1">Just a native cognitive stack built in Go and shaped for daily use.</text>
+
+    <g transform="translate(0 274)">
+      <rect x="0" y="0" width="156" height="48" rx="12" fill="#102833" stroke="#59f0e3" stroke-opacity="0.28"/>
+      <rect x="170" y="0" width="156" height="48" rx="12" fill="#102833" stroke="#59f0e3" stroke-opacity="0.28"/>
+      <rect x="340" y="0" width="156" height="48" rx="12" fill="#102833" stroke="#ff9f5c" stroke-opacity="0.32"/>
+      <text x="78" y="20" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="1.4" fill="#8cf5ea">THINKING ENGINE</text>
+      <text x="78" y="35" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#d6efec">intent -> frame -> generate</text>
+      <text x="248" y="20" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="1.4" fill="#8cf5ea">MEMORY SYSTEM</text>
+      <text x="248" y="35" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#d6efec">working -> episodic -> project</text>
+      <text x="418" y="20" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="1.4" fill="#ffc397">ACTION LAYER</text>
+      <text x="418" y="35" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#d6efec">51 built-in tools, local routing</text>
+    </g>
   </g>
 
-  <!-- Accent line below title area -->
-  <rect x="200" y="148" width="400" height="1" fill="url(#lineGrad)" opacity="0.5"/>
+  <g transform="translate(676 48)">
+    <rect x="0" y="0" width="450" height="324" rx="24" fill="#0d1d29" fill-opacity="0.78" stroke="url(#panelStroke)" stroke-width="1.4"/>
 
-  <!-- Main title: NOUS -->
-  <text x="400" y="95" text-anchor="middle"
-    font-family="'SF Pro Display', 'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
-    font-size="72" font-weight="700" letter-spacing="16"
-    fill="#f0f6fc" filter="url(#textGlow)">NOUS</text>
+    <g transform="translate(34 30)">
+      <text x="0" y="0" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="2.4" fill="#93efe6">INNOVATION SURFACE</text>
+      <text x="0" y="34" font-family="Segoe UI, Arial, sans-serif" font-size="34" font-weight="700" fill="#f4fffe">Built like a cognitive system,</text>
+      <text x="0" y="70" font-family="Segoe UI, Arial, sans-serif" font-size="34" font-weight="700" fill="#f4fffe">not an API shell.</text>
 
-  <!-- Subtitle — LLM-free identity -->
-  <text x="400" y="138" text-anchor="middle"
-    font-family="'SF Pro Text', 'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
-    font-size="13" font-weight="400" letter-spacing="3"
-    fill="#8b949e" opacity="0.9">PURE COGNITIVE ENGINE &#x2014; ZERO LLM</text>
+      <g transform="translate(0 102)">
+        <rect x="0" y="0" width="184" height="72" rx="16" fill="#112a35"/>
+        <rect x="198" y="0" width="184" height="72" rx="16" fill="#112a35"/>
+        <rect x="0" y="88" width="184" height="72" rx="16" fill="#112a35"/>
+        <rect x="198" y="88" width="184" height="72" rx="16" fill="#112a35"/>
 
-  <!-- Tagline -->
-  <text x="400" y="170" text-anchor="middle"
-    font-family="'SF Pro Text', 'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
-    font-size="11" font-weight="300" letter-spacing="1.5"
-    fill="#6e7681" opacity="0.7">knowledge graphs &#x00B7; discourse planning &#x00B7; compositional generation &#x00B7; reasoning chains</text>
+        <text x="18" y="24" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" fill="#8cf5ea">DISCOURSE PLANNING</text>
+        <text x="18" y="45" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#d7ebea">RST schemas organize prose</text>
+        <text x="18" y="61" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#d7ebea">before generation starts.</text>
 
-  <!-- Thin top/bottom border accent -->
-  <rect x="0" y="0" width="800" height="1" fill="#06b6d4" opacity="0.15"/>
-  <rect x="0" y="199" width="800" height="1" fill="#06b6d4" opacity="0.15"/>
+        <text x="216" y="24" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" fill="#8cf5ea">KNOWLEDGE GRAPH</text>
+        <text x="216" y="45" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#d7ebea">Multi-hop retrieval, causal</text>
+        <text x="216" y="61" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#d7ebea">links, and semantic relations.</text>
+
+        <text x="18" y="112" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" fill="#ffc397">PROGRESSIVE COMPILATION</text>
+        <text x="18" y="133" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#d7ebea">Crystals, caches, and recipes</text>
+        <text x="18" y="149" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#d7ebea">make repeated work faster.</text>
+
+        <text x="216" y="112" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" fill="#ffc397">TOOL-NATIVE ORCHESTRATION</text>
+        <text x="216" y="133" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#d7ebea">The assistant reasons directly</text>
+        <text x="216" y="149" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#d7ebea">over local tools and memory.</text>
+      </g>
+    </g>
+  </g>
+
+  <g transform="translate(614 211)">
+    <circle cx="0" cy="0" r="78" fill="#1ee3d1" fill-opacity="0.08" filter="url(#softGlow)"/>
+    <circle cx="0" cy="0" r="52" fill="#102c36" stroke="#6ff3e6" stroke-opacity="0.7"/>
+    <circle cx="0" cy="0" r="34" fill="#123744" stroke="#dffffc" stroke-opacity="0.7"/>
+    <circle cx="0" cy="0" r="8" fill="#fff3e7"/>
+    <circle cx="0" cy="0" r="96" fill="none" stroke="#59f0e3" stroke-opacity="0.18" stroke-width="1.5"/>
+    <circle cx="0" cy="0" r="124" fill="none" stroke="#ff9f5c" stroke-opacity="0.18" stroke-width="1.5"/>
+    <circle cx="-94" cy="-22" r="7" fill="#59f0e3"/>
+    <circle cx="98" cy="26" r="7" fill="#ff9f5c"/>
+    <circle cx="24" cy="-122" r="6" fill="#c1fff8"/>
+    <circle cx="-38" cy="118" r="6" fill="#ffd1ac"/>
+    <path d="M-94 -22 C-58 -30 -36 -14 -18 -4" fill="none" stroke="#59f0e3" stroke-opacity="0.38" stroke-width="2"/>
+    <path d="M24 -122 C18 -78 12 -48 6 -32" fill="none" stroke="#c1fff8" stroke-opacity="0.3" stroke-width="2"/>
+    <path d="M98 26 C64 19 40 11 20 5" fill="none" stroke="#ff9f5c" stroke-opacity="0.38" stroke-width="2"/>
+    <path d="M-38 118 C-28 76 -18 44 -8 22" fill="none" stroke="#ffd1ac" stroke-opacity="0.3" stroke-width="2"/>
+  </g>
+
+  <rect x="28" y="28" width="1144" height="364" rx="24" fill="none" stroke="#d7fffb" stroke-opacity="0.08"/>
 </svg>
