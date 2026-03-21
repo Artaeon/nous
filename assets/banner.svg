@@ -26,6 +26,19 @@
         <feMergeNode in="SourceGraphic"/>
       </feMerge>
     </filter>
+    <!-- Cognitive core glow -->
+    <filter id="coreGlow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feColorMatrix in="blur" type="matrix"
+        values="0 0 0 0 0.024
+                0 0 0 0 0.714
+                0 0 0 0 0.831
+                0 0 0 0.4 0" result="glow"/>
+      <feMerge>
+        <feMergeNode in="glow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
     <!-- Gradient for background depth -->
     <radialGradient id="bgGrad" cx="50%" cy="50%" r="60%">
       <stop offset="0%" stop-color="#161b22"/>
@@ -38,16 +51,21 @@
       <stop offset="70%" stop-color="#06b6d4"/>
       <stop offset="100%" stop-color="#0d1117"/>
     </linearGradient>
+    <!-- Cognitive pulse gradient -->
+    <radialGradient id="pulseGrad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.3"/>
+      <stop offset="60%" stop-color="#06b6d4" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#06b6d4" stop-opacity="0"/>
+    </radialGradient>
   </defs>
 
   <!-- Background -->
   <rect width="800" height="200" fill="url(#bgGrad)"/>
 
-  <!-- Neural network pattern — left cluster -->
-  <g opacity="0.35" filter="url(#nodeGlow)">
-    <!-- Left side nodes -->
+  <!-- Cognitive graph — left hemisphere (knowledge graph) -->
+  <g opacity="0.4" filter="url(#nodeGlow)">
     <circle cx="85" cy="45" r="2.5" fill="#06b6d4"/>
-    <circle cx="130" cy="70" r="3" fill="#06b6d4"/>
+    <circle cx="130" cy="70" r="3.5" fill="#06b6d4"/>
     <circle cx="60" cy="90" r="2" fill="#06b6d4"/>
     <circle cx="110" cy="110" r="2.5" fill="#06b6d4"/>
     <circle cx="150" cy="40" r="2" fill="#06b6d4"/>
@@ -55,12 +73,15 @@
     <circle cx="100" cy="150" r="2.2" fill="#06b6d4"/>
     <circle cx="140" cy="140" r="1.8" fill="#06b6d4"/>
     <circle cx="70" cy="135" r="2" fill="#06b6d4"/>
-    <circle cx="160" cy="95" r="2.5" fill="#06b6d4"/>
+    <circle cx="160" cy="95" r="3" fill="#06b6d4"/>
     <circle cx="50" cy="160" r="1.5" fill="#06b6d4"/>
     <circle cx="120" cy="30" r="1.8" fill="#06b6d4"/>
+    <!-- Extra nodes for density -->
+    <circle cx="175" cy="55" r="2" fill="#06b6d4"/>
+    <circle cx="180" cy="130" r="1.8" fill="#06b6d4"/>
+    <circle cx="30" cy="120" r="1.5" fill="#06b6d4"/>
   </g>
-  <g opacity="0.15" stroke="#06b6d4" stroke-width="0.8">
-    <!-- Left side connections -->
+  <g opacity="0.18" stroke="#06b6d4" stroke-width="0.8">
     <line x1="85" y1="45" x2="130" y2="70"/>
     <line x1="85" y1="45" x2="60" y2="90"/>
     <line x1="130" y1="70" x2="110" y2="110"/>
@@ -79,14 +100,20 @@
     <line x1="120" y1="30" x2="85" y2="45"/>
     <line x1="100" y1="150" x2="140" y2="140"/>
     <line x1="150" y1="40" x2="160" y2="95"/>
+    <line x1="175" y1="55" x2="150" y2="40"/>
+    <line x1="175" y1="55" x2="160" y2="95"/>
+    <line x1="180" y1="130" x2="160" y2="95"/>
+    <line x1="180" y1="130" x2="140" y2="140"/>
+    <line x1="30" y1="120" x2="60" y2="90"/>
+    <line x1="30" y1="120" x2="50" y2="160"/>
   </g>
 
-  <!-- Neural network pattern — right cluster -->
-  <g opacity="0.35" filter="url(#nodeGlow)">
+  <!-- Cognitive graph — right hemisphere (discourse + reasoning) -->
+  <g opacity="0.4" filter="url(#nodeGlow)">
     <circle cx="640" cy="50" r="2" fill="#06b6d4"/>
     <circle cx="690" cy="35" r="2.5" fill="#06b6d4"/>
-    <circle cx="720" cy="75" r="3" fill="#06b6d4"/>
-    <circle cx="660" cy="100" r="2.5" fill="#06b6d4"/>
+    <circle cx="720" cy="75" r="3.5" fill="#06b6d4"/>
+    <circle cx="660" cy="100" r="3" fill="#06b6d4"/>
     <circle cx="750" cy="45" r="1.8" fill="#06b6d4"/>
     <circle cx="700" cy="120" r="2.2" fill="#06b6d4"/>
     <circle cx="740" cy="140" r="2" fill="#06b6d4"/>
@@ -95,8 +122,12 @@
     <circle cx="650" cy="160" r="1.8" fill="#06b6d4"/>
     <circle cx="720" cy="165" r="1.5" fill="#06b6d4"/>
     <circle cx="755" cy="160" r="2" fill="#06b6d4"/>
+    <!-- Extra nodes -->
+    <circle cx="625" cy="75" r="1.5" fill="#06b6d4"/>
+    <circle cx="770" cy="70" r="1.8" fill="#06b6d4"/>
+    <circle cx="630" cy="135" r="2" fill="#06b6d4"/>
   </g>
-  <g opacity="0.15" stroke="#06b6d4" stroke-width="0.8">
+  <g opacity="0.18" stroke="#06b6d4" stroke-width="0.8">
     <line x1="640" y1="50" x2="690" y2="35"/>
     <line x1="690" y1="35" x2="720" y2="75"/>
     <line x1="640" y1="50" x2="660" y2="100"/>
@@ -115,9 +146,19 @@
     <line x1="740" y1="140" x2="755" y2="160"/>
     <line x1="755" y1="160" x2="760" y2="105"/>
     <line x1="650" y1="160" x2="720" y2="165"/>
+    <line x1="625" y1="75" x2="640" y2="50"/>
+    <line x1="625" y1="75" x2="660" y2="100"/>
+    <line x1="770" y1="70" x2="750" y2="45"/>
+    <line x1="770" y1="70" x2="760" y2="105"/>
+    <line x1="630" y1="135" x2="660" y2="100"/>
+    <line x1="630" y1="135" x2="670" y2="145"/>
+    <line x1="630" y1="135" x2="650" y2="160"/>
   </g>
 
-  <!-- Scattered ambient dots -->
+  <!-- Central cognitive pulse — the thinking core -->
+  <circle cx="400" cy="85" r="45" fill="url(#pulseGrad)" filter="url(#coreGlow)"/>
+
+  <!-- Scattered ambient dots — synaptic field -->
   <g opacity="0.12">
     <circle cx="200" cy="30" r="1" fill="#06b6d4"/>
     <circle cx="250" cy="170" r="1.2" fill="#06b6d4"/>
@@ -127,10 +168,20 @@
     <circle cx="500" cy="20" r="1" fill="#06b6d4"/>
     <circle cx="220" cy="165" r="0.8" fill="#06b6d4"/>
     <circle cx="570" cy="35" r="0.9" fill="#06b6d4"/>
+    <circle cx="350" cy="15" r="0.7" fill="#06b6d4"/>
+    <circle cx="450" cy="185" r="0.9" fill="#06b6d4"/>
+  </g>
+
+  <!-- Bridge connections — left hemisphere to core to right hemisphere -->
+  <g opacity="0.08" stroke="#06b6d4" stroke-width="0.6">
+    <line x1="180" y1="130" x2="355" y2="85"/>
+    <line x1="175" y1="55" x2="355" y2="75"/>
+    <line x1="625" y1="75" x2="445" y2="80"/>
+    <line x1="630" y1="135" x2="445" y2="90"/>
   </g>
 
   <!-- Accent line below title area -->
-  <rect x="200" y="145" width="400" height="1" fill="url(#lineGrad)" opacity="0.5"/>
+  <rect x="200" y="148" width="400" height="1" fill="url(#lineGrad)" opacity="0.5"/>
 
   <!-- Main title: NOUS -->
   <text x="400" y="95" text-anchor="middle"
@@ -138,11 +189,17 @@
     font-size="72" font-weight="700" letter-spacing="16"
     fill="#f0f6fc" filter="url(#textGlow)">NOUS</text>
 
-  <!-- Subtitle -->
-  <text x="400" y="135" text-anchor="middle"
+  <!-- Subtitle — LLM-free identity -->
+  <text x="400" y="138" text-anchor="middle"
     font-family="'SF Pro Text', 'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
-    font-size="14" font-weight="400" letter-spacing="2"
-    fill="#8b949e" opacity="0.9">&#x3BD;&#x3BF;&#x1FE6;&#x3C2; &#x2014; Native Orchestration of Unified Streams</text>
+    font-size="13" font-weight="400" letter-spacing="3"
+    fill="#8b949e" opacity="0.9">PURE COGNITIVE ENGINE &#x2014; ZERO LLM</text>
+
+  <!-- Tagline -->
+  <text x="400" y="170" text-anchor="middle"
+    font-family="'SF Pro Text', 'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+    font-size="11" font-weight="300" letter-spacing="1.5"
+    fill="#6e7681" opacity="0.7">knowledge graphs &#x00B7; discourse planning &#x00B7; compositional generation &#x00B7; reasoning chains</text>
 
   <!-- Thin top/bottom border accent -->
   <rect x="0" y="0" width="800" height="1" fill="#06b6d4" opacity="0.15"/>
