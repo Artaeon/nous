@@ -1,0 +1,100 @@
+{
+  "name": "world-technology",
+  "version": "1.0.0",
+  "description": "Technology knowledge — computing, internet, AI, programming languages",
+  "author": "Artaeon",
+  "domain": "technology",
+  "facts": [
+    {"s": "computer science", "r": "is_a", "o": "field of study"},
+    {"s": "computer science", "r": "used_for", "o": "solving computational problems"},
+    {"s": "computer science", "r": "has", "o": "algorithms"},
+    {"s": "computer science", "r": "has", "o": "data structures"},
+    {"s": "computer science", "r": "has", "o": "artificial intelligence"},
+    {"s": "computer science", "r": "related_to", "o": "mathematics"},
+
+    {"s": "the internet", "r": "is_a", "o": "global network"},
+    {"s": "the internet", "r": "founded_in", "o": "1969"},
+    {"s": "the internet", "r": "has", "o": "billions of connected devices"},
+    {"s": "the internet", "r": "described_as", "o": "transformative and ubiquitous"},
+    {"s": "the internet", "r": "used_for", "o": "communication and information sharing"},
+
+    {"s": "artificial intelligence", "r": "is_a", "o": "field of computer science"},
+    {"s": "artificial intelligence", "r": "used_for", "o": "automating intelligent behavior"},
+    {"s": "artificial intelligence", "r": "has", "o": "machine learning"},
+    {"s": "artificial intelligence", "r": "has", "o": "neural networks"},
+    {"s": "artificial intelligence", "r": "has", "o": "natural language processing"},
+    {"s": "artificial intelligence", "r": "described_as", "o": "rapidly advancing and powerful"},
+
+    {"s": "machine learning", "r": "is_a", "o": "subset of artificial intelligence"},
+    {"s": "machine learning", "r": "used_for", "o": "learning patterns from data"},
+    {"s": "machine learning", "r": "has", "o": "supervised learning"},
+    {"s": "machine learning", "r": "has", "o": "unsupervised learning"},
+    {"s": "machine learning", "r": "described_as", "o": "data-driven and adaptive"},
+
+    {"s": "Python", "r": "is_a", "o": "programming language"},
+    {"s": "Python", "r": "created_by", "o": "Guido van Rossum"},
+    {"s": "Python", "r": "founded_in", "o": "1991"},
+    {"s": "Python", "r": "used_for", "o": "data science and scripting"},
+    {"s": "Python", "r": "has", "o": "readable syntax"},
+    {"s": "Python", "r": "has", "o": "extensive standard library"},
+    {"s": "Python", "r": "described_as", "o": "beginner-friendly and versatile"},
+
+    {"s": "JavaScript", "r": "is_a", "o": "programming language"},
+    {"s": "JavaScript", "r": "created_by", "o": "Brendan Eich"},
+    {"s": "JavaScript", "r": "founded_in", "o": "1995"},
+    {"s": "JavaScript", "r": "used_for", "o": "web development"},
+    {"s": "JavaScript", "r": "has", "o": "dynamic typing"},
+    {"s": "JavaScript", "r": "described_as", "o": "ubiquitous and flexible"},
+
+    {"s": "C", "r": "is_a", "o": "programming language"},
+    {"s": "C", "r": "created_by", "o": "Dennis Ritchie"},
+    {"s": "C", "r": "founded_in", "o": "1972"},
+    {"s": "C", "r": "used_for", "o": "systems programming and operating systems"},
+    {"s": "C", "r": "described_as", "o": "low-level and efficient"},
+    {"s": "C", "r": "related_to", "o": "Unix"},
+
+    {"s": "Linux", "r": "is_a", "o": "operating system"},
+    {"s": "Linux", "r": "created_by", "o": "Linus Torvalds"},
+    {"s": "Linux", "r": "founded_in", "o": "1991"},
+    {"s": "Linux", "r": "has", "o": "open source kernel"},
+    {"s": "Linux", "r": "used_for", "o": "servers and embedded systems"},
+    {"s": "Linux", "r": "described_as", "o": "stable and customizable"},
+
+    {"s": "Docker", "r": "is_a", "o": "containerization platform"},
+    {"s": "Docker", "r": "founded_in", "o": "2013"},
+    {"s": "Docker", "r": "used_for", "o": "packaging and deploying applications"},
+    {"s": "Docker", "r": "described_as", "o": "lightweight and portable"},
+
+    {"s": "Kubernetes", "r": "is_a", "o": "container orchestration system"},
+    {"s": "Kubernetes", "r": "created_by", "o": "Google"},
+    {"s": "Kubernetes", "r": "founded_in", "o": "2014"},
+    {"s": "Kubernetes", "r": "used_for", "o": "managing containerized applications"},
+    {"s": "Kubernetes", "r": "described_as", "o": "scalable and resilient"},
+
+    {"s": "blockchain", "r": "is_a", "o": "distributed ledger technology"},
+    {"s": "blockchain", "r": "has", "o": "decentralized consensus"},
+    {"s": "blockchain", "r": "has", "o": "immutable records"},
+    {"s": "blockchain", "r": "described_as", "o": "transparent and tamper-resistant"},
+
+    {"s": "Git", "r": "is_a", "o": "version control system"},
+    {"s": "Git", "r": "created_by", "o": "Linus Torvalds"},
+    {"s": "Git", "r": "founded_in", "o": "2005"},
+    {"s": "Git", "r": "used_for", "o": "tracking source code changes"},
+    {"s": "Git", "r": "described_as", "o": "distributed and fast"},
+
+    {"s": "open source", "r": "is_a", "o": "software development philosophy"},
+    {"s": "open source", "r": "has", "o": "public source code"},
+    {"s": "open source", "r": "described_as", "o": "collaborative and transparent"},
+    {"s": "open source", "r": "related_to", "o": "Linux"},
+
+    {"s": "cloud computing", "r": "is_a", "o": "computing paradigm"},
+    {"s": "cloud computing", "r": "used_for", "o": "on-demand computing resources"},
+    {"s": "cloud computing", "r": "has", "o": "scalability"},
+    {"s": "cloud computing", "r": "described_as", "o": "flexible and cost-effective"},
+
+    {"s": "cybersecurity", "r": "is_a", "o": "field of technology"},
+    {"s": "cybersecurity", "r": "used_for", "o": "protecting systems from threats"},
+    {"s": "cybersecurity", "r": "has", "o": "encryption"},
+    {"s": "cybersecurity", "r": "described_as", "o": "critical and ever-evolving"}
+  ]
+}

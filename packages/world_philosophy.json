@@ -1,0 +1,87 @@
+{
+  "name": "world-philosophy",
+  "version": "1.0.0",
+  "description": "Philosophy knowledge — major thinkers, schools, concepts",
+  "author": "Artaeon",
+  "domain": "philosophy",
+  "facts": [
+    {"s": "philosophy", "r": "is_a", "o": "discipline of thought"},
+    {"s": "philosophy", "r": "used_for", "o": "examining fundamental questions about existence"},
+    {"s": "philosophy", "r": "has", "o": "ethics"},
+    {"s": "philosophy", "r": "has", "o": "metaphysics"},
+    {"s": "philosophy", "r": "has", "o": "epistemology"},
+    {"s": "philosophy", "r": "has", "o": "logic"},
+    {"s": "philosophy", "r": "described_as", "o": "ancient and enduring"},
+
+    {"s": "Stoicism", "r": "is_a", "o": "school of philosophy"},
+    {"s": "Stoicism", "r": "founded_in", "o": "300 BC"},
+    {"s": "Stoicism", "r": "created_by", "o": "Zeno of Citium"},
+    {"s": "Stoicism", "r": "has", "o": "virtue as the highest good"},
+    {"s": "Stoicism", "r": "has", "o": "dichotomy of control"},
+    {"s": "Stoicism", "r": "described_as", "o": "practical and resilient"},
+    {"s": "Stoicism", "r": "used_for", "o": "cultivating inner strength and tranquility"},
+    {"s": "Stoicism", "r": "related_to", "o": "Marcus Aurelius"},
+    {"s": "Stoicism", "r": "related_to", "o": "Seneca"},
+    {"s": "Stoicism", "r": "related_to", "o": "Epictetus"},
+
+    {"s": "Marcus Aurelius", "r": "is_a", "o": "Roman emperor and Stoic philosopher"},
+    {"s": "Marcus Aurelius", "r": "has", "o": "Meditations"},
+    {"s": "Marcus Aurelius", "r": "described_as", "o": "wise and disciplined"},
+    {"s": "Marcus Aurelius", "r": "related_to", "o": "Stoicism"},
+
+    {"s": "Seneca", "r": "is_a", "o": "Roman Stoic philosopher"},
+    {"s": "Seneca", "r": "has", "o": "Letters to Lucilius"},
+    {"s": "Seneca", "r": "described_as", "o": "eloquent and practical"},
+
+    {"s": "Socrates", "r": "is_a", "o": "Greek philosopher"},
+    {"s": "Socrates", "r": "located_in", "o": "Athens"},
+    {"s": "Socrates", "r": "has", "o": "Socratic method"},
+    {"s": "Socrates", "r": "described_as", "o": "relentless and questioning"},
+    {"s": "Socrates", "r": "related_to", "o": "Plato"},
+
+    {"s": "Plato", "r": "is_a", "o": "Greek philosopher"},
+    {"s": "Plato", "r": "has", "o": "theory of Forms"},
+    {"s": "Plato", "r": "has", "o": "The Republic"},
+    {"s": "Plato", "r": "described_as", "o": "idealistic and systematic"},
+    {"s": "Plato", "r": "related_to", "o": "Aristotle"},
+
+    {"s": "Aristotle", "r": "is_a", "o": "Greek philosopher"},
+    {"s": "Aristotle", "r": "has", "o": "empirical method"},
+    {"s": "Aristotle", "r": "has", "o": "Nicomachean Ethics"},
+    {"s": "Aristotle", "r": "described_as", "o": "encyclopedic and systematic"},
+    {"s": "Aristotle", "r": "used_for", "o": "foundations of Western science"},
+
+    {"s": "existentialism", "r": "is_a", "o": "philosophical movement"},
+    {"s": "existentialism", "r": "has", "o": "individual freedom"},
+    {"s": "existentialism", "r": "has", "o": "authenticity"},
+    {"s": "existentialism", "r": "described_as", "o": "personal and confrontational"},
+    {"s": "existentialism", "r": "related_to", "o": "Jean-Paul Sartre"},
+    {"s": "existentialism", "r": "related_to", "o": "Friedrich Nietzsche"},
+
+    {"s": "Friedrich Nietzsche", "r": "is_a", "o": "German philosopher"},
+    {"s": "Friedrich Nietzsche", "r": "has", "o": "will to power"},
+    {"s": "Friedrich Nietzsche", "r": "has", "o": "eternal recurrence"},
+    {"s": "Friedrich Nietzsche", "r": "described_as", "o": "radical and provocative"},
+
+    {"s": "Immanuel Kant", "r": "is_a", "o": "German philosopher"},
+    {"s": "Immanuel Kant", "r": "has", "o": "categorical imperative"},
+    {"s": "Immanuel Kant", "r": "has", "o": "Critique of Pure Reason"},
+    {"s": "Immanuel Kant", "r": "described_as", "o": "rigorous and foundational"},
+    {"s": "Immanuel Kant", "r": "used_for", "o": "modern moral philosophy"},
+
+    {"s": "ethics", "r": "is_a", "o": "branch of philosophy"},
+    {"s": "ethics", "r": "used_for", "o": "determining right and wrong"},
+    {"s": "ethics", "r": "has", "o": "consequentialism"},
+    {"s": "ethics", "r": "has", "o": "deontology"},
+    {"s": "ethics", "r": "has", "o": "virtue ethics"},
+
+    {"s": "epistemology", "r": "is_a", "o": "branch of philosophy"},
+    {"s": "epistemology", "r": "used_for", "o": "understanding knowledge and belief"},
+    {"s": "epistemology", "r": "described_as", "o": "fundamental and rigorous"},
+
+    {"s": "logic", "r": "is_a", "o": "branch of philosophy"},
+    {"s": "logic", "r": "used_for", "o": "valid reasoning"},
+    {"s": "logic", "r": "described_as", "o": "precise and foundational"},
+    {"s": "logic", "r": "related_to", "o": "mathematics"}
+  ]
+}

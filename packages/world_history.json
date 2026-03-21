@@ -1,0 +1,82 @@
+{
+  "name": "world-history",
+  "version": "1.0.0",
+  "description": "World history — major events, eras, civilizations, figures",
+  "author": "Artaeon",
+  "domain": "history",
+  "facts": [
+    {"s": "ancient Egypt", "r": "is_a", "o": "ancient civilization"},
+    {"s": "ancient Egypt", "r": "located_in", "o": "North Africa"},
+    {"s": "ancient Egypt", "r": "has", "o": "pyramids of Giza"},
+    {"s": "ancient Egypt", "r": "has", "o": "hieroglyphic writing"},
+    {"s": "ancient Egypt", "r": "described_as", "o": "monumental and enduring"},
+
+    {"s": "ancient Greece", "r": "is_a", "o": "ancient civilization"},
+    {"s": "ancient Greece", "r": "located_in", "o": "southern Europe"},
+    {"s": "ancient Greece", "r": "has", "o": "democracy"},
+    {"s": "ancient Greece", "r": "has", "o": "philosophy"},
+    {"s": "ancient Greece", "r": "has", "o": "Olympic Games"},
+    {"s": "ancient Greece", "r": "described_as", "o": "foundational to Western thought"},
+
+    {"s": "the Roman Empire", "r": "is_a", "o": "ancient civilization"},
+    {"s": "the Roman Empire", "r": "has", "o": "vast road network"},
+    {"s": "the Roman Empire", "r": "has", "o": "Roman law"},
+    {"s": "the Roman Empire", "r": "has", "o": "architectural innovation"},
+    {"s": "the Roman Empire", "r": "described_as", "o": "powerful and organized"},
+
+    {"s": "the Renaissance", "r": "is_a", "o": "cultural movement"},
+    {"s": "the Renaissance", "r": "founded_in", "o": "the 14th century"},
+    {"s": "the Renaissance", "r": "located_in", "o": "Europe"},
+    {"s": "the Renaissance", "r": "has", "o": "revival of classical learning"},
+    {"s": "the Renaissance", "r": "described_as", "o": "transformative and creative"},
+    {"s": "the Renaissance", "r": "related_to", "o": "Leonardo da Vinci"},
+
+    {"s": "Leonardo da Vinci", "r": "is_a", "o": "Renaissance polymath"},
+    {"s": "Leonardo da Vinci", "r": "has", "o": "the Mona Lisa"},
+    {"s": "Leonardo da Vinci", "r": "has", "o": "Vitruvian Man"},
+    {"s": "Leonardo da Vinci", "r": "described_as", "o": "brilliant and visionary"},
+
+    {"s": "the Industrial Revolution", "r": "is_a", "o": "historical period"},
+    {"s": "the Industrial Revolution", "r": "founded_in", "o": "the 18th century"},
+    {"s": "the Industrial Revolution", "r": "located_in", "o": "Great Britain"},
+    {"s": "the Industrial Revolution", "r": "has", "o": "steam engine"},
+    {"s": "the Industrial Revolution", "r": "has", "o": "factory system"},
+    {"s": "the Industrial Revolution", "r": "described_as", "o": "disruptive and world-changing"},
+    {"s": "the Industrial Revolution", "r": "causes", "o": "urbanization"},
+
+    {"s": "World War II", "r": "is_a", "o": "global conflict"},
+    {"s": "World War II", "r": "founded_in", "o": "1939"},
+    {"s": "World War II", "r": "described_as", "o": "devastating and far-reaching"},
+    {"s": "World War II", "r": "causes", "o": "the United Nations"},
+    {"s": "World War II", "r": "related_to", "o": "the Cold War"},
+
+    {"s": "the Cold War", "r": "is_a", "o": "geopolitical conflict"},
+    {"s": "the Cold War", "r": "founded_in", "o": "1947"},
+    {"s": "the Cold War", "r": "described_as", "o": "tense and ideological"},
+    {"s": "the Cold War", "r": "causes", "o": "the space race"},
+
+    {"s": "the space race", "r": "is_a", "o": "technological competition"},
+    {"s": "the space race", "r": "has", "o": "the Moon landing"},
+    {"s": "the space race", "r": "described_as", "o": "ambitious and inspiring"},
+
+    {"s": "the Moon landing", "r": "is_a", "o": "historic event"},
+    {"s": "the Moon landing", "r": "founded_in", "o": "1969"},
+    {"s": "the Moon landing", "r": "described_as", "o": "a triumph of human ingenuity"},
+
+    {"s": "the French Revolution", "r": "is_a", "o": "political revolution"},
+    {"s": "the French Revolution", "r": "founded_in", "o": "1789"},
+    {"s": "the French Revolution", "r": "located_in", "o": "France"},
+    {"s": "the French Revolution", "r": "has", "o": "Declaration of the Rights of Man"},
+    {"s": "the French Revolution", "r": "described_as", "o": "radical and consequential"},
+    {"s": "the French Revolution", "r": "causes", "o": "the end of absolute monarchy in France"},
+
+    {"s": "democracy", "r": "is_a", "o": "system of government"},
+    {"s": "democracy", "r": "created_by", "o": "ancient Athens"},
+    {"s": "democracy", "r": "has", "o": "citizen participation"},
+    {"s": "democracy", "r": "described_as", "o": "foundational and widely adopted"},
+
+    {"s": "the Silk Road", "r": "is_a", "o": "ancient trade route"},
+    {"s": "the Silk Road", "r": "used_for", "o": "trade between East and West"},
+    {"s": "the Silk Road", "r": "described_as", "o": "historically vital and culturally transformative"}
+  ]
+}

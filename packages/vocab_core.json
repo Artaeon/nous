@@ -1,0 +1,80 @@
+{
+  "name": "vocab-core",
+  "version": "1.0.0",
+  "description": "Core vocabulary expansion — 200+ words across all slot pools",
+  "domain": "language",
+  "vocabulary": {
+    "adjectives": [
+      "remarkable", "profound", "striking", "decisive", "pivotal",
+      "compelling", "intricate", "robust", "elegant", "versatile",
+      "transformative", "groundbreaking", "formidable", "innovative", "pragmatic",
+      "critical", "vital", "substantial", "extraordinary", "distinctive",
+      "integral", "comprehensive", "nuanced", "sophisticated", "paramount",
+      "influential", "enduring", "dynamic", "coherent", "revolutionary"
+    ],
+    "quality_nouns": [
+      "hallmark", "signature", "strength", "cornerstone", "virtue",
+      "distinguishing mark", "advantage", "hallmark", "asset", "credential",
+      "distinction", "merit", "benchmark", "standard", "principle"
+    ],
+    "impact_nouns": [
+      "legacy", "trajectory", "footprint", "imprint", "influence",
+      "contribution", "significance", "standing", "presence", "reputation",
+      "stature", "weight", "reach", "scope", "mark"
+    ],
+    "attention_nouns": [
+      "recognition", "scrutiny", "reflection", "appreciation", "regard",
+      "acknowledgment", "interest", "study", "exploration", "analysis"
+    ],
+    "manner_adverbs": [
+      "methodically", "rigorously", "precisely", "consistently", "systematically",
+      "thoughtfully", "effectively", "decisively", "naturally", "organically",
+      "proactively", "strategically", "fundamentally"
+    ],
+    "connectors": [
+      "what is more", "at the same time", "just as notably", "building on that",
+      "in the same vein", "coupled with this", "this ties into",
+      "alongside this", "taken together", "to put it differently",
+      "going further", "looked at broadly", "more precisely"
+    ],
+    "metaphors": [
+      "heart", "spine", "anchor", "blueprint", "nerve center",
+      "linchpin", "springboard", "compass", "thread", "glue",
+      "bridge", "gateway", "torch", "fabric", "lens"
+    ],
+    "punchlines": [
+      "That is not a coincidence.", "The numbers speak for themselves.",
+      "And the evidence is clear.", "Consider what that means.",
+      "That alone is telling.", "This is by no means trivial.",
+      "The implications run deep.", "And that distinction matters.",
+      "There is no shortcut around it.", "This is where it all begins.",
+      "Look no further.", "The proof is in the practice.",
+      "Doubt it at your own risk.", "And it only grows from here.",
+      "The pattern is unmistakable."
+    ],
+    "contrast_pairs": [
+      ["ancient", "modern"],
+      ["theoretical", "practical"],
+      ["broad", "precise"],
+      ["quiet", "impactful"],
+      ["humble", "ambitious"],
+      ["conventional", "radical"],
+      ["complex", "intuitive"],
+      ["cautious", "bold"],
+      ["traditional", "progressive"],
+      ["abstract", "concrete"]
+    ],
+    "value_adjectives": [
+      "demanding of", "calling for", "inviting"
+    ],
+    "nouns": [
+      "paradigm", "framework", "ecosystem", "architecture", "methodology",
+      "infrastructure", "mechanism", "phenomenon", "discipline", "spectrum",
+      "domain", "landscape", "dimension", "frontier", "horizon"
+    ],
+    "verbs": [
+      "transform", "revolutionize", "pioneer", "catalyze", "spearhead",
+      "reshape", "streamline", "optimize", "integrate", "synthesize"
+    ]
+  }
+}

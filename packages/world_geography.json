@@ -1,0 +1,111 @@
+{
+  "name": "world-geography",
+  "version": "1.0.0",
+  "description": "World geography — countries, capitals, continents, landmarks",
+  "author": "Artaeon",
+  "domain": "geography",
+  "facts": [
+    {"s": "Europe", "r": "is_a", "o": "continent"},
+    {"s": "Europe", "r": "has", "o": "44 countries"},
+    {"s": "Europe", "r": "has", "o": "rich cultural heritage"},
+    {"s": "Europe", "r": "described_as", "o": "diverse and historically significant"},
+
+    {"s": "Austria", "r": "is_a", "o": "European country"},
+    {"s": "Austria", "r": "located_in", "o": "Central Europe"},
+    {"s": "Austria", "r": "has", "o": "Vienna as its capital"},
+    {"s": "Austria", "r": "has", "o": "Alpine landscape"},
+    {"s": "Austria", "r": "described_as", "o": "culturally rich and scenic"},
+    {"s": "Austria", "r": "related_to", "o": "classical music"},
+
+    {"s": "Vienna", "r": "is_a", "o": "capital city"},
+    {"s": "Vienna", "r": "located_in", "o": "Austria"},
+    {"s": "Vienna", "r": "has", "o": "historic architecture"},
+    {"s": "Vienna", "r": "has", "o": "coffeehouse culture"},
+    {"s": "Vienna", "r": "described_as", "o": "elegant and intellectual"},
+    {"s": "Vienna", "r": "related_to", "o": "Mozart"},
+    {"s": "Vienna", "r": "related_to", "o": "Sigmund Freud"},
+
+    {"s": "Germany", "r": "is_a", "o": "European country"},
+    {"s": "Germany", "r": "located_in", "o": "Central Europe"},
+    {"s": "Germany", "r": "has", "o": "Berlin as its capital"},
+    {"s": "Germany", "r": "has", "o": "strong engineering tradition"},
+    {"s": "Germany", "r": "described_as", "o": "industrious and innovative"},
+
+    {"s": "France", "r": "is_a", "o": "European country"},
+    {"s": "France", "r": "located_in", "o": "Western Europe"},
+    {"s": "France", "r": "has", "o": "Paris as its capital"},
+    {"s": "France", "r": "described_as", "o": "romantic and culturally influential"},
+
+    {"s": "Paris", "r": "is_a", "o": "capital city"},
+    {"s": "Paris", "r": "located_in", "o": "France"},
+    {"s": "Paris", "r": "has", "o": "Eiffel Tower"},
+    {"s": "Paris", "r": "has", "o": "the Louvre"},
+    {"s": "Paris", "r": "described_as", "o": "beautiful and cosmopolitan"},
+
+    {"s": "United States", "r": "is_a", "o": "country"},
+    {"s": "United States", "r": "located_in", "o": "North America"},
+    {"s": "United States", "r": "has", "o": "Washington D.C. as its capital"},
+    {"s": "United States", "r": "has", "o": "50 states"},
+    {"s": "United States", "r": "described_as", "o": "large and influential"},
+    {"s": "United States", "r": "founded_in", "o": "1776"},
+
+    {"s": "Japan", "r": "is_a", "o": "island nation"},
+    {"s": "Japan", "r": "located_in", "o": "East Asia"},
+    {"s": "Japan", "r": "has", "o": "Tokyo as its capital"},
+    {"s": "Japan", "r": "has", "o": "rich cultural traditions"},
+    {"s": "Japan", "r": "described_as", "o": "technologically advanced and traditional"},
+    {"s": "Japan", "r": "related_to", "o": "technology"},
+
+    {"s": "China", "r": "is_a", "o": "country"},
+    {"s": "China", "r": "located_in", "o": "East Asia"},
+    {"s": "China", "r": "has", "o": "Beijing as its capital"},
+    {"s": "China", "r": "has", "o": "the Great Wall"},
+    {"s": "China", "r": "described_as", "o": "ancient and rapidly modernizing"},
+
+    {"s": "India", "r": "is_a", "o": "country"},
+    {"s": "India", "r": "located_in", "o": "South Asia"},
+    {"s": "India", "r": "has", "o": "New Delhi as its capital"},
+    {"s": "India", "r": "has", "o": "diverse languages and cultures"},
+    {"s": "India", "r": "described_as", "o": "vast and culturally diverse"},
+
+    {"s": "Brazil", "r": "is_a", "o": "country"},
+    {"s": "Brazil", "r": "located_in", "o": "South America"},
+    {"s": "Brazil", "r": "has", "o": "Amazon rainforest"},
+    {"s": "Brazil", "r": "described_as", "o": "vibrant and biodiverse"},
+
+    {"s": "Amazon rainforest", "r": "is_a", "o": "tropical rainforest"},
+    {"s": "Amazon rainforest", "r": "located_in", "o": "South America"},
+    {"s": "Amazon rainforest", "r": "described_as", "o": "vast and irreplaceable"},
+    {"s": "Amazon rainforest", "r": "has", "o": "greatest biodiversity on Earth"},
+
+    {"s": "Africa", "r": "is_a", "o": "continent"},
+    {"s": "Africa", "r": "has", "o": "54 countries"},
+    {"s": "Africa", "r": "has", "o": "the Sahara Desert"},
+    {"s": "Africa", "r": "described_as", "o": "vast and diverse"},
+
+    {"s": "Australia", "r": "is_a", "o": "country and continent"},
+    {"s": "Australia", "r": "located_in", "o": "Oceania"},
+    {"s": "Australia", "r": "has", "o": "Canberra as its capital"},
+    {"s": "Australia", "r": "has", "o": "unique wildlife"},
+    {"s": "Australia", "r": "described_as", "o": "remote and distinctive"},
+
+    {"s": "Antarctica", "r": "is_a", "o": "continent"},
+    {"s": "Antarctica", "r": "described_as", "o": "frozen and uninhabited"},
+    {"s": "Antarctica", "r": "has", "o": "the South Pole"},
+
+    {"s": "the Pacific Ocean", "r": "is_a", "o": "ocean"},
+    {"s": "the Pacific Ocean", "r": "described_as", "o": "the largest and deepest ocean"},
+
+    {"s": "Mount Everest", "r": "is_a", "o": "mountain"},
+    {"s": "Mount Everest", "r": "located_in", "o": "the Himalayas"},
+    {"s": "Mount Everest", "r": "described_as", "o": "the tallest peak on Earth"},
+
+    {"s": "the Nile", "r": "is_a", "o": "river"},
+    {"s": "the Nile", "r": "located_in", "o": "Africa"},
+    {"s": "the Nile", "r": "described_as", "o": "the longest river in the world"},
+
+    {"s": "the Mediterranean Sea", "r": "is_a", "o": "sea"},
+    {"s": "the Mediterranean Sea", "r": "located_in", "o": "between Europe, Africa, and Asia"},
+    {"s": "the Mediterranean Sea", "r": "described_as", "o": "historically important and warm"}
+  ]
+}

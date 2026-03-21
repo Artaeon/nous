@@ -1,0 +1,128 @@
+{
+  "name": "world-science",
+  "version": "1.0.0",
+  "description": "Core scientific knowledge — physics, chemistry, biology, astronomy",
+  "author": "Artaeon",
+  "domain": "science",
+  "facts": [
+    {"s": "physics", "r": "is_a", "o": "natural science"},
+    {"s": "physics", "r": "used_for", "o": "understanding forces and energy"},
+    {"s": "physics", "r": "has", "o": "quantum mechanics"},
+    {"s": "physics", "r": "has", "o": "general relativity"},
+    {"s": "physics", "r": "has", "o": "thermodynamics"},
+    {"s": "physics", "r": "related_to", "o": "mathematics"},
+
+    {"s": "quantum mechanics", "r": "is_a", "o": "branch of physics"},
+    {"s": "quantum mechanics", "r": "described_as", "o": "fundamental and counterintuitive"},
+    {"s": "quantum mechanics", "r": "has", "o": "wave-particle duality"},
+    {"s": "quantum mechanics", "r": "has", "o": "superposition"},
+    {"s": "quantum mechanics", "r": "has", "o": "entanglement"},
+    {"s": "quantum mechanics", "r": "created_by", "o": "Max Planck and Niels Bohr"},
+    {"s": "quantum mechanics", "r": "used_for", "o": "understanding atomic behavior"},
+
+    {"s": "general relativity", "r": "is_a", "o": "theory of gravitation"},
+    {"s": "general relativity", "r": "created_by", "o": "Albert Einstein"},
+    {"s": "general relativity", "r": "founded_in", "o": "1915"},
+    {"s": "general relativity", "r": "described_as", "o": "revolutionary and elegant"},
+    {"s": "general relativity", "r": "has", "o": "spacetime curvature"},
+    {"s": "general relativity", "r": "used_for", "o": "understanding gravity and black holes"},
+
+    {"s": "Albert Einstein", "r": "is_a", "o": "theoretical physicist"},
+    {"s": "Albert Einstein", "r": "located_in", "o": "Germany"},
+    {"s": "Albert Einstein", "r": "created_by", "o": "Ulm, Germany"},
+    {"s": "Albert Einstein", "r": "has", "o": "Nobel Prize in Physics"},
+    {"s": "Albert Einstein", "r": "described_as", "o": "brilliant and imaginative"},
+    {"s": "Albert Einstein", "r": "related_to", "o": "special relativity"},
+    {"s": "Albert Einstein", "r": "related_to", "o": "photoelectric effect"},
+
+    {"s": "chemistry", "r": "is_a", "o": "natural science"},
+    {"s": "chemistry", "r": "used_for", "o": "understanding matter and its transformations"},
+    {"s": "chemistry", "r": "has", "o": "periodic table"},
+    {"s": "chemistry", "r": "has", "o": "chemical bonding"},
+    {"s": "chemistry", "r": "has", "o": "organic chemistry"},
+    {"s": "chemistry", "r": "related_to", "o": "physics"},
+    {"s": "chemistry", "r": "related_to", "o": "biology"},
+
+    {"s": "periodic table", "r": "is_a", "o": "classification system for elements"},
+    {"s": "periodic table", "r": "created_by", "o": "Dmitri Mendeleev"},
+    {"s": "periodic table", "r": "founded_in", "o": "1869"},
+    {"s": "periodic table", "r": "has", "o": "118 known elements"},
+    {"s": "periodic table", "r": "described_as", "o": "systematic and predictive"},
+
+    {"s": "biology", "r": "is_a", "o": "life science"},
+    {"s": "biology", "r": "used_for", "o": "studying living organisms"},
+    {"s": "biology", "r": "has", "o": "evolution by natural selection"},
+    {"s": "biology", "r": "has", "o": "genetics"},
+    {"s": "biology", "r": "has", "o": "cell theory"},
+    {"s": "biology", "r": "has", "o": "ecology"},
+    {"s": "biology", "r": "related_to", "o": "chemistry"},
+    {"s": "biology", "r": "related_to", "o": "medicine"},
+
+    {"s": "evolution", "r": "is_a", "o": "biological process"},
+    {"s": "evolution", "r": "created_by", "o": "Charles Darwin"},
+    {"s": "evolution", "r": "described_as", "o": "fundamental and unifying"},
+    {"s": "evolution", "r": "has", "o": "natural selection"},
+    {"s": "evolution", "r": "has", "o": "genetic variation"},
+    {"s": "evolution", "r": "used_for", "o": "explaining biodiversity"},
+
+    {"s": "DNA", "r": "is_a", "o": "molecule of heredity"},
+    {"s": "DNA", "r": "has", "o": "double helix structure"},
+    {"s": "DNA", "r": "described_as", "o": "complex and information-rich"},
+    {"s": "DNA", "r": "used_for", "o": "encoding genetic information"},
+    {"s": "DNA", "r": "related_to", "o": "genetics"},
+
+    {"s": "astronomy", "r": "is_a", "o": "natural science"},
+    {"s": "astronomy", "r": "used_for", "o": "studying celestial objects"},
+    {"s": "astronomy", "r": "has", "o": "telescopes"},
+    {"s": "astronomy", "r": "has", "o": "cosmology"},
+    {"s": "astronomy", "r": "related_to", "o": "physics"},
+
+    {"s": "the Sun", "r": "is_a", "o": "star"},
+    {"s": "the Sun", "r": "described_as", "o": "massive and luminous"},
+    {"s": "the Sun", "r": "has", "o": "nuclear fusion"},
+    {"s": "the Sun", "r": "related_to", "o": "solar system"},
+
+    {"s": "the solar system", "r": "is_a", "o": "planetary system"},
+    {"s": "the solar system", "r": "has", "o": "eight planets"},
+    {"s": "the solar system", "r": "has", "o": "asteroid belt"},
+    {"s": "the solar system", "r": "located_in", "o": "the Milky Way"},
+
+    {"s": "the Milky Way", "r": "is_a", "o": "spiral galaxy"},
+    {"s": "the Milky Way", "r": "has", "o": "200 billion stars"},
+    {"s": "the Milky Way", "r": "described_as", "o": "vast and ancient"},
+
+    {"s": "black hole", "r": "is_a", "o": "astronomical object"},
+    {"s": "black hole", "r": "has", "o": "event horizon"},
+    {"s": "black hole", "r": "has", "o": "extreme gravity"},
+    {"s": "black hole", "r": "described_as", "o": "mysterious and powerful"},
+    {"s": "black hole", "r": "related_to", "o": "general relativity"},
+
+    {"s": "gravity", "r": "is_a", "o": "fundamental force"},
+    {"s": "gravity", "r": "described_as", "o": "universal and ever-present"},
+    {"s": "gravity", "r": "causes", "o": "orbital motion"},
+    {"s": "gravity", "r": "related_to", "o": "general relativity"},
+
+    {"s": "light", "r": "is_a", "o": "electromagnetic radiation"},
+    {"s": "light", "r": "has", "o": "wave-particle duality"},
+    {"s": "light", "r": "described_as", "o": "fast and fundamental"},
+    {"s": "light", "r": "used_for", "o": "vision and communication"},
+
+    {"s": "thermodynamics", "r": "is_a", "o": "branch of physics"},
+    {"s": "thermodynamics", "r": "has", "o": "three laws"},
+    {"s": "thermodynamics", "r": "has", "o": "entropy"},
+    {"s": "thermodynamics", "r": "used_for", "o": "understanding heat and energy transfer"},
+
+    {"s": "entropy", "r": "is_a", "o": "measure of disorder"},
+    {"s": "entropy", "r": "described_as", "o": "always increasing in closed systems"},
+    {"s": "entropy", "r": "related_to", "o": "thermodynamics"},
+
+    {"s": "atom", "r": "is_a", "o": "basic unit of matter"},
+    {"s": "atom", "r": "has", "o": "nucleus"},
+    {"s": "atom", "r": "has", "o": "electrons"},
+    {"s": "atom", "r": "described_as", "o": "tiny and fundamental"},
+
+    {"s": "speed of light", "r": "is_a", "o": "physical constant"},
+    {"s": "speed of light", "r": "described_as", "o": "the universal speed limit"},
+    {"s": "speed of light", "r": "related_to", "o": "special relativity"}
+  ]
+}

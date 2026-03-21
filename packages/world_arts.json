@@ -1,0 +1,62 @@
+{
+  "name": "world-arts",
+  "version": "1.0.0",
+  "description": "Arts, literature, and music knowledge",
+  "author": "Artaeon",
+  "domain": "arts",
+  "facts": [
+    {"s": "music", "r": "is_a", "o": "art form"},
+    {"s": "music", "r": "has", "o": "melody and harmony"},
+    {"s": "music", "r": "has", "o": "rhythm"},
+    {"s": "music", "r": "described_as", "o": "universal and expressive"},
+    {"s": "music", "r": "used_for", "o": "emotional expression and communication"},
+
+    {"s": "classical music", "r": "is_a", "o": "genre of music"},
+    {"s": "classical music", "r": "has", "o": "symphonies"},
+    {"s": "classical music", "r": "has", "o": "orchestral compositions"},
+    {"s": "classical music", "r": "described_as", "o": "structured and timeless"},
+    {"s": "classical music", "r": "related_to", "o": "Mozart"},
+    {"s": "classical music", "r": "related_to", "o": "Beethoven"},
+
+    {"s": "Mozart", "r": "is_a", "o": "classical composer"},
+    {"s": "Mozart", "r": "located_in", "o": "Salzburg, Austria"},
+    {"s": "Mozart", "r": "has", "o": "over 600 compositions"},
+    {"s": "Mozart", "r": "described_as", "o": "prodigious and masterful"},
+
+    {"s": "Beethoven", "r": "is_a", "o": "classical composer"},
+    {"s": "Beethoven", "r": "located_in", "o": "Bonn, Germany"},
+    {"s": "Beethoven", "r": "has", "o": "nine symphonies"},
+    {"s": "Beethoven", "r": "described_as", "o": "revolutionary and passionate"},
+
+    {"s": "literature", "r": "is_a", "o": "art form"},
+    {"s": "literature", "r": "has", "o": "poetry"},
+    {"s": "literature", "r": "has", "o": "novels"},
+    {"s": "literature", "r": "has", "o": "drama"},
+    {"s": "literature", "r": "described_as", "o": "rich and enduring"},
+
+    {"s": "Shakespeare", "r": "is_a", "o": "English playwright"},
+    {"s": "Shakespeare", "r": "has", "o": "Hamlet"},
+    {"s": "Shakespeare", "r": "has", "o": "Romeo and Juliet"},
+    {"s": "Shakespeare", "r": "described_as", "o": "unmatched and influential"},
+
+    {"s": "painting", "r": "is_a", "o": "visual art"},
+    {"s": "painting", "r": "has", "o": "impressionism"},
+    {"s": "painting", "r": "has", "o": "surrealism"},
+    {"s": "painting", "r": "described_as", "o": "diverse and evolving"},
+
+    {"s": "the Mona Lisa", "r": "is_a", "o": "painting"},
+    {"s": "the Mona Lisa", "r": "created_by", "o": "Leonardo da Vinci"},
+    {"s": "the Mona Lisa", "r": "located_in", "o": "the Louvre, Paris"},
+    {"s": "the Mona Lisa", "r": "described_as", "o": "iconic and enigmatic"},
+
+    {"s": "architecture", "r": "is_a", "o": "art and science of designing buildings"},
+    {"s": "architecture", "r": "has", "o": "Gothic style"},
+    {"s": "architecture", "r": "has", "o": "modernist design"},
+    {"s": "architecture", "r": "described_as", "o": "functional and expressive"},
+
+    {"s": "cinema", "r": "is_a", "o": "art form"},
+    {"s": "cinema", "r": "founded_in", "o": "1895"},
+    {"s": "cinema", "r": "has", "o": "storytelling through moving images"},
+    {"s": "cinema", "r": "described_as", "o": "immersive and influential"}
+  ]
+}
