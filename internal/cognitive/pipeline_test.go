@@ -317,3 +317,218 @@ func TestDistillStepTimeout(t *testing.T) {
 		t.Errorf("expected empty string from nil distiller, got: %s", result)
 	}
 }
+
+// -----------------------------------------------------------------------
+// ReasoningPipeline tests
+// -----------------------------------------------------------------------
+
+// buildTestGraph creates a graph with Stoicism-related knowledge for testing.
+func buildPipelineTestGraph() *CognitiveGraph {
+	g := NewCognitiveGraph("")
+	g.AddEdge("Stoicism", "philosophy", RelIsA, "test")
+	g.AddEdge("Stoicism", "ancient Greece", RelFoundedIn, "test")
+	g.AddEdge("Stoicism", "Zeno of Citium", RelFoundedBy, "test")
+	g.AddEdge("Stoicism", "virtue ethics", RelRelatedTo, "test")
+	g.AddEdge("Stoicism", "focus on what you can control", RelDescribedAs, "test")
+	g.AddEdge("Epicureanism", "philosophy", RelIsA, "test")
+	g.AddEdge("Epicureanism", "ancient Greece", RelFoundedIn, "test")
+	g.AddEdge("Epicureanism", "Epicurus", RelFoundedBy, "test")
+	g.AddEdge("ancient Greece", "Europe", RelLocatedIn, "test")
+	g.AddEdge("stress", "burnout", RelCauses, "test")
+	g.AddEdge("burnout", "low productivity", RelCauses, "test")
+	return g
+}
+
+func TestPipelineFactual(t *testing.T) {
+	g := buildPipelineTestGraph()
+	rp := NewReasoningPipeline(g, nil, nil, nil, nil, nil, nil, nil)
+
+	result := rp.Process("What is Stoicism?")
+	if result == nil {
+		t.Fatal("Process returned nil")
+	}
+	if len(result.DirectFacts) == 0 {
+		t.Error("expected direct facts for Stoicism query")
+	}
+
+	// Should contain graph as a source
+	found := false
+	for _, s := range result.Sources {
+		if s == "graph" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 'graph' in sources, got %v", result.Sources)
+	}
+
+	// Compose a response
+	resp := rp.ComposeResponse("What is Stoicism?", result)
+	if resp == "" {
+		t.Error("expected non-empty composed response")
+	}
+
+	// Should mention Stoicism-related content
+	lower := strings.ToLower(resp)
+	if !strings.Contains(lower, "stoicism") && !strings.Contains(lower, "philosophy") {
+		t.Errorf("response should mention stoicism or philosophy, got: %s", resp)
+	}
+}
+
+func TestPipelineNilSafe(t *testing.T) {
+	// All engines nil — should not panic.
+	rp := NewReasoningPipeline(nil, nil, nil, nil, nil, nil, nil, nil)
+
+	result := rp.Process("What is Stoicism?")
+	if result == nil {
+		t.Fatal("Process returned nil even with all nil engines")
+	}
+	if len(result.DirectFacts) != 0 {
+		t.Errorf("expected no direct facts with nil graph, got %d", len(result.DirectFacts))
+	}
+	if len(result.Sources) != 0 {
+		t.Errorf("expected no sources with nil engines, got %v", result.Sources)
+	}
+
+	// ComposeResponse with nil result should return empty
+	resp := rp.ComposeResponse("test", nil)
+	if resp != "" {
+		t.Errorf("expected empty response for nil result, got: %s", resp)
+	}
+
+	// ComposeResponse with empty result should return empty
+	resp = rp.ComposeResponse("test", result)
+	if resp != "" {
+		t.Errorf("expected empty response for empty result, got: %s", resp)
+	}
+}
+
+func TestPipelineWithInference(t *testing.T) {
+	g := buildPipelineTestGraph()
+	ie := NewInferenceEngine(g)
+	rp := NewReasoningPipeline(g, ie, nil, nil, nil, nil, nil, nil)
+
+	result := rp.Process("Where is Stoicism from?")
+	if result == nil {
+		t.Fatal("Process returned nil")
+	}
+
+	// Should have graph as source at minimum
+	hasGraph := false
+	for _, s := range result.Sources {
+		if s == "graph" {
+			hasGraph = true
+		}
+	}
+	if !hasGraph {
+		t.Errorf("expected 'graph' in sources, got %v", result.Sources)
+	}
+
+	// Check that some facts were gathered (direct or inferred)
+	totalFacts := len(result.DirectFacts) + len(result.InferredFacts)
+	if totalFacts == 0 {
+		t.Error("expected at least some facts from graph + inference")
+	}
+}
+
+func TestPipelineWithReasoning(t *testing.T) {
+	g := buildPipelineTestGraph()
+	se := NewSemanticEngine()
+	re := NewReasoningEngine(g, se)
+	rp := NewReasoningPipeline(g, nil, re, nil, nil, nil, se, nil)
+
+	result := rp.Process("Who founded Stoicism?")
+	if result == nil {
+		t.Fatal("Process returned nil")
+	}
+
+	// Should have at least graph or reasoning as source
+	if len(result.Sources) == 0 {
+		t.Error("expected at least one source")
+	}
+
+	resp := rp.ComposeResponse("Who founded Stoicism?", result)
+	if resp == "" {
+		t.Error("expected non-empty composed response for multi-hop question")
+	}
+}
+
+func TestPipelineClassifyQuestion(t *testing.T) {
+	rp := NewReasoningPipeline(nil, nil, nil, nil, nil, nil, nil, nil)
+
+	tests := []struct {
+		query    string
+		expected string
+	}{
+		{"What is Stoicism?", "factual"},
+		{"Who founded Stoicism?", "factual"},
+		{"Where is Vienna?", "factual"},
+		{"Why does stress cause burnout?", "causal"},
+		{"What if Stoicism never existed?", "causal"},
+		{"What causes burnout?", "causal"},
+		{"What are the effects of meditation?", "causal"},
+		{"Compare Stoicism and Epicureanism", "comparative"},
+		{"What is the difference between Go and Rust?", "comparative"},
+		{"How is Stoicism similar to Buddhism?", "comparative"},
+		{"Imagine a world without philosophy", "creative"},
+		{"Suppose Stoicism was founded in Rome", "creative"},
+		{"Brainstorm ideas for a project", "creative"},
+		{"How does Stoicism work?", "analytical"},
+		{"Explain the concept of virtue", "analytical"},
+		{"Teach me about logic", "analytical"},
+	}
+
+	for _, tt := range tests {
+		got := rp.classifyQuestion(tt.query)
+		if got != tt.expected {
+			t.Errorf("classifyQuestion(%q) = %q, want %q", tt.query, got, tt.expected)
+		}
+	}
+}
+
+func TestPipelineComposeResponse(t *testing.T) {
+	g := buildPipelineTestGraph()
+	rp := NewReasoningPipeline(g, nil, nil, nil, nil, nil, nil, nil)
+
+	// Test with direct facts only
+	result := &PipelineResult{
+		DirectFacts: []string{"Stoicism is a philosophy", "Stoicism was founded by Zeno of Citium"},
+		Confidence:  0.8,
+		Sources:     []string{"graph"},
+	}
+	resp := rp.ComposeResponse("What is Stoicism?", result)
+	if resp == "" {
+		t.Error("expected non-empty response from direct facts")
+	}
+	if !strings.Contains(resp, "Stoicism") {
+		t.Errorf("response should mention Stoicism, got: %s", resp)
+	}
+
+	// Test with thinking result (should take priority if substantial)
+	result2 := &PipelineResult{
+		DirectFacts:    []string{"Stoicism is a philosophy"},
+		ThinkingResult: "Stoicism is an ancient Greek philosophy founded by Zeno of Citium that teaches the development of self-control and fortitude as a means of overcoming destructive emotions.",
+		Sources:        []string{"graph", "thinking"},
+	}
+	resp2 := rp.ComposeResponse("What is Stoicism?", result2)
+	if !strings.Contains(resp2, "Zeno of Citium") {
+		t.Errorf("response should use thinking result as primary, got: %s", resp2)
+	}
+
+	// Test with causal trace appended
+	result3 := &PipelineResult{
+		DirectFacts: []string{"Stress is common"},
+		CausalTrace: "Stress causes burnout which leads to low productivity.",
+		Sources:     []string{"graph", "causal"},
+	}
+	resp3 := rp.ComposeResponse("Why is stress bad?", result3)
+	if !strings.Contains(resp3, "burnout") {
+		t.Errorf("response should include causal trace, got: %s", resp3)
+	}
+
+	// Test with empty result
+	resp4 := rp.ComposeResponse("test", &PipelineResult{})
+	if resp4 != "" {
+		t.Errorf("expected empty response for empty result, got: %s", resp4)
+	}
+}
