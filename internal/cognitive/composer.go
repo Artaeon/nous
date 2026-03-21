@@ -660,6 +660,22 @@ func (c *Composer) composeFactual(query string) *ComposedResponse {
 		return nil
 	}
 
+	// Fast path: if a clean described_as fact exists, use it directly.
+	// These are human-written descriptions (typically from Wikipedia)
+	// and don't need template wrapping.
+	cleanQuery := strings.TrimRight(strings.ToLower(strings.TrimSpace(query)), "?!.")
+	if desc := c.Graph.LookupDescription(cleanQuery); desc != "" {
+		text := desc
+		if extras := c.Graph.LookupFacts(cleanQuery, 4); len(extras) > 0 {
+			text += "\n\n" + strings.Join(extras, " ")
+		}
+		return &ComposedResponse{
+			Text:    text,
+			Sources: []string{"knowledge"},
+			Type:    RespFactual,
+		}
+	}
+
 	facts, sources := c.gatherFacts(query)
 	if len(facts) == 0 {
 		return nil

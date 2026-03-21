@@ -7,6 +7,27 @@ import "strings"
 // Zero external dependencies — Levenshtein implemented from scratch.
 // -----------------------------------------------------------------------
 
+// commonStopword contains very common English words that should never
+// fuzzy-match against tool keywords to prevent false positives like
+// "feel"→"feed" (news), "have"→"hash", "this"→"disk", etc.
+var commonStopword = map[string]bool{
+	"feel": true, "felt": true, "fill": true, "fall": true, "fell": true,
+	"have": true, "gave": true, "give": true, "live": true,
+	"like": true, "make": true, "take": true, "made": true, "came": true,
+	"come": true, "some": true, "more": true, "were": true, "here": true,
+	"there": true, "their": true, "where": true, "these": true, "those": true,
+	"this": true, "that": true, "than": true, "then": true, "them": true,
+	"they": true, "when": true, "what": true, "with": true, "will": true,
+	"been": true, "does": true, "done": true, "good": true, "just": true,
+	"much": true, "most": true, "also": true, "very": true, "only": true,
+	"even": true, "well": true, "back": true, "down": true, "from": true,
+	"each": true, "said": true, "into": true, "over": true, "such": true,
+	"your": true, "know": true, "want": true, "need": true, "tell": true,
+	"happy": true, "today": true, "about": true, "would": true, "could": true,
+	"being": true, "still": true, "after": true, "great": true, "think": true,
+	"shall": true, "might": true, "never": true, "under": true, "since": true,
+}
+
 // levenshtein computes the edit distance between two strings.
 // Uses O(min(m,n)) space via a single-row dynamic programming approach.
 func levenshtein(a, b string) int {
@@ -73,6 +94,11 @@ func fuzzyWordMatch(candidate, target string) bool {
 	// Both candidate and target must be at least 4 chars for fuzzy matching
 	// to avoid false positives on short common words ("new"→"news", "a"→"an").
 	if len(candidate) < 4 || len(target) < 4 {
+		return false
+	}
+	// Skip fuzzy matching when the candidate is a very common English word
+	// that would false-positive against tool keywords (e.g. "feel"→"feed").
+	if commonStopword[candidate] {
 		return false
 	}
 	// Quick length-difference check to skip obvious mismatches.

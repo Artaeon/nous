@@ -18,6 +18,10 @@ type NLU struct {
 	negatives    []string
 	metaPatterns []string
 
+	// Neural intent classifier — trained replacement for pattern matching.
+	// When available and confident, overrides the pattern-based classification.
+	Neural *NeuralNLU
+
 	// compiled regexes — built once at init
 	urlRe       *regexp.Regexp
 	pathRe      *regexp.Regexp
@@ -80,6 +84,10 @@ type NLU struct {
 	expenseWords    []string
 	transformWords  []string
 	transformRe     []*regexp.Regexp
+	creativeRe      []*regexp.Regexp
+
+	// Freeform fallback classifier — catches inputs that pattern NLU misses
+	Freeform *FreeformClassifier
 }
 
 // NewNLU creates a new deterministic NLU engine with all pattern tables initialized.
@@ -114,7 +122,14 @@ func NewNLU() *NLU {
 			"what can you do", "who are you", "what are you",
 			"how do you work", "what do you know",
 			"tell me about yourself", "your capabilities",
-			"what's your name", "whats your name",
+			"what's your name", "whats your name", "what is your name",
+			"who made you", "who created you", "who built you",
+			"who programmed you", "who designed you",
+			"do you have feelings", "do you have emotions",
+			"are you alive", "are you sentient", "are you conscious",
+			"are you real", "are you a robot", "are you human",
+			"are you an ai", "are you a bot", "are you a machine",
+			"can you think", "can you feel", "do you dream",
 		},
 
 		urlRe:        regexp.MustCompile(`https?://[^\s<>"{}|\\^` + "`" + `\[\]]+`),
@@ -311,7 +326,7 @@ func NewNLU() *NLU {
 			"thesaurus", "dictionary",
 		},
 		networkWords: []string{
-			"ping ", "is the server", "is the site", "is it down",
+			"is the server", "is the site", "is it down",
 			"dns lookup", "dns resolve", "port check", "check port",
 			"am i online", "internet connection", "connectivity",
 			"network check", "net check",
@@ -398,6 +413,23 @@ func NewNLU() *NLU {
 			regexp.MustCompile(`(?i)^simplify\s*:?\s*(.+)`),
 			regexp.MustCompile(`(?i)^(?:make (?:this |it )?simpler|dumb (?:this |it )?down)\s*:?\s*(.+)`),
 		},
+		creativeRe: []*regexp.Regexp{
+			// "help me write/create/make X" patterns
+			regexp.MustCompile(`(?i)(?:can you |could you |would you |please )?help\s+me\s+(?:write|create|make|draft|compose)\s+(?:a\s+|an\s+|the\s+|my\s+)?(.*)`),
+			// Poem patterns
+			regexp.MustCompile(`(?i)(?:write|compose|create|make|craft|give me|generate)\s+(?:me\s+)?(?:a\s+)?(?:poem|verse|haiku|quatrain|sonnet|limerick|poetry)\s*(?:about|on|for|of)?\s*(.*)`),
+			// Story patterns
+			regexp.MustCompile(`(?i)(?:write|compose|create|make|craft|give me|tell|generate)\s+(?:me\s+)?(?:a\s+)?(?:story|tale|fable|narrative|short story|micro.?story)\s*(?:about|on|for|of|featuring)?\s*(.*)`),
+			regexp.MustCompile(`(?i)(?:make up|come up with|invent)\s+(?:a\s+)?(?:story|tale|fable|narrative)\s*(?:about|on|for|of)?\s*(.*)`),
+			// Joke patterns
+			regexp.MustCompile(`(?i)(?:tell|give|make|write|say)\s+(?:me\s+)?(?:a\s+)?(?:joke|funny|pun|gag)\s*(?:about|on|for|of)?\s*(.*)`),
+			// Reflect / opinion patterns
+			regexp.MustCompile(`(?i)what(?:'s|\s+is)\s+(?:your|the)\s+(?:opinion|take|view|thought|perspective)\s+(?:on|about|of)\s+(.*)`),
+			regexp.MustCompile(`(?i)what\s+do\s+you\s+(?:think|feel|believe)\s+(?:about|of)\s+(.*)`),
+			regexp.MustCompile(`(?i)what(?:'s|\s+is)\s+the\s+meaning\s+of\s+(.*)`),
+			regexp.MustCompile(`(?i)(?:reflect|philosophize|muse|meditate|ponder)\s+(?:on|about|upon)\s+(.*)`),
+			regexp.MustCompile(`(?i)(?:share|give me)\s+(?:your\s+)?(?:thoughts?|perspective|views?)\s+(?:on|about)\s+(.*)`),
+		},
 		webLookupPatterns: []*regexp.Regexp{
 			regexp.MustCompile(`(?i)what(?:'s| is) the (?:weather|temperature|forecast)`),
 			regexp.MustCompile(`(?i)(?:latest|recent|current|breaking|today'?s?)\s+(?:news|headlines|updates?)`),
@@ -407,7 +439,184 @@ func NewNLU() *NLU {
 			regexp.MustCompile(`(?i)how (?:much|many)\s+(?:does|is|are)\s+\w+\s+(?:cost|worth)`),
 		},
 	}
+
+	// Initialize the freeform fallback classifier with a small embedding space.
+	// Uses taxonomy-seeded vectors for basic semantic similarity.
+	emb := NewWordEmbeddings(64)
+	emb.SeedPoolWords()
+	n.Freeform = NewFreeformClassifier(emb)
+
 	return n
+}
+
+// InitNeural initializes the neural intent classifier. If a model file exists
+// at modelPath, it loads the pre-trained model. Otherwise, it trains a new one
+// from auto-generated data and saves it.
+func (n *NLU) InitNeural(modelPath string) error {
+	nn := NewNeuralNLU(modelPath)
+	if err := nn.LoadOrTrain(n); err != nil {
+		return err
+	}
+	n.Neural = nn
+	return nil
+}
+
+// extractEntitiesForIntent performs intent-specific entity extraction
+// when the neural classifier has already determined the intent.
+func (n *NLU) extractEntitiesForIntent(lower string, r *NLUResult) {
+	switch r.Intent {
+	case "dict":
+		// Strip dict verbs to get the actual word: "define serendipity" → "serendipity"
+		dictTriggers := []string{
+			"define the word ", "define ", "definition of ",
+			"meaning of ", "what does the word ", "what does ",
+			"synonyms for ", "synonyms of ", "antonyms for ", "antonyms of ",
+			"thesaurus lookup for ", "dictionary lookup for ",
+			"give me the definition of ",
+		}
+		word := lower
+		for _, t := range dictTriggers {
+			if strings.Contains(lower, t) {
+				word = n.extractTopic(lower, t)
+				break
+			}
+		}
+		// Strip trailing fragments: "what does X mean", "define X for me"
+		word = strings.TrimSuffix(word, " mean")
+		word = strings.TrimSuffix(word, " for me")
+		word = strings.TrimSuffix(word, " please")
+		word = strings.Trim(word, "'\"")
+		r.Entities["topic"] = word
+
+	case "translate":
+		// Extract text and target language
+		r.Entities["topic"] = n.extractTopicGeneral(lower)
+
+	case "creative":
+		// Detect specific creative types and extract topic
+		switch {
+		case strings.Contains(lower, "haiku"):
+			r.Entities["creative_type"] = "haiku"
+			r.Entities["poem_form"] = "haiku"
+		case strings.Contains(lower, "limerick"):
+			r.Entities["creative_type"] = "limerick"
+		case strings.Contains(lower, "poem"):
+			r.Entities["creative_type"] = "poem"
+		case strings.Contains(lower, "joke"):
+			r.Entities["creative_type"] = "joke"
+		case strings.Contains(lower, "story"):
+			r.Entities["creative_type"] = "story"
+		case strings.Contains(lower, "fun fact") || strings.Contains(lower, "something interesting") || strings.Contains(lower, "random fact"):
+			r.Entities["creative_type"] = "fun_fact"
+		case strings.Contains(lower, "meaning of") || strings.Contains(lower, "opinion on") ||
+			strings.Contains(lower, "think about") || strings.Contains(lower, "thoughts on") ||
+			strings.Contains(lower, "philosophize") || strings.Contains(lower, "reflect on"):
+			r.Entities["creative_type"] = "reflect"
+		case strings.Contains(lower, "help me") || strings.Contains(lower, "help create") || strings.Contains(lower, "help write"):
+			r.Entities["creative_type"] = "" // general assistance
+		default:
+			r.Entities["creative_type"] = "" // general creative
+		}
+		// Extract topic by stripping creative verbs/phrases
+		creativePrefixes := []string{
+			"write me a poem about ", "write a poem about ",
+			"write me a story about ", "write a story about ",
+			"compose a haiku about ", "compose a poem about ",
+			"create a limerick about ", "write a limerick about ",
+			"tell me a joke about ", "tell a joke about ",
+			"write me a ", "write a ", "write me ", "write ",
+			"compose a ", "compose ", "create a ", "create ",
+			"tell me a ", "tell me ", "make me a ", "make a ",
+			"help me write a ", "help me write ", "help me create a ",
+			"help me create ", "help me make a ", "help me make ",
+		}
+		topic := lower
+		for _, p := range creativePrefixes {
+			if strings.HasPrefix(topic, p) {
+				topic = topic[len(p):]
+				break
+			}
+		}
+		// Also try stripping "about" if it's at the start
+		topic = strings.TrimPrefix(topic, "about ")
+		topic = strings.TrimRight(topic, "?!.")
+		r.Entities["topic"] = strings.TrimSpace(topic)
+
+	case "recommendation":
+		// Strip recommendation verbs: "suggest a good book" → "book"
+		recPrefixes := []string{
+			"suggest a good ", "suggest me a ", "suggest a ", "suggest ",
+			"recommend a good ", "recommend me a ", "recommend a ", "recommend ",
+			"any tips for ", "any suggestions for ", "any ideas for ",
+			"what should i ", "what should I ",
+		}
+		topic := lower
+		for _, p := range recPrefixes {
+			if strings.HasPrefix(topic, p) {
+				topic = topic[len(p):]
+				break
+			}
+		}
+		topic = strings.TrimRight(topic, "?!.")
+		r.Entities["topic"] = strings.TrimSpace(topic)
+
+	case "remember":
+		r.Entities["topic"] = n.extractTopicGeneral(lower)
+
+	case "recall":
+		r.Entities["topic"] = n.extractTopicGeneral(lower)
+
+	case "timer":
+		r.Entities["topic"] = n.extractTopicGeneral(lower)
+		// Extract timer action
+		switch {
+		case strings.Contains(lower, "pomodoro"):
+			r.Entities["action"] = "pomodoro"
+		case strings.Contains(lower, "stop") || strings.Contains(lower, "cancel"):
+			r.Entities["action"] = "stop"
+		case strings.Contains(lower, "how much time") || strings.Contains(lower, "time left") ||
+			strings.Contains(lower, "status"):
+			r.Entities["action"] = "status"
+		case strings.Contains(lower, "list"):
+			r.Entities["action"] = "list"
+		default:
+			r.Entities["action"] = "start"
+		}
+		// Extract duration: "5 minutes", "1h30m", "30 seconds"
+		if dur := extractDurationString(lower); dur != "" {
+			r.Entities["duration"] = dur
+		}
+
+	case "app":
+		// Extract app action: launch, kill, list
+		switch {
+		case strings.Contains(lower, "close") || strings.Contains(lower, "kill") ||
+			strings.Contains(lower, "stop") || strings.Contains(lower, "quit"):
+			r.Entities["action"] = "kill"
+		case strings.Contains(lower, "list") || strings.Contains(lower, "running") ||
+			strings.Contains(lower, "what apps"):
+			r.Entities["action"] = "running"
+		default:
+			r.Entities["action"] = "launch"
+		}
+		// Extract app name: "open firefox" → "firefox", "launch spotify" → "spotify"
+		appPrefixes := []string{"open ", "launch ", "start ", "run ", "close ", "kill ", "stop ", "quit "}
+		name := lower
+		for _, p := range appPrefixes {
+			if strings.HasPrefix(name, p) {
+				name = name[len(p):]
+				break
+			}
+		}
+		name = strings.TrimSuffix(name, " for me")
+		name = strings.TrimSuffix(name, " please")
+		name = strings.TrimRight(name, "?!.")
+		r.Entities["name"] = strings.TrimSpace(name)
+		r.Entities["topic"] = r.Entities["name"]
+
+	default:
+		r.Entities["topic"] = n.extractTopicGeneral(lower)
+	}
 }
 
 // Understand processes raw input and returns structured NLU output.
@@ -428,6 +637,11 @@ func (n *NLU) Understand(input string) *NLUResult {
 	}
 
 	lower := strings.ToLower(trimmed)
+
+	// Strip "nous" prefix — users often address the assistant by name.
+	// e.g. "nous how are you?" → "how are you?"
+	lower = stripNousPrefix(lower)
+	trimmed = stripNousPrefix(trimmed)
 
 	// Phase 1: Extract entities (always, regardless of intent)
 	n.extractEntities(trimmed, lower, result)
@@ -484,6 +698,21 @@ func (n *NLU) extractEntities(raw, lower string, r *NLUResult) {
 
 // classifyIntent determines what the user wants.
 func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
+	// Neural classifier: if trained and confident, use it directly.
+	// This short-circuits the hundreds of pattern checks below.
+	if n.Neural != nil && n.Neural.Classifier.IsTrained() {
+		nr := n.Neural.Classify(raw)
+		if nr != nil && nr.Confidence > 0.70 {
+			r.Intent = nr.Intent
+			r.Confidence = nr.Confidence
+			// Intent-specific entity extraction
+			n.extractEntitiesForIntent(lower, r)
+			return
+		}
+		// Medium confidence (0.4-0.7): store neural result, let patterns compete
+		// If pattern matching also fails, we'll use the neural result
+	}
+
 	// Strip trailing punctuation for matching
 	stripped := strings.TrimRightFunc(lower, func(r rune) bool {
 		return unicode.IsPunct(r) || unicode.IsSpace(r)
@@ -743,11 +972,40 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 	}
 	for _, w := range n.dictWords {
 		if strings.Contains(lower, w) {
+			// Strip the dict verb from the topic: "define serendipity" → "serendipity"
+			topic := n.extractTopic(lower, w)
+			// Only route to dict if the topic looks like a word/phrase to define,
+			// not a philosophical question like "what is the meaning of life?"
+			topicWords := strings.Fields(topic)
+			if len(topicWords) > 3 {
+				continue // too many words — probably a question, not a dict lookup
+			}
+			// Skip existential/philosophical uses of "meaning of"
+			if w == "meaning of" {
+				philosophical := []string{"life", "love", "existence", "everything", "it all", "happiness", "death", "freedom", "success"}
+				isPhilosophical := false
+				for _, p := range philosophical {
+					if topic == p {
+						isPhilosophical = true
+						break
+					}
+				}
+				if isPhilosophical {
+					continue // let explain/question handle these
+				}
+			}
 			r.Intent = "dict"
 			r.Confidence = 0.85
-			r.Entities["topic"] = n.extractTopicGeneral(lower)
+			r.Entities["topic"] = topic
 			return
 		}
+	}
+	// Network: use Contains for multi-word patterns, matchWord for single words
+	if matchWord(lower, "ping") {
+		r.Intent = "network"
+		r.Confidence = 0.85
+		r.Entities["topic"] = n.extractTopicGeneral(lower)
+		return
 	}
 	for _, w := range n.networkWords {
 		if strings.Contains(lower, w) {
@@ -901,6 +1159,53 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 		}
 	}
 
+	// 6f-creative. Creative requests: poems, stories, jokes, reflections/opinions.
+	for _, re := range n.creativeRe {
+		if m := re.FindStringSubmatch(lower); m != nil {
+			r.Intent = "creative"
+			r.Confidence = 0.92
+			topic := ""
+			if len(m) > 1 {
+				topic = strings.TrimSpace(m[1])
+			}
+			// Strip trailing punctuation from topic
+			topic = strings.TrimRight(topic, "?!.")
+			topic = strings.TrimSpace(topic)
+			r.Entities["topic"] = topic
+			// Determine creative sub-type from the matched pattern
+			patStr := re.String()
+			switch {
+			case strings.Contains(patStr, "poem") || strings.Contains(patStr, "verse") || strings.Contains(patStr, "haiku") || strings.Contains(patStr, "quatrain") || strings.Contains(patStr, "poetry"):
+				r.Entities["creative_type"] = "poem"
+				if strings.Contains(lower, "haiku") {
+					r.Entities["poem_form"] = "haiku"
+				} else if strings.Contains(lower, "quatrain") {
+					r.Entities["poem_form"] = "quatrain"
+				}
+			case strings.Contains(patStr, "story") || strings.Contains(patStr, "tale") || strings.Contains(patStr, "fable") || strings.Contains(patStr, "narrative"):
+				r.Entities["creative_type"] = "story"
+			case strings.Contains(patStr, "joke") || strings.Contains(patStr, "funny") || strings.Contains(patStr, "pun"):
+				r.Entities["creative_type"] = "joke"
+			case strings.Contains(patStr, "opinion") || strings.Contains(patStr, "think") || strings.Contains(patStr, "meaning") || strings.Contains(patStr, "reflect") || strings.Contains(patStr, "thought") || strings.Contains(patStr, "perspective") || strings.Contains(patStr, "feel") || strings.Contains(patStr, "believe"):
+				r.Entities["creative_type"] = "reflect"
+			case strings.Contains(patStr, "help"):
+				// "help me write/create X" — general creative request, not a poem
+				r.Entities["creative_type"] = "" // handled by creative handler as general
+			default:
+				r.Entities["creative_type"] = "poem"
+			}
+			return
+		}
+	}
+
+	// 6f-emotional. Emotional/sentiment expressions — "I feel happy today"
+	// Must run BEFORE fuzzy matching to prevent "feel" → "feed" (news) false positive.
+	if isEmotionalInput(lower) {
+		r.Intent = "greeting" // route to respond handler which has empathetic support
+		r.Confidence = 0.80
+		return
+	}
+
 	// 6f-fuzzy. Fuzzy fallback for tool word lists — synonym expansion + typo tolerance.
 	// Only fires when none of the exact tool checks above matched.
 	if n.fuzzyClassifyTools(lower, r) {
@@ -944,8 +1249,13 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 	}
 
 	// 8. File operations (before search, since "read file" should be file_op not search)
+	// "write"/"create" are ambiguous: "write a poem" is creative, "write to file" is file_op.
+	// Skip file_op when the context looks creative (a/an + non-file noun).
 	for _, v := range n.fileVerbs {
 		if matchWord(lower, v) {
+			if (v == "write" || v == "create") && looksCreativeNotFile(lower) {
+				continue // let creative/freeform handle it
+			}
 			r.Intent = "file_op"
 			r.Confidence = 0.85
 			return
@@ -1017,6 +1327,22 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 		}
 	}
 
+	// 12c. Conversational curiosity — "tell me something interesting/fun/cool"
+	// Must run BEFORE explain verbs since "tell me" is an explain trigger.
+	for _, pat := range []string{
+		"tell me something", "say something", "tell me a fact",
+		"give me a fun fact", "share something", "surprise me",
+		"tell me a random", "random fact",
+	} {
+		if strings.HasPrefix(lower, pat) || lower == strings.TrimRight(pat, " ") {
+			r.Intent = "creative"
+			r.Confidence = 0.80
+			r.Entities["creative_type"] = "fun_fact"
+			r.Entities["topic"] = n.extractTopic(lower, pat)
+			return
+		}
+	}
+
 	// 13. Explain verbs
 	for _, v := range n.explainVerbs {
 		if strings.HasPrefix(lower, v+" ") || strings.HasPrefix(lower, v+"\t") {
@@ -1025,6 +1351,15 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 			r.Entities["topic"] = n.extractTopic(lower, v)
 			return
 		}
+	}
+
+	// 13b. Personal questions — check before command verbs so "do you know who i am"
+	// doesn't match the "do" command verb.
+	if n.isPersonalQuestion(lower) {
+		r.Intent = "question"
+		r.Confidence = 0.75
+		r.Entities["topic"] = n.extractTopicGeneral(lower)
+		return
 	}
 
 	// 14. Command verbs
@@ -1063,16 +1398,30 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 		}
 	}
 
-	// 17. Fallback: if it's a short phrase, treat as question; if long, treat as statement
+	// 17. Freeform fallback — catches natural language the pattern NLU missed.
+	if n.Freeform != nil {
+		if fr := n.Freeform.Classify(raw); fr != nil {
+			r.Intent = fr.Intent
+			r.Confidence = fr.Confidence
+			for k, v := range fr.Entities {
+				r.Entities[k] = v
+			}
+			return
+		}
+	}
+
+	// 18. Last resort: if it's a short phrase, treat as question; if long, treat as statement
 	words := strings.Fields(lower)
 	if len(words) <= 3 {
-		// Short input — likely a topic query
+		// Short input — likely a topic query (e.g. "isaac newton", "democracy")
+		// Bare noun phrases are clear topic lookups — give enough confidence
+		// to pass the 0.5 threshold so the pipeline actually runs.
 		r.Intent = "question"
-		r.Confidence = 0.40
+		r.Confidence = 0.55
 		r.Entities["topic"] = strings.Join(words, " ")
 	} else {
 		r.Intent = "question"
-		r.Confidence = 0.35
+		r.Confidence = 0.45
 		r.Entities["topic"] = n.extractTopicGeneral(lower)
 	}
 }
@@ -1200,6 +1549,8 @@ func (n *NLU) mapAction(lower string, r *NLUResult) {
 		r.Action = "daily_briefing"
 	case "transform":
 		r.Action = "transform"
+	case "creative":
+		r.Action = "creative"
 
 	case "recommendation":
 		r.Action = "lookup_knowledge"
@@ -1271,6 +1622,9 @@ func (n *NLU) isPersonalQuestion(lower string) bool {
 		"what's my", "whats my", "what is my",
 		"where do i", "what do i", "who am i",
 		"what did i", "have i", "am i",
+		"do you know who i am", "do you know my",
+		"do you remember me", "do you know me",
+		"what do you know about me",
 	}
 	for _, p := range personalPrefixes {
 		if strings.HasPrefix(lower, p) || strings.Contains(lower, p) {
@@ -1278,6 +1632,31 @@ func (n *NLU) isPersonalQuestion(lower string) bool {
 		}
 	}
 	return false
+}
+
+// extractDurationString extracts a duration string like "5 minutes", "1h30m", "30 seconds"
+// from natural language input and returns it in Go-parseable format.
+func extractDurationString(lower string) string {
+	// Pattern: N minutes/seconds/hours
+	durationRe := regexp.MustCompile(`(\d+)\s*(minutes?|mins?|seconds?|secs?|hours?|hrs?)`)
+	if m := durationRe.FindStringSubmatch(lower); len(m) >= 3 {
+		num := m[1]
+		unit := m[2]
+		switch {
+		case strings.HasPrefix(unit, "min"):
+			return num + "m"
+		case strings.HasPrefix(unit, "sec"):
+			return num + "s"
+		case strings.HasPrefix(unit, "hour"), strings.HasPrefix(unit, "hr"):
+			return num + "h"
+		}
+	}
+	// Already Go duration format: "5m", "1h30m"
+	goRe := regexp.MustCompile(`\b(\d+[hms](?:\d+[ms])?)\b`)
+	if m := goRe.FindString(lower); m != "" {
+		return m
+	}
+	return ""
 }
 
 // extractTopic strips the verb/trigger from input and returns the remaining subject.
@@ -1491,13 +1870,78 @@ func (n *NLU) UnderstandWithContext(input string, conv *Conversation) *NLUResult
 		result.Confidence = 0.7
 	}
 
-	// If intent was vague, sharpen it to explain (most follow-ups want elaboration)
-	if result.Intent == "question" || result.Intent == "unknown" {
+	// If intent was vague, sharpen it to explain (most follow-ups want elaboration).
+	// "lookup_knowledge" from the freeform catch-all is also vague for follow-ups.
+	if result.Intent == "question" || result.Intent == "unknown" || result.Intent == "explain" || result.Intent == "lookup_knowledge" {
 		result.Intent = "explain"
 		result.Action = "lookup_knowledge"
 	}
 
 	return result
+}
+
+// isEmotionalInput detects emotional/sentiment expressions that should get an
+// empathetic response rather than tool routing.
+func isEmotionalInput(lower string) bool {
+	patterns := []string{
+		"i feel ", "i'm feeling ", "im feeling ",
+		"i'm happy", "im happy", "i'm sad", "im sad",
+		"i'm angry", "im angry", "i'm tired", "im tired",
+		"i'm excited", "im excited", "i'm stressed", "im stressed",
+		"i'm bored", "im bored", "i'm lonely", "im lonely",
+		"i'm anxious", "im anxious", "i'm worried", "im worried",
+		"i'm frustrated", "im frustrated", "i'm overwhelmed", "im overwhelmed",
+		"i'm exhausted", "im exhausted", "i'm grateful", "im grateful",
+		"having a bad day", "having a good day", "having a great day",
+		"rough day", "tough day", "hard day", "best day", "worst day",
+	}
+	for _, p := range patterns {
+		if strings.HasPrefix(lower, p) || strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// looksCreativeNotFile returns true if "write/create X" is creative, not file I/O.
+func looksCreativeNotFile(lower string) bool {
+	creativeObjects := []string{
+		"a poem", "a story", "a joke", "an email", "a letter",
+		"a song", "a haiku", "a limerick", "a report", "a summary",
+		"a reflection", "an essay", "a script", "a speech",
+		"a list", "a shopping list", "a grocery list", "a todo list",
+		"a to-do list", "a checklist", "a recipe", "a menu",
+		"a plan", "a schedule", "a draft", "a message",
+		"me a", "about", "something",
+		"help me write", "help me create", "help me make",
+	}
+	for _, obj := range creativeObjects {
+		if strings.Contains(lower, obj) {
+			return true
+		}
+	}
+	return false
+}
+
+// stripNousPrefix removes "nous" addressing from the input.
+// Handles both prefix ("nous, how are you") and suffix ("hi nous!").
+func stripNousPrefix(s string) string {
+	lower := strings.ToLower(s)
+	// Prefix: "nous, ..." / "nous! ..." / "nous ..."
+	for _, prefix := range []string{"nous, ", "nous! ", "nous ", "nous,"} {
+		if strings.HasPrefix(lower, prefix) {
+			return strings.TrimSpace(s[len(prefix):])
+		}
+	}
+	// Suffix: "hi nous!" / "hello nous" / "hey, nous"
+	stripped := strings.TrimRight(s, "!?. ")
+	lowerStripped := strings.ToLower(stripped)
+	for _, suffix := range []string{" nous", ", nous"} {
+		if strings.HasSuffix(lowerStripped, suffix) {
+			return strings.TrimSpace(stripped[:len(stripped)-len(suffix)])
+		}
+	}
+	return s
 }
 
 // containsDigit returns true if the string contains at least one digit.

@@ -155,12 +155,49 @@ func (rm *ReminderManager) ParseDuration(input string) (time.Duration, error) {
 var reDurationPart = regexp.MustCompile(`(\d+)\s*(seconds?|secs?|s|minutes?|mins?|min|hours?|hrs?|h|days?|d|weeks?|w)`)
 
 // ParseDuration parses a human-readable duration string.
-// Supports: "30 minutes", "2 hours", "1 hour 30 minutes", "45 seconds", "in 5 min"
+// Supports: "30 minutes", "2 hours", "1 hour 30 minutes", "45 seconds", "in 5 min",
+// "tomorrow", "tonight", "next week", etc.
 func ParseDuration(input string) (time.Duration, error) {
 	input = strings.ToLower(strings.TrimSpace(input))
 	// Strip leading "in " if present
 	input = strings.TrimPrefix(input, "in ")
 	input = strings.TrimSpace(input)
+
+	// Handle relative date words before trying numeric durations
+	now := time.Now()
+	if strings.Contains(input, "tomorrow") {
+		// Set to 9:00 AM tomorrow
+		tomorrow := time.Date(now.Year(), now.Month(), now.Day()+1, 9, 0, 0, 0, now.Location())
+		return time.Until(tomorrow), nil
+	}
+	if strings.Contains(input, "tonight") {
+		// Set to 8:00 PM today (or tomorrow if already past 8 PM)
+		tonight := time.Date(now.Year(), now.Month(), now.Day(), 20, 0, 0, 0, now.Location())
+		if now.After(tonight) {
+			tonight = tonight.Add(24 * time.Hour)
+		}
+		return time.Until(tonight), nil
+	}
+	if strings.Contains(input, "next week") {
+		return 7 * 24 * time.Hour, nil
+	}
+	if strings.Contains(input, "next month") {
+		return 30 * 24 * time.Hour, nil
+	}
+	if strings.Contains(input, "this evening") || strings.Contains(input, "this afternoon") {
+		evening := time.Date(now.Year(), now.Month(), now.Day(), 17, 0, 0, 0, now.Location())
+		if now.After(evening) {
+			evening = evening.Add(24 * time.Hour)
+		}
+		return time.Until(evening), nil
+	}
+	if strings.Contains(input, "this morning") {
+		morning := time.Date(now.Year(), now.Month(), now.Day(), 9, 0, 0, 0, now.Location())
+		if now.After(morning) {
+			morning = morning.Add(24 * time.Hour)
+		}
+		return time.Until(morning), nil
+	}
 
 	matches := reDurationPart.FindAllStringSubmatch(input, -1)
 	if len(matches) == 0 {

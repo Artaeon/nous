@@ -512,12 +512,7 @@ func (rp *ReasoningPipeline) ComposeResponse(query string, result *PipelineResul
 		parts = append(parts, result.ThinkingResult)
 	}
 
-	// Priority 2: Reasoning trace answer.
-	if len(parts) == 0 && result.ReasoningTrace != "" {
-		parts = append(parts, result.ReasoningTrace)
-	}
-
-	// Priority 3: Direct + inferred facts — use prose Composer when available.
+	// Priority 2: Direct + inferred facts — use prose Composer when available.
 	if len(parts) == 0 && (len(result.DirectFacts) > 0 || len(result.InferredFacts) > 0) {
 		// Try prose Composer first for natural language output.
 		if rp.Composer != nil && rp.Composer.Graph != nil {
@@ -550,6 +545,11 @@ func (rp *ReasoningPipeline) ComposeResponse(query string, result *PipelineResul
 			}
 			parts = append(parts, strings.Join(all, " "))
 		}
+	}
+
+	// Fallback: reasoning trace if no composed prose was generated.
+	if len(parts) == 0 && result.ReasoningTrace != "" {
+		parts = append(parts, result.ReasoningTrace)
 	}
 
 	// Append causal trace as supplementary paragraph.

@@ -80,16 +80,24 @@ type PackageLoader struct {
 	composer  *Composer
 	packDir   string            // directory containing .json packages
 	loaded    map[string]string // name → version of loaded packages
+
+	// Wiki on-demand loading: maps lowercase topic → package file path
+	wikiIndex    map[string]string // topic → file path
+	wikiLoaded   map[string]bool   // file path → already loaded
+	MaxStartupFacts int            // max facts to load at startup (0 = unlimited)
 }
 
 // NewPackageLoader creates a loader wired to the cognitive systems.
 func NewPackageLoader(graph *CognitiveGraph, engine *GenerativeEngine, composer *Composer, packDir string) *PackageLoader {
 	return &PackageLoader{
-		graph:   graph,
-		engine:  engine,
-		composer: composer,
-		packDir: packDir,
-		loaded:  make(map[string]string),
+		graph:       graph,
+		engine:      engine,
+		composer:    composer,
+		packDir:     packDir,
+		loaded:      make(map[string]string),
+		wikiIndex:   make(map[string]string),
+		wikiLoaded:  make(map[string]bool),
+		MaxStartupFacts: 100000, // default: load up to 100K facts at startup
 	}
 }
 
@@ -109,30 +117,129 @@ func (pl *PackageLoader) LoadFile(path string) (*PackageLoadResult, error) {
 }
 
 // LoadAll loads all .json packages from the package directory.
+// Wiki batch packages (wiki-batch-*.json) are indexed for on-demand loading
+// rather than loaded at startup, to keep memory usage reasonable.
 func (pl *PackageLoader) LoadAll() ([]*PackageLoadResult, error) {
 	if pl.packDir == "" {
 		return nil, fmt.Errorf("no package directory configured")
 	}
 
+	totalFacts := 0
 	var results []*PackageLoadResult
+	var wikiFiles []string
+
 	err := filepath.WalkDir(pl.packDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil // skip unreadable entries
+			return nil
 		}
 		if d.IsDir() || !strings.HasSuffix(d.Name(), ".json") {
 			return nil
 		}
+		// Defer wiki batch packages for on-demand loading
+		if strings.HasPrefix(d.Name(), "wiki-batch-") {
+			wikiFiles = append(wikiFiles, path)
+			return nil
+		}
+		// Check startup fact limit
+		if pl.MaxStartupFacts > 0 && totalFacts >= pl.MaxStartupFacts {
+			return nil
+		}
 		result, loadErr := pl.LoadFile(path)
 		if loadErr != nil {
-			return nil // skip invalid packages silently
+			return nil
 		}
+		totalFacts += result.FactsLoaded
 		results = append(results, result)
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
+
+	// Build wiki index: scan each wiki package for article subjects
+	for _, wf := range wikiFiles {
+		pl.indexWikiPackage(wf)
+	}
+
+	if len(pl.wikiIndex) > 0 {
+		// Add a summary result for the indexed wiki (FactsLoaded=0 since not loaded yet)
+		results = append(results, &PackageLoadResult{
+			Name:    fmt.Sprintf("wikipedia-index (%d topics on-demand)", len(pl.wikiIndex)),
+			Version: "1.0",
+			Domain:  "wikipedia",
+		})
+	}
+
 	return results, nil
+}
+
+// indexWikiPackage scans a wiki package file and indexes its topics without
+// loading facts into memory. Only reads fact subjects to build the index.
+func (pl *PackageLoader) indexWikiPackage(path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+
+	var pkg KnowledgePackage
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return
+	}
+
+	// Index each unique subject to this file.
+	// Don't overwrite existing entries — the first batch (alphabetically)
+	// typically has the primary article with the best described_as fact.
+	seen := make(map[string]bool)
+	for _, f := range pkg.Facts {
+		subj := strings.ToLower(f.Subject)
+		if !seen[subj] {
+			seen[subj] = true
+			if _, exists := pl.wikiIndex[subj]; !exists {
+				pl.wikiIndex[subj] = path
+			}
+		}
+	}
+}
+
+// LookupWiki loads wiki knowledge on demand for a given topic.
+// Returns the number of facts loaded (0 if topic not in index).
+func (pl *PackageLoader) LookupWiki(topic string) int {
+	topic = strings.ToLower(strings.TrimSpace(topic))
+	if topic == "" {
+		return 0
+	}
+
+	path, ok := pl.wikiIndex[topic]
+	if !ok {
+		// Try partial match — check if any indexed topic contains the query
+		for indexed, p := range pl.wikiIndex {
+			if strings.Contains(indexed, topic) || strings.Contains(topic, indexed) {
+				path = p
+				ok = true
+				break
+			}
+		}
+	}
+	if !ok {
+		return 0
+	}
+
+	// Already loaded this package?
+	if pl.wikiLoaded[path] {
+		return 0
+	}
+
+	result, err := pl.LoadFile(path)
+	if err != nil {
+		return 0
+	}
+	pl.wikiLoaded[path] = true
+	return result.FactsLoaded
+}
+
+// WikiIndexSize returns the number of indexed wiki topics.
+func (pl *PackageLoader) WikiIndexSize() int {
+	return len(pl.wikiIndex)
 }
 
 // PackageLoadResult tracks what was loaded.
