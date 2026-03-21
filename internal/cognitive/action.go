@@ -63,6 +63,8 @@ type ActionRouter struct {
 	Inference      *InferenceEngine
 	Analogy        *AnalogyEngine
 	Pipeline       *ReasoningPipeline
+	Dialogue       *DialogueManager
+	Transformer    *TextTransformer
 }
 
 // NewActionRouter creates a router with nil subsystems.
@@ -88,6 +90,21 @@ type ChainStep struct {
 // Execute runs the appropriate action for an NLU result.
 // This is PURE CODE — no LLM calls. Returns raw data/facts.
 func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResult {
+	result := ar.dispatch(nlu, conv)
+
+	// Advance dialogue state machine and append follow-ups
+	if ar.Dialogue != nil && result != nil {
+		ctx := ar.Dialogue.ProcessTurn(nlu, result)
+		if ctx != nil && len(ctx.SuggestedFollowUps) > 0 && result.DirectResponse != "" {
+			result.DirectResponse += "\n\n" + strings.Join(ctx.SuggestedFollowUps, "\n")
+		}
+	}
+
+	return result
+}
+
+// dispatch routes to the appropriate handler based on NLU action.
+func (ar *ActionRouter) dispatch(nlu *NLUResult, conv *Conversation) *ActionResult {
 	switch nlu.Action {
 	case "respond":
 		return ar.handleRespond(nlu)
@@ -181,6 +198,8 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 		return ar.handleExpense(nlu)
 	case "daily_briefing":
 		return ar.handleDailyBriefing(nlu)
+	case "transform":
+		return ar.handleTransform(nlu)
 	default:
 		// Try thinking engine for unknown actions
 		return ar.handleLLMChat(nlu, conv)
@@ -1850,4 +1869,44 @@ func (rf *ResponseFormatter) FormatStream(query string, result *ActionResult, co
 	}
 	onToken(text, true)
 	return text, nil
+}
+
+// -----------------------------------------------------------------------
+// Text transformation handler
+// -----------------------------------------------------------------------
+
+// handleTransform applies a text transformation operation.
+func (ar *ActionRouter) handleTransform(nlu *NLUResult) *ActionResult {
+	if ar.Transformer == nil {
+		return &ActionResult{
+			DirectResponse: "Text transformer is not initialized.",
+			Source:         "transform",
+		}
+	}
+
+	op := nlu.Entities["operation"]
+	if op == "" {
+		op = "paraphrase"
+	}
+
+	text := nlu.Entities["text"]
+	if text == "" {
+		text = nlu.Entities["_chain_input"]
+	}
+	if text == "" {
+		text = nlu.Raw
+	}
+
+	result := ar.Transformer.Transform(text, TransformOp(op))
+	if result == "" {
+		return &ActionResult{
+			DirectResponse: "Nothing to transform — please provide some text.",
+			Source:         "transform",
+		}
+	}
+
+	return &ActionResult{
+		DirectResponse: result,
+		Source:         "transform",
+	}
 }
