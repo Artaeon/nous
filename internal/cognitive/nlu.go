@@ -78,6 +78,8 @@ type NLU struct {
 	journalWords    []string
 	habitWords      []string
 	expenseWords    []string
+	transformWords  []string
+	transformRe     []*regexp.Regexp
 }
 
 // NewNLU creates a new deterministic NLU engine with all pattern tables initialized.
@@ -373,6 +375,28 @@ func NewNLU() *NLU {
 			"cost me", "paid for", "add expense", "log expense",
 			"track expense", "my expenses", "spending", "how much spent",
 			"expense summary", "monthly expenses", "weekly expenses",
+		},
+		transformWords: []string{
+			"paraphrase", "rephrase", "reword", "rewrite",
+			"summarize", "summarise", "summary", "tldr", "tl;dr",
+			"formalize", "formalise", "make formal", "make it formal",
+			"casualize", "make casual", "make it casual", "make informal",
+			"bulletize", "bullet points", "make bullets", "turn into bullets",
+			"prosify", "make prose", "turn into prose", "convert to prose",
+			"simplify", "make simpler", "make it simpler", "dumb it down",
+		},
+		transformRe: []*regexp.Regexp{
+			regexp.MustCompile(`(?i)^paraphrase\s+(?:this\s*:?\s*)?(.+)`),
+			regexp.MustCompile(`(?i)^(?:rephrase|reword|rewrite)\s+(?:this\s*:?\s*)?(.+)`),
+			regexp.MustCompile(`(?i)^summarize\s*:?\s*(.+)`),
+			regexp.MustCompile(`(?i)^(?:summarise|summary of|tldr|tl;dr)\s*:?\s*(.+)`),
+			regexp.MustCompile(`(?i)^formalize\s*:?\s*(.+)`),
+			regexp.MustCompile(`(?i)^(?:formalise|make (?:this |it )?formal)\s*:?\s*(.+)`),
+			regexp.MustCompile(`(?i)^(?:casualize|make (?:this |it )?casual|make (?:this |it )?informal)\s*:?\s*(.+)`),
+			regexp.MustCompile(`(?i)^(?:bulletize|bullet ?points?|make bullets|turn into bullets)\s*:?\s*(.+)`),
+			regexp.MustCompile(`(?i)^(?:prosify|make prose|turn into prose|convert to prose)\s*:?\s*(.+)`),
+			regexp.MustCompile(`(?i)^simplify\s*:?\s*(.+)`),
+			regexp.MustCompile(`(?i)^(?:make (?:this |it )?simpler|dumb (?:this |it )?down)\s*:?\s*(.+)`),
 		},
 		webLookupPatterns: []*regexp.Regexp{
 			regexp.MustCompile(`(?i)what(?:'s| is) the (?:weather|temperature|forecast)`),
@@ -815,6 +839,68 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 		}
 	}
 
+	// 6e-transform. Text transformation patterns — must check regexes first for text extraction.
+	for _, re := range n.transformRe {
+		if m := re.FindStringSubmatch(raw); m != nil {
+			r.Intent = "transform"
+			r.Confidence = 0.90
+			text := strings.TrimSpace(m[1])
+			r.Entities["text"] = text
+			// Determine operation from the pattern
+			reLower := strings.ToLower(re.String())
+			switch {
+			case strings.Contains(reLower, "paraphrase") || strings.Contains(reLower, "rephrase") || strings.Contains(reLower, "reword") || strings.Contains(reLower, "rewrite"):
+				r.Entities["operation"] = "paraphrase"
+			case strings.Contains(reLower, "summarize") || strings.Contains(reLower, "summarise") || strings.Contains(reLower, "summary") || strings.Contains(reLower, "tldr"):
+				r.Entities["operation"] = "summarize"
+			case strings.Contains(reLower, "casualize") || strings.Contains(reLower, "casual") || strings.Contains(reLower, "informal"):
+				r.Entities["operation"] = "casualize"
+			case strings.Contains(reLower, "formalize") || strings.Contains(reLower, "formalise") || strings.Contains(reLower, "formal"):
+				r.Entities["operation"] = "formalize"
+			case strings.Contains(reLower, "bulletize") || strings.Contains(reLower, "bullet"):
+				r.Entities["operation"] = "bulletize"
+			case strings.Contains(reLower, "prosify") || strings.Contains(reLower, "prose"):
+				r.Entities["operation"] = "prosify"
+			case strings.Contains(reLower, "simplify") || strings.Contains(reLower, "simpler") || strings.Contains(reLower, "dumb"):
+				r.Entities["operation"] = "simplify"
+			default:
+				r.Entities["operation"] = "paraphrase"
+			}
+			return
+		}
+	}
+	// Fallback: simple word match for transform-related words
+	for _, w := range n.transformWords {
+		if strings.Contains(lower, w) {
+			r.Intent = "transform"
+			r.Confidence = 0.80
+			// Determine operation from the matched word
+			switch {
+			case strings.Contains(w, "paraphrase") || strings.Contains(w, "rephrase") || strings.Contains(w, "reword") || strings.Contains(w, "rewrite"):
+				r.Entities["operation"] = "paraphrase"
+			case strings.Contains(w, "summar") || strings.Contains(w, "tldr") || strings.Contains(w, "tl;dr"):
+				r.Entities["operation"] = "summarize"
+			case strings.Contains(w, "formal"):
+				if strings.Contains(w, "informal") {
+					r.Entities["operation"] = "casualize"
+				} else {
+					r.Entities["operation"] = "formalize"
+				}
+			case strings.Contains(w, "casual"):
+				r.Entities["operation"] = "casualize"
+			case strings.Contains(w, "bullet"):
+				r.Entities["operation"] = "bulletize"
+			case strings.Contains(w, "pros"):
+				r.Entities["operation"] = "prosify"
+			case strings.Contains(w, "simplif") || strings.Contains(w, "simpler") || strings.Contains(w, "dumb"):
+				r.Entities["operation"] = "simplify"
+			default:
+				r.Entities["operation"] = "paraphrase"
+			}
+			return
+		}
+	}
+
 	// 6f-fuzzy. Fuzzy fallback for tool word lists — synonym expansion + typo tolerance.
 	// Only fires when none of the exact tool checks above matched.
 	if n.fuzzyClassifyTools(lower, r) {
@@ -1112,6 +1198,8 @@ func (n *NLU) mapAction(lower string, r *NLUResult) {
 		r.Action = "expense"
 	case "daily_briefing":
 		r.Action = "daily_briefing"
+	case "transform":
+		r.Action = "transform"
 
 	case "recommendation":
 		r.Action = "lookup_knowledge"
