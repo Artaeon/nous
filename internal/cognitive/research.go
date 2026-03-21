@@ -19,9 +19,8 @@ type InlineResearcher struct {
 func (ir *InlineResearcher) Research(topic string) *ActionResult {
 	if ir.Tools == nil {
 		return &ActionResult{
-			Data:     "research tools unavailable",
-			Source:   "research",
-			NeedsLLM: true,
+			DirectResponse: "research tools unavailable",
+			Source:         "research",
 		}
 	}
 
@@ -50,19 +49,17 @@ func (ir *InlineResearcher) Research(topic string) *ActionResult {
 
 	if len(sections) == 0 {
 		return &ActionResult{
-			Data:     fmt.Sprintf("no research data found for %q", topic),
-			Source:   "research",
-			NeedsLLM: true,
+			DirectResponse: fmt.Sprintf("no research data found for %q", topic),
+			Source:         "research",
 		}
 	}
 
 	return &ActionResult{
-		Data:   strings.Join(sections, "\n\n"),
-		Source: "research",
+		DirectResponse: strings.Join(sections, "\n\n"),
+		Source:         "research",
 		Structured: map[string]string{
 			"topic":        topic,
 			"source_count": fmt.Sprintf("%d", len(sections)),
 		},
-		NeedsLLM: true,
 	}
 }

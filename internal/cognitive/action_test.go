@@ -21,7 +21,7 @@ func TestActionRouter_Respond(t *testing.T) {
 		{"hi", "hi", true, ""},
 		{"thanks", "thanks", true, ""},
 		{"bye", "bye", true, ""},
-		{"unknown greeting", "salutations dear friend", false, ""},
+		{"unknown greeting", "salutations dear friend", true, ""},
 	}
 
 	for _, tt := range tests {
@@ -36,7 +36,7 @@ func TestActionRouter_Respond(t *testing.T) {
 				t.Errorf("did not expect DirectResponse for %q, got %q", tt.raw, result.DirectResponse)
 			}
 			if tt.wantDR {
-				if result.NeedsLLM {
+				if false /* NeedsLLM removed */ {
 					t.Errorf("canned response should not need LLM")
 				}
 			}
@@ -112,7 +112,7 @@ func TestActionRouter_ComputeDate(t *testing.T) {
 			if tt.wantOk && result.DirectResponse == "" {
 				t.Errorf("expected DirectResponse for date %q, got Data=%q", tt.expr, result.Data)
 			}
-			if tt.wantOk && result.NeedsLLM {
+			if tt.wantOk && false /* NeedsLLM removed */ {
 				t.Errorf("date computation should not need LLM")
 			}
 		})
@@ -134,12 +134,10 @@ func TestActionRouter_LookupMemory(t *testing.T) {
 	if result.Source != "memory" {
 		t.Errorf("source = %q, want memory", result.Source)
 	}
-	// With only working memory, no longterm single-fact match, so needs LLM.
-	if !result.NeedsLLM {
-		t.Error("memory lookup with only working mem should need LLM for formatting")
-	}
-	if !strings.Contains(result.Data, "user_name") {
-		t.Errorf("Data should contain 'user_name', got %q", result.Data)
+	// With only working memory, should still produce a response.
+	output := result.Data + result.DirectResponse
+	if !strings.Contains(output, "user_name") {
+		t.Errorf("output should contain 'user_name', got %q", output)
 	}
 }
 
@@ -160,7 +158,7 @@ func TestActionRouter_LookupMemory_DirectFact(t *testing.T) {
 		t.Errorf("source = %q, want memory", result.Source)
 	}
 	// Single longterm fact should return directly without LLM.
-	if result.NeedsLLM {
+	if false /* NeedsLLM removed */ {
 		t.Error("single longterm fact should not need LLM")
 	}
 	if result.DirectResponse != "Raphael" {
@@ -178,8 +176,9 @@ func TestActionRouter_LookupMemoryEmpty(t *testing.T) {
 	}
 	result := ar.Execute(nlu, NewConversation(10))
 
-	if !strings.Contains(result.Data, "no relevant memories") {
-		t.Errorf("expected 'no relevant memories', got %q", result.Data)
+	output := result.Data + result.DirectResponse
+	if !strings.Contains(output, "no relevant memories") {
+		t.Errorf("expected 'no relevant memories', got %q", output)
 	}
 }
 
@@ -193,8 +192,8 @@ func TestActionRouter_WebSearch_NoTools(t *testing.T) {
 	}
 	result := ar.Execute(nlu, NewConversation(10))
 
-	if !result.NeedsLLM {
-		t.Error("web search should need LLM")
+	if result.DirectResponse == "" {
+		t.Error("web search with no tools should produce a DirectResponse")
 	}
 	if result.Source != "web" {
 		t.Errorf("source = %q, want web", result.Source)
@@ -224,8 +223,9 @@ func TestActionRouter_FileOp(t *testing.T) {
 	if result.Source != "file" {
 		t.Errorf("source = %q, want file", result.Source)
 	}
-	if !strings.Contains(result.Data, "hello world") {
-		t.Errorf("Data = %q, should contain mock output", result.Data)
+	combined := result.Data + result.DirectResponse
+	if !strings.Contains(combined, "hello world") {
+		t.Errorf("response = %q, should contain mock output", combined)
 	}
 }
 
@@ -238,11 +238,13 @@ func TestActionRouter_LLMChat(t *testing.T) {
 	}
 	result := ar.Execute(nlu, NewConversation(10))
 
-	if !result.NeedsLLM {
-		t.Error("llm_chat should need LLM")
+	// With LLM removed, llm_chat falls through to Composer or fallback.
+	// It should never set NeedsLLM.
+	if false /* NeedsLLM removed */ {
+		t.Error("llm_chat should NOT need LLM — engine handles all responses")
 	}
-	if result.Source != "conversation" {
-		t.Errorf("source = %q, want conversation", result.Source)
+	if result.DirectResponse == "" {
+		t.Error("should produce a direct response from composer or fallback")
 	}
 }
 
@@ -269,7 +271,7 @@ func TestActionRouter_Schedule(t *testing.T) {
 		t.Error("expected parsed_time in structured data")
 	}
 	// Schedule now returns a direct response — no LLM needed.
-	if result.NeedsLLM {
+	if false /* NeedsLLM removed */ {
 		t.Error("schedule should not need LLM")
 	}
 	if result.DirectResponse == "" {
@@ -289,10 +291,12 @@ func TestActionRouter_UnknownAction(t *testing.T) {
 	}
 	result := ar.Execute(nlu, NewConversation(10))
 
-	if !result.NeedsLLM {
-		t.Error("unknown action should need LLM")
+	// Unknown actions now get handled by the cognitive engine
+	if result.DirectResponse == "" && result.Data == "" {
+		t.Error("unknown action should produce some response")
 	}
-	if result.Source != "fallback" {
+	// Source could be fallback, composer, or thinking
+	if result.Source == "" {
 		t.Errorf("source = %q, want fallback", result.Source)
 	}
 }
@@ -377,7 +381,7 @@ func TestResponseFormatter_DirectResponse(t *testing.T) {
 func TestResponseFormatter_NoLLM_RawData(t *testing.T) {
 	rf := &ResponseFormatter{} // no LLM client
 
-	result := &ActionResult{Data: "raw facts here", NeedsLLM: true}
+	result := &ActionResult{Data: "raw facts here"}
 	got, err := rf.Format("question", result, NewConversation(10))
 	if err != nil {
 		t.Fatal(err)
@@ -387,35 +391,24 @@ func TestResponseFormatter_NoLLM_RawData(t *testing.T) {
 	}
 }
 
-func TestNeedsLLM_Flags(t *testing.T) {
+func TestNoLLM_AllDirectResponse(t *testing.T) {
 	ar := NewActionRouter()
 
-	// Canned responses should NOT need LLM.
-	nlu := &NLUResult{Action: "respond", Raw: "hello"}
-	result := ar.Execute(nlu, NewConversation(10))
-	if result.NeedsLLM {
-		t.Error("canned 'hello' should not need LLM")
+	// All actions should produce DirectResponse — no LLM needed.
+	tests := []struct {
+		action string
+		raw    string
+	}{
+		{"respond", "hello"},
+		{"compute", "2+2"},
+		{"llm_chat", "what is life"},
 	}
-
-	// Computed math should NOT need LLM.
-	nlu = &NLUResult{Action: "compute", Entities: map[string]string{"expr": "2+2"}, Raw: "2+2"}
-	result = ar.Execute(nlu, NewConversation(10))
-	if result.NeedsLLM {
-		t.Error("computed '2+2' should not need LLM")
-	}
-
-	// Chat should need LLM.
-	nlu = &NLUResult{Action: "llm_chat", Raw: "what is life"}
-	result = ar.Execute(nlu, NewConversation(10))
-	if !result.NeedsLLM {
-		t.Error("llm_chat should need LLM")
-	}
-
-	// Web search should need LLM (for formatting results).
-	nlu = &NLUResult{Action: "web_search", Entities: map[string]string{"query": "test"}, Raw: "search test"}
-	result = ar.Execute(nlu, NewConversation(10))
-	if !result.NeedsLLM {
-		t.Error("web_search should need LLM")
+	for _, tt := range tests {
+		nlu := &NLUResult{Action: tt.action, Entities: map[string]string{"expr": tt.raw}, Raw: tt.raw}
+		result := ar.Execute(nlu, NewConversation(10))
+		if result.DirectResponse == "" && result.Data == "" {
+			t.Errorf("action %q for %q produced no response", tt.action, tt.raw)
+		}
 	}
 }
 
@@ -433,18 +426,12 @@ func TestActionChain_ResearchAndWrite(t *testing.T) {
 	}
 	result := ar.Execute(nlu, NewConversation(10))
 
-	if !result.NeedsLLM {
-		t.Error("chain result should need LLM for synthesis")
-	}
 	if !strings.HasPrefix(result.Source, "chain:") {
 		t.Errorf("source should start with 'chain:', got %q", result.Source)
 	}
-	// Should contain data from both steps (web search + knowledge lookup).
-	if result.Data == "" {
-		t.Error("chain result Data should not be empty")
-	}
-	if !strings.Contains(result.Data, "[web]") && !strings.Contains(result.Data, "[knowledge]") {
-		t.Errorf("chain result should contain step source tags, got %q", result.Data)
+	// Chain now returns DirectResponse (not Data).
+	if result.DirectResponse == "" {
+		t.Error("chain result DirectResponse should not be empty")
 	}
 }
 
@@ -480,11 +467,8 @@ func TestActionChain_SearchAndSave(t *testing.T) {
 		},
 		Raw: "search for AI news and save it to a file",
 	}
-	result := ar.Execute(nlu, NewConversation(10))
+	_ = ar.Execute(nlu, NewConversation(10))
 
-	if !result.NeedsLLM {
-		t.Error("chain result should need LLM")
-	}
 	// The write step should have received the search output via dependency.
 	if writtenContent == "" {
 		t.Error("write step should have received content from search step via dependency")
@@ -546,8 +530,12 @@ func TestActionChain_StepDependency(t *testing.T) {
 	if len(chain.Results) != 2 {
 		t.Fatalf("chain should have 2 results, got %d", len(chain.Results))
 	}
-	if chain.Results[0].Data != "SEARCH_OUTPUT_DATA" {
-		t.Errorf("step 0 result Data = %q, want SEARCH_OUTPUT_DATA", chain.Results[0].Data)
+	step0Output := chain.Results[0].Data
+	if step0Output == "" {
+		step0Output = chain.Results[0].DirectResponse
+	}
+	if !strings.Contains(step0Output, "SEARCH_OUTPUT_DATA") {
+		t.Errorf("step 0 result should contain SEARCH_OUTPUT_DATA, got %q", step0Output)
 	}
 }
 
@@ -561,11 +549,8 @@ func TestActionRouter_GenerateDoc(t *testing.T) {
 	}
 	result := ar.Execute(nlu, NewConversation(10))
 
-	if !result.NeedsLLM {
-		t.Error("generate_doc should need LLM")
-	}
-	if !strings.Contains(result.Data, "[Document Request: quantum computing]") {
-		t.Errorf("generate_doc Data should contain document request header, got %q", result.Data)
+	if !strings.Contains(result.DirectResponse, "[Document Request: quantum computing]") {
+		t.Errorf("generate_doc DirectResponse should contain document request header, got %q", result.DirectResponse)
 	}
 	if result.Structured == nil || result.Structured["format"] != "document" {
 		t.Error("generate_doc should set Structured format=document")

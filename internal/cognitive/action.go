@@ -10,7 +10,6 @@ import (
 	"unicode"
 
 	"github.com/artaeon/nous/internal/memory"
-	"github.com/artaeon/nous/internal/ollama"
 	"github.com/artaeon/nous/internal/tools"
 )
 
@@ -19,8 +18,7 @@ type ActionResult struct {
 	Data           string            // raw data/facts gathered
 	Structured     map[string]string // key-value structured data
 	Source         string            // where the data came from (memory, web, file, computed)
-	NeedsLLM       bool             // whether an LLM call is needed to format the response
-	DirectResponse string           // if non-empty, send this directly (no LLM needed)
+	DirectResponse string           // if non-empty, send this directly
 }
 
 // NLUResult holds the output of natural language understanding.
@@ -50,6 +48,21 @@ type ActionRouter struct {
 	VCtx        *VirtualContext
 	Researcher  *InlineResearcher
 	Reminders   *ReminderManager
+	Tracker      *ConversationTracker
+	PersonalResp *PersonalResponseGenerator
+	CogGraph     *CognitiveGraph
+	Patterns     *PatternDetector
+	Semantic     *SemanticEngine
+	Reasoner     *ReasoningEngine
+	Causal       *CausalEngine
+	Composer       *Composer
+	Packages       *PackageLoader
+	GoalPlanner    *GoalPlanner
+	CausalReasoner *GraphCausalReasoner
+	Thinker        *ThinkingEngine
+	Inference      *InferenceEngine
+	Analogy        *AnalogyEngine
+	Pipeline       *ReasoningPipeline
 }
 
 // NewActionRouter creates a router with nil subsystems.
@@ -155,24 +168,22 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 	case "qrcode":
 		return ar.handleGenericTool(nlu, "qrcode")
 	case "calculate":
-		return ar.handleGenericTool(nlu, "calculator")
+		return ar.handleCalculate(nlu)
 	case "password":
-		return ar.handleGenericTool(nlu, "password")
+		return ar.handlePassword(nlu)
 	case "bookmark":
-		return ar.handleGenericTool(nlu, "bookmarks")
+		return ar.handleBookmark(nlu)
 	case "journal":
-		return ar.handleGenericTool(nlu, "journal")
+		return ar.handleJournal(nlu)
 	case "habit":
-		return ar.handleGenericTool(nlu, "habits")
+		return ar.handleHabit(nlu)
 	case "expense":
-		return ar.handleGenericTool(nlu, "expenses")
+		return ar.handleExpense(nlu)
+	case "daily_briefing":
+		return ar.handleDailyBriefing(nlu)
 	default:
-		// Unknown action — let the LLM handle it.
-		return &ActionResult{
-			Data:     nlu.Raw,
-			Source:   "fallback",
-			NeedsLLM: true,
-		}
+		// Try thinking engine for unknown actions
+		return ar.handleLLMChat(nlu, conv)
 	}
 }
 
@@ -184,16 +195,17 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 var metaResponses = map[string]string{
 	"who are you":          "I'm Nous (νοῦς) — your personal AI running fully on your machine. I think locally, remember everything, and get smarter over time.",
 	"what are you":         "I'm Nous, a local AI assistant. I search the web, compute answers, remember your preferences, and help plan your day — all running on your hardware.",
-	"what can you do":      "I can: check weather, run code, manage notes/todos, convert units, set timers/reminders, take screenshots, check news, find files, control volume/brightness, translate text, hash/encode data, look up words, manage processes, check network, compress/extract archives, analyze disk usage, generate QR codes, search the web, do math, and more. All instant, all local.",
+	"what can you do":      "I can: manage your journal, track habits & expenses, save bookmarks, handle notes & todos, check weather, do math, generate passwords, run code, convert units, set reminders, check news, search the web, translate text, find files, manage processes, and much more — 51 tools total. All instant, all local, all in one binary.",
 	"what is your name":    "I'm Nous (νοῦς) — Greek for 'mind'. I'm your personal AI.",
 	"what's your name":     "I'm Nous (νοῦς) — Greek for 'mind'. I'm your personal AI.",
-	"help":                 "Just ask me anything! I can: weather, run code, notes, todos, reminders, screenshots, news, file search, system info, clipboard, unit conversion, web search, math, memory, file I/O, research, and more.",
+	"help":                 "Just ask me anything! Journal, habits, expenses, bookmarks, notes, todos, reminders, weather, math, passwords, code runner, news, web search, file finder, translations, and 35+ more tools. Everything runs locally — your data stays yours.",
 	"what do you know":     "I have a knowledge base, your conversation history, and can search the web for anything I don't know. Ask me anything!",
-	"how do you work":      "I use deterministic code for understanding and computing, and a small LLM only for natural language. Most answers need zero AI calls — I think in code, not tokens.",
-	"your capabilities":    "Weather, code execution, notes, todos, reminders, screenshots, news feeds, file finder, system info, clipboard, unit/currency conversion, web search, math, dates, memory, file I/O, research, document generation, and task planning.",
+	"how do you work":      "I use a pure cognitive engine — knowledge graphs, discourse planning, Markov chains, and compositional text generation. Zero LLM calls, zero external APIs. Everything runs locally in pure Go.",
+	"your capabilities":    "Life management: journal, habits, expenses, bookmarks, notes, todos, reminders, calendar. Productivity: calculator, passwords, timers, code runner, web search, file finder, translator. System: processes, disk usage, network, QR codes, archives, screenshots, clipboard. 51 tools, 1 binary, fully local.",
 }
 
-// handleRespond returns a canned response for greetings, farewells, meta, etc.
+// handleRespond returns a response for greetings, farewells, meta, etc.
+// Uses the Composer engine when available — zero LLM calls.
 func (ar *ActionRouter) handleRespond(nlu *NLUResult) *ActionResult {
 	// Check meta responses first
 	if nlu.Intent == "meta" {
@@ -208,18 +220,386 @@ func (ar *ActionRouter) handleRespond(nlu *NLUResult) *ActionResult {
 		}
 	}
 
+	// Use Composer for greetings — personal, contextual, unique every time
+	if ar.Composer != nil && isGreeting(nlu.Raw) {
+		ctx := ar.BuildComposeContext()
+		resp := ar.Composer.Compose(nlu.Raw, RespGreeting, ctx)
+		if resp != nil && resp.Text != "" {
+			return &ActionResult{
+				DirectResponse: resp.Text,
+				Source:         "composer",
+			}
+		}
+	}
+
+	// Thinking Engine: handle compose, brainstorm, analyze, teach, advise,
+	// compare, summarize, create, plan, debate tasks — the full cognitive loop.
+	if ar.Thinker != nil && ar.Thinker.CanHandle(nlu.Raw) {
+		var ctx *ThinkContext
+		if ar.Tracker != nil {
+			ctx = &ThinkContext{
+				RecentTopics: []string{ar.Tracker.CurrentTopic()},
+			}
+		}
+		result := ar.Thinker.Think(nlu.Raw, ctx)
+		if result != nil && result.Text != "" {
+			return &ActionResult{
+				DirectResponse: result.Text,
+				Source:         "thinking:" + result.Frame,
+			}
+		}
+	}
+
+	// Planning questions: "How do I learn X?" → generate a step-by-step plan
+	if ar.GoalPlanner != nil && IsPlanningQuestion(nlu.Raw) {
+		goal := ExtractGoal(nlu.Raw)
+		if plan := ar.GoalPlanner.PlanFor(goal); plan != nil && len(plan.Steps) > 0 {
+			return &ActionResult{
+				DirectResponse: FormatGoalPlan(plan),
+				Source:         "planner",
+			}
+		}
+	}
+
+	// Counterfactual questions: "What would happen if X?" → causal reasoning
+	if ar.CausalReasoner != nil {
+		if hypothesis, isRemoval := isCounterfactualQuestion(nlu.Raw); hypothesis != "" {
+			var result *CausalChainResult
+			if isRemoval {
+				result = ar.CausalReasoner.WhatIfRemoved(hypothesis)
+			} else {
+				result = ar.CausalReasoner.WhatIf(hypothesis)
+			}
+			if result != nil && len(result.Effects) > 0 {
+				answer := ar.CausalReasoner.ComposeCounterfactualAnswer(hypothesis, result, isRemoval)
+				if answer != "" {
+					return &ActionResult{
+						DirectResponse: answer,
+						Source:         "causal_reasoning",
+					}
+				}
+			}
+		}
+	}
+
+	// Use Composer for ALL respond-type queries — farewells, thanks, conversational
+	if ar.Composer != nil {
+		ctx := ar.BuildComposeContext()
+		respType := ar.ClassifyForComposer(nlu.Raw)
+
+		// For knowledge queries (factual, explain), check if we have knowledge first.
+		// If not, give an honest "I don't know" instead of a confusing bridge response.
+		if respType == RespFactual || respType == RespExplain {
+			if ar.CogGraph != nil {
+				facts, _ := ar.Composer.gatherFacts(nlu.Raw)
+				if len(facts) == 0 {
+					return &ActionResult{
+						DirectResponse: composeHonestFallback(nlu.Raw),
+						Source:         "honest_fallback",
+					}
+				}
+			}
+		}
+
+		resp := ar.Composer.Compose(nlu.Raw, respType, ctx)
+		if resp != nil && resp.Text != "" {
+			return &ActionResult{
+				DirectResponse: resp.Text,
+				Source:         "composer",
+			}
+		}
+	}
+
+	// Last resort: quick canned responses (only if Composer unavailable)
 	if quick := tryQuickResponse(nlu.Raw); quick != "" {
 		return &ActionResult{
 			DirectResponse: quick,
 			Source:         "canned",
 		}
 	}
-	// No canned match — let LLM handle the simple response.
+
 	return &ActionResult{
-		Data:     nlu.Raw,
-		Source:   "canned",
-		NeedsLLM: true,
+		DirectResponse: "I'm here. What do you need?",
+		Source:         "composer",
 	}
+}
+
+// classifyForComposer determines the ResponseType for a query.
+func (ar *ActionRouter) ClassifyForComposer(query string) ResponseType {
+	lower := strings.ToLower(strings.TrimRight(strings.TrimSpace(query), "!?."))
+
+	if isGreeting(query) {
+		return RespGreeting
+	}
+	if isFarewell(lower) {
+		return RespFarewell
+	}
+	if isThankYou(lower) {
+		return RespThankYou
+	}
+
+	// Emotional content → empathetic
+	if isEmotional(lower) {
+		return RespEmpathetic
+	}
+
+	// Reflection/overview queries
+	reflectPatterns := []string{
+		"how am i", "how's my", "how is my", "overview", "overall",
+		"how's everything", "how is everything", "summary", "catch me up",
+		"update me", "brief me", "briefing",
+	}
+	for _, p := range reflectPatterns {
+		if strings.Contains(lower, p) {
+			return RespReflect
+		}
+	}
+
+	// Explanation queries
+	if strings.HasPrefix(lower, "explain") || strings.HasPrefix(lower, "what is") ||
+		strings.HasPrefix(lower, "what are") || strings.HasPrefix(lower, "define") {
+		return RespExplain
+	}
+
+	// Opinion queries
+	if strings.Contains(lower, "what do you think") || strings.Contains(lower, "your opinion") ||
+		strings.Contains(lower, "your take") || strings.Contains(lower, "do you think") ||
+		strings.Contains(lower, "what's your") || strings.Contains(lower, "how do you feel") {
+		return RespOpinion
+	}
+
+	// "Tell me about X" / "who is X" → factual
+	if strings.HasPrefix(lower, "tell me about") || strings.HasPrefix(lower, "who is") ||
+		strings.HasPrefix(lower, "who was") || strings.HasPrefix(lower, "what do you know") {
+		return RespFactual
+	}
+
+	// "Why" questions → personal/causal
+	if strings.HasPrefix(lower, "why") {
+		return RespPersonal
+	}
+
+	// Conversational catch-all
+	if isConversational(query) {
+		return RespConversational
+	}
+
+	// Default: conversational (NEVER returns nil — will always compose something)
+	return RespConversational
+}
+
+func isFarewell(lower string) bool {
+	farewells := []string{
+		"bye", "goodbye", "good bye", "see ya", "see you", "later",
+		"ciao", "take care", "gotta go", "ttyl", "peace", "night",
+		"nite", "good night",
+	}
+	clean := strings.TrimRight(lower, " ")
+	for _, f := range farewells {
+		if clean == f {
+			return true
+		}
+	}
+	return false
+}
+
+func isThankYou(lower string) bool {
+	thanks := []string{
+		"thanks", "thank you", "thx", "ty", "thank you so much",
+		"thanks a lot", "much appreciated", "appreciate it",
+	}
+	clean := strings.TrimRight(lower, " ")
+	for _, t := range thanks {
+		if clean == t {
+			return true
+		}
+	}
+	return false
+}
+
+func isEmotional(lower string) bool {
+	emotional := []string{
+		"i feel", "i'm feeling", "im feeling", "i am feeling",
+		"i'm sad", "im sad", "i'm happy", "im happy",
+		"i'm stressed", "im stressed", "i'm anxious", "im anxious",
+		"i'm depressed", "im depressed", "i'm angry", "im angry",
+		"i'm frustrated", "im frustrated", "i'm tired", "im tired",
+		"i'm exhausted", "im exhausted", "i'm overwhelmed", "im overwhelmed",
+		"i'm lonely", "im lonely", "i'm excited", "im excited",
+		"having a bad day", "having a good day", "rough day",
+		"best day", "worst day", "hard day", "tough day",
+	}
+	for _, e := range emotional {
+		if strings.Contains(lower, e) {
+			return true
+		}
+	}
+	return false
+}
+
+// isGreeting detects greeting-like input.
+func isGreeting(input string) bool {
+	lower := strings.ToLower(strings.TrimRight(strings.TrimSpace(input), "!?."))
+	lower = strings.TrimRight(strings.TrimSuffix(lower, " nous"), " ")
+	greetings := []string{
+		"hi", "hello", "hey", "yo", "sup", "howdy", "greetings",
+		"good morning", "morning", "good afternoon", "good evening",
+		"hi there", "hey there", "hello there", "hola", "bonjour",
+		"what's up", "whats up",
+	}
+	for _, g := range greetings {
+		if lower == g {
+			return true
+		}
+	}
+	return false
+}
+
+// isConversational detects conversational/social input that doesn't need an LLM.
+func isConversational(input string) bool {
+	lower := strings.ToLower(strings.TrimRight(strings.TrimSpace(input), "!?."))
+	patterns := []string{
+		"how are you", "how's it going", "how is it going",
+		"how do you do", "what's new", "how have you been",
+		"i just wanted to talk", "just wanted to chat",
+		"let's talk", "lets talk", "talk to me",
+		"i'm bored", "im bored", "entertain me",
+		"what's going on", "whats going on",
+		"how's your day", "how is your day",
+		"how am i doing", "how's my day", "how is my day",
+		"brief me", "briefing", "daily briefing",
+		"how am i", "how's everything", "how is everything",
+		"give me a summary", "give me an overview",
+		"catch me up", "update me",
+	}
+	for _, p := range patterns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// isCounterfactualQuestion detects "what if" / "without X" questions.
+// Returns the hypothesis and whether it's a removal question.
+func isCounterfactualQuestion(input string) (hypothesis string, isRemoval bool) {
+	lower := strings.ToLower(strings.TrimRight(strings.TrimSpace(input), "?!."))
+
+	// "what would happen without X"
+	removalPatterns := []string{
+		"what would happen without ",
+		"what if there was no ",
+		"what if there were no ",
+		"imagine a world without ",
+		"what happens without ",
+	}
+	for _, p := range removalPatterns {
+		if strings.HasPrefix(lower, p) {
+			return strings.TrimSpace(lower[len(p):]), true
+		}
+	}
+
+	// "what would happen if X"
+	ifPatterns := []string{
+		"what would happen if ",
+		"what if ",
+		"what happens if ",
+		"suppose ",
+		"imagine if ",
+		"what could happen if ",
+	}
+	for _, p := range ifPatterns {
+		if strings.HasPrefix(lower, p) {
+			return strings.TrimSpace(lower[len(p):]), false
+		}
+	}
+
+	return "", false
+}
+
+// composeHonestFallback generates a clear "I don't know" response
+// instead of a confusing bridge to an unrelated topic.
+func composeHonestFallback(query string) string {
+	lower := strings.ToLower(query)
+
+	// Extract the topic they asked about
+	topic := ""
+	prefixes := []string{
+		"tell me about ", "what is ", "what are ", "who is ", "who was ",
+		"explain ", "define ", "describe ",
+	}
+	for _, p := range prefixes {
+		if strings.HasPrefix(lower, p) {
+			topic = strings.TrimRight(strings.TrimSpace(lower[len(p):]), "?!.")
+			break
+		}
+	}
+
+	if topic != "" {
+		fallbacks := []string{
+			"I don't have information about " + topic + " in my knowledge base yet. Want me to search the web for it?",
+			"I haven't learned about " + topic + " yet. You could teach me, or I can search for it.",
+			topic + " isn't in my knowledge base. Want me to look it up online?",
+		}
+		return fallbacks[len(topic)%len(fallbacks)]
+	}
+
+	// Generic honest fallback
+	fallbacks := []string{
+		"I don't have enough information to answer that well. Want me to search for it?",
+		"That's outside my current knowledge. I can search the web or you can teach me about it.",
+		"I don't have strong data on that. Want me to look it up?",
+	}
+	return fallbacks[len(query)%len(fallbacks)]
+}
+
+// buildComposeContext gathers current user context for the Composer.
+func (ar *ActionRouter) BuildComposeContext() *ComposeContext {
+	ctx := &ComposeContext{}
+
+	// Pull user name from long-term memory
+	if ar.LongTermMem != nil {
+		if name, ok := ar.LongTermMem.Retrieve("user_name"); ok {
+			ctx.UserName = name
+		}
+	}
+
+	// Pull habit streak
+	if ar.Tools != nil {
+		if tool, err := ar.Tools.Get("habits"); err == nil {
+			if result, err := tool.Execute(map[string]string{"action": "streak"}); err == nil {
+				if n, err := strconv.Atoi(strings.TrimSpace(result)); err == nil {
+					ctx.HabitStreak = n
+				}
+			}
+		}
+	}
+
+	// Pull spending data from working memory
+	if ar.WorkingMem != nil {
+		for _, slot := range ar.WorkingMem.MostRelevant(10) {
+			switch slot.Key {
+			case "weekly_spend":
+				if v, ok := slot.Value.(float64); ok {
+					ctx.WeeklySpend = v
+				}
+			case "avg_weekly_spend":
+				if v, ok := slot.Value.(float64); ok {
+					ctx.AvgWeeklySpend = v
+				}
+			case "recent_mood":
+				if v, ok := slot.Value.(float64); ok {
+					ctx.RecentMood = v
+				}
+			case "journal_days":
+				if v, ok := slot.Value.(int); ok {
+					ctx.JournalDays = v
+				}
+			}
+		}
+	}
+
+	return ctx
 }
 
 // handleWebSearch executes a web search via the tools registry.
@@ -232,15 +612,15 @@ func (ar *ActionRouter) handleWebSearch(nlu *NLUResult) *ActionResult {
 		query = nlu.Raw
 	}
 	if ar.Tools == nil {
-		return &ActionResult{Data: "web search unavailable", Source: "web", NeedsLLM: true}
+		return &ActionResult{DirectResponse: "web search unavailable", Source: "web"}
 	}
 	tool, err := ar.Tools.Get("websearch")
 	if err != nil {
-		return &ActionResult{Data: "web search tool not found", Source: "web", NeedsLLM: true}
+		return &ActionResult{DirectResponse: "web search tool not found", Source: "web"}
 	}
 	result, err := tool.Execute(map[string]string{"query": query})
 	if err != nil {
-		return &ActionResult{Data: fmt.Sprintf("search error: %v", err), Source: "web", NeedsLLM: true}
+		return &ActionResult{DirectResponse: fmt.Sprintf("search error: %v", err), Source: "web"}
 	}
 	// If we got results, format top 3 as a direct response — no LLM needed.
 	if result != "" && !strings.HasPrefix(result, "No results found") {
@@ -272,40 +652,109 @@ func (ar *ActionRouter) handleWebSearch(nlu *NLUResult) *ActionResult {
 		}
 		if len(formatted) > 0 {
 			direct := fmt.Sprintf("Here's what I found for \"%s\":\n\n%s", query, strings.Join(formatted, "\n\n"))
+
+			// Ingest search snippets as facts for follow-up questions
+			if ar.Tracker != nil {
+				ar.Tracker.IngestContent(result, "web:"+query, query)
+			}
+			// Also ingest into cognitive graph and semantic engine
+			if ar.CogGraph != nil {
+				IngestToGraph(ar.CogGraph, result, "web:"+query, query)
+			}
+			if ar.Semantic != nil {
+				ar.Semantic.IngestText(result)
+			}
+
 			return &ActionResult{DirectResponse: direct, Source: "web"}
 		}
 	}
 	// No usable results — let LLM explain.
-	return &ActionResult{Data: result, Source: "web", NeedsLLM: true}
+	return &ActionResult{DirectResponse: result, Source: "web"}
 }
 
-// handleFetchURL downloads content from a URL.
+// handleFetchURL downloads content from a URL using the summarize tool for
+// better HTML extraction. Stores content in working memory for follow-up questions.
 func (ar *ActionRouter) handleFetchURL(nlu *NLUResult) *ActionResult {
 	url := nlu.Entities["url"]
 	if url == "" {
-		return &ActionResult{Data: "no URL provided", Source: "web", NeedsLLM: true}
+		return &ActionResult{DirectResponse: "no URL provided", Source: "web"}
 	}
 	if ar.Tools == nil {
-		return &ActionResult{Data: "fetch tool unavailable", Source: "web", NeedsLLM: true}
+		return &ActionResult{DirectResponse: "fetch tool unavailable", Source: "web"}
 	}
-	tool, err := ar.Tools.Get("fetch")
-	if err != nil {
-		return &ActionResult{Data: "fetch tool not found", Source: "web", NeedsLLM: true}
+
+	// Prefer the summarize tool (smart HTML extraction) over raw fetch
+	var result string
+	var err error
+	tool, toolErr := ar.Tools.Get("summarize")
+	if toolErr == nil {
+		result, err = tool.Execute(map[string]string{"url": url})
+	} else {
+		// Fallback to raw fetch if summarize unavailable
+		fetchTool, fetchErr := ar.Tools.Get("fetch")
+		if fetchErr != nil {
+			return &ActionResult{DirectResponse: "fetch tool not found", Source: "web"}
+		}
+		result, err = fetchTool.Execute(map[string]string{"url": url})
 	}
-	result, err := tool.Execute(map[string]string{"url": url})
+
 	if err != nil {
 		return &ActionResult{
 			DirectResponse: fmt.Sprintf("Could not fetch %s: %v", url, err),
 			Source:         "web",
 		}
 	}
-	// Truncate long content for direct display
-	content := result
-	if len(content) > 2000 {
-		content = content[:2000] + "\n... (truncated, showing first 2000 chars)"
+
+	// Store in working memory for raw retrieval
+	if ar.WorkingMem != nil && result != "" {
+		memContent := result
+		if len(memContent) > 4000 {
+			memContent = memContent[:4000]
+		}
+		ar.WorkingMem.Store("fetched:"+url, memContent, 0.9)
 	}
+
+	// Extract structured facts for follow-up questions
+	topic := extractTopicFromURL(url)
+	factCount := 0
+	if ar.Tracker != nil && result != "" {
+		factCount = ar.Tracker.IngestContent(result, url, topic)
+	}
+
+	// Also ingest into cognitive graph for deep reasoning
+	if ar.CogGraph != nil && result != "" {
+		graphRels := IngestToGraph(ar.CogGraph, result, url, topic)
+		if graphRels > 0 {
+			// Run inference to derive new knowledge
+			ie := NewInferenceEngine(ar.CogGraph)
+			ie.Transitive()
+			ar.CogGraph.Save()
+		}
+	}
+	// Build semantic co-occurrence vectors
+	if ar.Semantic != nil && result != "" {
+		ar.Semantic.IngestText(result)
+	}
+
+	// Compose a summary from extracted facts, or truncate raw content
+	var display string
+	if ar.Tracker != nil && factCount > 0 {
+		display = ar.Tracker.TopicSummary()
+	}
+	if display == "" {
+		display = result
+		if len(display) > 3000 {
+			display = display[:3000] + "\n\n... (truncated)"
+		}
+	}
+
+	suffix := ""
+	if factCount > 0 {
+		suffix = fmt.Sprintf("\n\nI extracted %d facts — ask me anything about this page!", factCount)
+	}
+
 	return &ActionResult{
-		DirectResponse: fmt.Sprintf("Content from %s:\n\n%s", url, content),
+		DirectResponse: fmt.Sprintf("Content from %s:\n\n%s%s", url, display, suffix),
 		Source:         "web",
 	}
 }
@@ -317,7 +766,7 @@ func (ar *ActionRouter) handleFileOp(nlu *NLUResult) *ActionResult {
 		op = "read" // default
 	}
 	if ar.Tools == nil {
-		return &ActionResult{Data: "file tools unavailable", Source: "file", NeedsLLM: true}
+		return &ActionResult{DirectResponse: "file tools unavailable", Source: "file"}
 	}
 
 	// Map operation names to tool names.
@@ -337,7 +786,7 @@ func (ar *ActionRouter) handleFileOp(nlu *NLUResult) *ActionResult {
 
 	tool, err := ar.Tools.Get(toolName)
 	if err != nil {
-		return &ActionResult{Data: fmt.Sprintf("tool %q not found", toolName), Source: "file", NeedsLLM: true}
+		return &ActionResult{DirectResponse: fmt.Sprintf("tool %q not found", toolName), Source: "file"}
 	}
 
 	// Build args from entities.
@@ -350,9 +799,9 @@ func (ar *ActionRouter) handleFileOp(nlu *NLUResult) *ActionResult {
 
 	result, err := tool.Execute(args)
 	if err != nil {
-		return &ActionResult{Data: fmt.Sprintf("file op error: %v", err), Source: "file", NeedsLLM: true}
+		return &ActionResult{DirectResponse: fmt.Sprintf("file op error: %v", err), Source: "file"}
 	}
-	return &ActionResult{Data: result, Source: "file", NeedsLLM: true}
+	return &ActionResult{DirectResponse: result, Source: "file"}
 }
 
 // handleCompute evaluates math expressions and date calculations.
@@ -374,7 +823,7 @@ func (ar *ActionRouter) handleCompute(nlu *NLUResult) *ActionResult {
 	// Try math evaluation.
 	result, err := evaluateMath(expr)
 	if err != nil {
-		return &ActionResult{Data: fmt.Sprintf("cannot compute: %v", err), Source: "computed", NeedsLLM: true}
+		return &ActionResult{DirectResponse: fmt.Sprintf("cannot compute: %v", err), Source: "computed"}
 	}
 	return &ActionResult{
 		DirectResponse: result,
@@ -388,6 +837,19 @@ func (ar *ActionRouter) handleLookupMemory(nlu *NLUResult) *ActionResult {
 	query := nlu.Entities["query"]
 	if query == "" {
 		query = nlu.Raw
+	}
+
+	// For "remember" intent (personal statements like "I love philosophy"),
+	// use the Composer to generate a natural acknowledgment response.
+	if nlu.Intent == "remember" && ar.Composer != nil {
+		ctx := ar.BuildComposeContext()
+		resp := ar.Composer.Compose(nlu.Raw, RespConversational, ctx)
+		if resp != nil && resp.Text != "" {
+			return &ActionResult{
+				DirectResponse: resp.Text,
+				Source:         "composer",
+			}
+		}
 	}
 
 	var parts []string
@@ -424,7 +886,7 @@ func (ar *ActionRouter) handleLookupMemory(nlu *NLUResult) *ActionResult {
 	}
 
 	if len(parts) == 0 {
-		return &ActionResult{Data: "no relevant memories found", Source: "memory", NeedsLLM: true}
+		return &ActionResult{DirectResponse: "no relevant memories found", Source: "memory"}
 	}
 
 	// Simple recall: if there's exactly one longterm fact, return it directly.
@@ -450,8 +912,8 @@ func (ar *ActionRouter) handleLookupMemory(nlu *NLUResult) *ActionResult {
 		}
 	}
 
-	// Multiple facts or complex queries — let LLM synthesize.
-	return &ActionResult{Data: strings.Join(parts, "\n"), Source: "memory", NeedsLLM: true}
+	// Multiple facts or complex queries — return combined data.
+	return &ActionResult{DirectResponse: strings.Join(parts, "\n"), Source: "memory"}
 }
 
 // handleLookupKnowledge searches the knowledge vector store.
@@ -462,6 +924,69 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 	}
 	if query == "" {
 		query = nlu.Raw
+	}
+
+	// Full reasoning pipeline: graph → inference → reasoning → causal → analogy → thinking → compose
+	if ar.Pipeline != nil {
+		pr := ar.Pipeline.Process(query)
+		if pr != nil && (len(pr.DirectFacts) > 0 || len(pr.InferredFacts) > 0 || pr.ReasoningTrace != "" || pr.ThinkingResult != "") {
+			response := ar.Pipeline.ComposeResponse(query, pr)
+			if response != "" {
+				source := "pipeline"
+				if len(pr.Sources) > 0 {
+					source = strings.Join(pr.Sources, "+")
+				}
+				return &ActionResult{
+					DirectResponse: response,
+					Source:         source,
+				}
+			}
+		}
+	}
+
+	// Fallback: individual engines (when pipeline not wired)
+
+	// Try multi-hop reasoning
+	if ar.Reasoner != nil && ar.CogGraph != nil && ar.CogGraph.NodeCount() > 0 {
+		chain := ar.Reasoner.Reason(query)
+		if chain != nil && chain.Answer != "" {
+			return &ActionResult{
+				DirectResponse: chain.Answer,
+				Source:         "reasoning",
+			}
+		}
+	}
+
+	// Use Composer for knowledge responses
+	if ar.Composer != nil && ar.Composer.Graph != nil {
+		ctx := ar.BuildComposeContext()
+		respType := ar.ClassifyForComposer(nlu.Raw)
+		resp := ar.Composer.Compose(nlu.Raw, respType, ctx)
+		if resp != nil && resp.Text != "" {
+			return &ActionResult{
+				DirectResponse: resp.Text,
+				Source:         "composer",
+			}
+		}
+	}
+
+	// Fallback: raw cognitive graph fact dump
+	if ar.CogGraph != nil && ar.CogGraph.NodeCount() > 0 {
+		ga := ar.CogGraph.Query(query)
+		if ga != nil && len(ga.DirectFacts) > 0 {
+			return &ActionResult{
+				DirectResponse: ar.CogGraph.ComposeAnswer(query, ga),
+				Source:         "cognitive_graph",
+			}
+		}
+	}
+
+	// Try extractive QA — if we have ingested facts about this topic
+	if ar.Tracker != nil && ar.Tracker.Facts.Size() > 0 {
+		answer := ar.Tracker.AnswerQuestion(query)
+		if answer != "" {
+			return &ActionResult{DirectResponse: answer, Source: "extractive"}
+		}
 	}
 
 	var parts []string
@@ -500,7 +1025,7 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 				return ar.handleWebSearch(nlu)
 			}
 		}
-		return &ActionResult{Data: query, Source: "knowledge", NeedsLLM: true}
+		return &ActionResult{DirectResponse: query, Source: "knowledge"}
 	}
 
 	// Single high-confidence result — return directly without LLM.
@@ -518,8 +1043,8 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 		}
 	}
 
-	// Multiple results or ambiguous — let LLM synthesize.
-	return &ActionResult{Data: strings.Join(parts, "\n"), Source: "knowledge", NeedsLLM: true}
+	// Multiple results or ambiguous — return combined data.
+	return &ActionResult{DirectResponse: strings.Join(parts, "\n"), Source: "knowledge"}
 }
 
 // handleLookupWeb tries knowledge first, falls back to web search.
@@ -536,7 +1061,7 @@ func (ar *ActionRouter) handleLookupWeb(nlu *NLUResult) *ActionResult {
 			for _, r := range results {
 				parts = append(parts, fmt.Sprintf("[%s] %s", r.Source, r.Text))
 			}
-			return &ActionResult{Data: strings.Join(parts, "\n"), Source: "knowledge", NeedsLLM: true}
+			return &ActionResult{DirectResponse: strings.Join(parts, "\n"), Source: "knowledge"}
 		}
 	}
 
@@ -632,10 +1157,14 @@ func (ar *ActionRouter) ExecuteChain(chain *ActionChain, nlu *NLUResult, conv *C
 		// If this step depends on a previous step, inject that step's output.
 		if step.DependsOn >= 0 && step.DependsOn < i {
 			prev := chain.Results[step.DependsOn]
-			stepNLU.Entities["_chain_input"] = prev.Data
+			chainInput := prev.Data
+			if chainInput == "" {
+				chainInput = prev.DirectResponse
+			}
+			stepNLU.Entities["_chain_input"] = chainInput
 			// For file write steps, use previous output as content.
 			if step.Action == "file_op" && stepNLU.Entities["op"] == "write" {
-				stepNLU.Entities["content"] = prev.Data
+				stepNLU.Entities["content"] = chainInput
 			}
 		}
 
@@ -655,9 +1184,8 @@ func (ar *ActionRouter) ExecuteChain(chain *ActionChain, nlu *NLUResult, conv *C
 	// Combine all step outputs into a single result.
 	combined := strings.Join(allData, "\n\n---\n\n")
 	return &ActionResult{
-		Data:     combined,
-		Source:   "chain:" + lastSource,
-		NeedsLLM: true,
+		DirectResponse: combined,
+		Source:         "chain:" + lastSource,
 	}
 }
 
@@ -686,11 +1214,7 @@ func (ar *ActionRouter) executeSingleAction(nlu *NLUResult, conv *Conversation) 
 	case "llm_chat":
 		return ar.handleLLMChat(nlu, conv)
 	default:
-		return &ActionResult{
-			Data:     nlu.Raw,
-			Source:   "fallback",
-			NeedsLLM: true,
-		}
+		return ar.handleLLMChat(nlu, conv)
 	}
 }
 
@@ -725,7 +1249,7 @@ func (ar *ActionRouter) handleChain(nlu *NLUResult, conv *Conversation) *ActionR
 }
 
 // handleGenerateDoc extracts a topic, runs web search + knowledge lookup,
-// combines results, and returns with NeedsLLM=true for document formatting.
+// combines results, and returns for document formatting.
 func (ar *ActionRouter) handleGenerateDoc(nlu *NLUResult, conv *Conversation) *ActionResult {
 	topic := nlu.Entities["topic"]
 	if topic == "" {
@@ -742,8 +1266,7 @@ func (ar *ActionRouter) handleGenerateDoc(nlu *NLUResult, conv *Conversation) *A
 		"format": "document",
 		"topic":  topic,
 	}
-	result.Data = fmt.Sprintf("[Document Request: %s]\n\n%s", topic, result.Data)
-	result.NeedsLLM = true
+	result.DirectResponse = fmt.Sprintf("[Document Request: %s]\n\n%s", topic, result.DirectResponse)
 	return result
 }
 
@@ -752,7 +1275,7 @@ func (ar *ActionRouter) handleGenerateDoc(nlu *NLUResult, conv *Conversation) *A
 // -----------------------------------------------------------------------
 
 // researchChain builds a chain for "research X" or "create a document about X".
-// Steps: web search -> knowledge lookup -> combine (NeedsLLM=true for synthesis).
+// Steps: web search -> knowledge lookup -> combine for synthesis.
 func researchChain(topic string) *ActionChain {
 	return &ActionChain{
 		Steps: []ChainStep{
@@ -809,39 +1332,101 @@ func searchAndExplainChain(topic string) *ActionChain {
 }
 
 // handleLLMChat passes through to the LLM for conversational responses.
+// BUT: tries extractive QA first to avoid LLM calls entirely.
 func (ar *ActionRouter) handleLLMChat(nlu *NLUResult, conv *Conversation) *ActionResult {
-	// Gather any relevant context from memory to enrich the LLM call.
-	var context []string
-	if ar.WorkingMem != nil {
-		slots := ar.WorkingMem.MostRelevant(3)
-		for _, s := range slots {
-			context = append(context, fmt.Sprintf("%s: %v", s.Key, s.Value))
+	// Record user action pattern
+	if ar.Patterns != nil {
+		ar.Patterns.RecordAction("chat")
+	}
+
+	// Self-correction: detect when user corrects a previous answer
+	if ar.CogGraph != nil {
+		if correction := DetectCorrection(nlu.Raw); correction != nil {
+			ApplyCorrection(ar.CogGraph, *correction)
 		}
 	}
 
-	// Weave virtual context for richer grounding.
-	// Use PathMedium filtering for conversational queries to prevent
-	// code-indexed content from contaminating general Q&A responses.
-	if ar.VCtx != nil {
-		query := nlu.Entities["topic"]
-		if query == "" {
-			query = nlu.Raw
-		}
-		assembly := ar.VCtx.WeaveForPath(query, PathMedium)
-		if woven := assembly.FormatForPrompt(); woven != "" {
-			context = append(context, woven)
+	// Record event for causal analysis
+	if ar.Causal != nil {
+		ar.Causal.RecordEvent("chat", map[string]string{"query": nlu.Raw})
+	}
+
+	// Try multi-hop reasoning first — chain-of-thought over the graph
+	if ar.Reasoner != nil && ar.CogGraph != nil && ar.CogGraph.NodeCount() > 0 {
+		chain := ar.Reasoner.Reason(nlu.Raw)
+		if chain != nil && chain.Answer != "" {
+			answer := chain.Answer
+			if ar.PersonalResp != nil {
+				topic := ""
+				if ar.Tracker != nil {
+					topic = ar.Tracker.CurrentTopic()
+				}
+				answer = ar.PersonalResp.EnrichWithContext(answer, topic)
+				answer = ar.PersonalResp.PersonalizeResponse(answer)
+			}
+			return &ActionResult{DirectResponse: answer, Source: "reasoning"}
 		}
 	}
 
-	data := nlu.Raw
-	if len(context) > 0 {
-		data = nlu.Raw + "\n\n[Context]\n" + strings.Join(context, "\n")
+	// Try cognitive graph — direct fact lookup with spreading activation
+	if ar.CogGraph != nil && ar.CogGraph.NodeCount() > 0 {
+		ga := ar.CogGraph.Query(nlu.Raw)
+		if ga != nil && len(ga.DirectFacts) > 0 {
+			answer := ar.CogGraph.ComposeAnswer(nlu.Raw, ga)
+			if answer != "" {
+				if ar.PersonalResp != nil {
+					topic := ""
+					if ar.Tracker != nil {
+						topic = ar.Tracker.CurrentTopic()
+					}
+					answer = ar.PersonalResp.EnrichWithContext(answer, topic)
+					answer = ar.PersonalResp.PersonalizeResponse(answer)
+				}
+				return &ActionResult{DirectResponse: answer, Source: "cognitive_graph"}
+			}
+		}
 	}
 
+	// Try extractive QA — if we have facts about the topic, answer directly
+	if ar.Tracker != nil {
+		// Check for continuation requests ("tell me more", "go on")
+		if ar.Tracker.IsContinuation(nlu.Raw) {
+			more := ar.Tracker.ContinueResponse()
+			if more != "" {
+				return &ActionResult{DirectResponse: more, Source: "extractive"}
+			}
+		}
+
+		// Check for follow-up questions about current topic
+		if ar.Tracker.IsFollowUp(nlu.Raw) || ar.Tracker.Facts.Size() > 0 {
+			answer := ar.Tracker.AnswerQuestion(nlu.Raw)
+			if answer != "" {
+				// Enrich with personal context if available
+				if ar.PersonalResp != nil {
+					topic := ar.Tracker.CurrentTopic()
+					answer = ar.PersonalResp.EnrichWithContext(answer, topic)
+					answer = ar.PersonalResp.PersonalizeResponse(answer)
+				}
+				return &ActionResult{DirectResponse: answer, Source: "extractive"}
+			}
+		}
+	}
+
+	// Composer engine — generates natural language from structured knowledge.
+	// Zero-LLM path: graph facts → natural sentences. Always produces a response.
+	if ar.Composer != nil {
+		respType := ar.ClassifyForComposer(nlu.Raw)
+		ctx := ar.BuildComposeContext()
+		resp := ar.Composer.Compose(nlu.Raw, respType, ctx)
+		if resp != nil && resp.Text != "" {
+			return &ActionResult{DirectResponse: resp.Text, Source: "composer"}
+		}
+	}
+
+	// Fallback — Composer unavailable or returned empty (should not happen).
 	return &ActionResult{
-		Data:     data,
-		Source:   "conversation",
-		NeedsLLM: true,
+		DirectResponse: "I'm not sure how to answer that — could you rephrase?",
+		Source:         "fallback",
 	}
 }
 
@@ -1101,6 +1686,25 @@ func formatNumber(v float64) string {
 	return s
 }
 
+// extractTopicFromURL pulls a topic name from a URL.
+// "https://stoicera.com" → "stoicera", "https://golang.org/doc/go1.21" → "golang"
+func extractTopicFromURL(url string) string {
+	// Strip protocol
+	u := url
+	for _, prefix := range []string{"https://", "http://", "www."} {
+		u = strings.TrimPrefix(u, prefix)
+	}
+	// Take the domain part
+	if idx := strings.Index(u, "/"); idx > 0 {
+		u = u[:idx]
+	}
+	// Remove TLD
+	if idx := strings.LastIndex(u, "."); idx > 0 {
+		u = u[:idx]
+	}
+	return u
+}
+
 func truncStr(s string, n int) string {
 	if len(s) > n {
 		return s[:n] + "..."
@@ -1222,76 +1826,28 @@ func parseRelativeTime(s string) (time.Time, bool) {
 // -----------------------------------------------------------------------
 
 // ResponseFormatter takes raw action data and formats it into natural language.
-// This is the ONLY place where the LLM is called for response generation.
+// Pure cognitive engine — no LLM calls.
 type ResponseFormatter struct {
-	LLM *ollama.Client
+	PersonalResp *PersonalResponseGenerator
 }
 
-const responseSystemPrompt = `You are Nous. Present the following information naturally and concisely. Do not add information beyond what is provided. Be direct.`
-
 // Format turns raw data into a natural language response.
-// If ActionResult.DirectResponse is set, returns it immediately (no LLM).
-// Otherwise, makes ONE LLM call to format the data naturally.
 func (rf *ResponseFormatter) Format(query string, result *ActionResult, conv *Conversation) (string, error) {
-	// Direct response — zero LLM calls.
 	if result.DirectResponse != "" {
 		return result.DirectResponse, nil
 	}
-
-	if rf.LLM == nil {
-		// No LLM available — return raw data.
-		return result.Data, nil
-	}
-
-	msgs := []ollama.Message{
-		{Role: "system", Content: responseSystemPrompt},
-		{Role: "user", Content: fmt.Sprintf("Question: %s\nData: %s\nAnswer:", query, result.Data)},
-	}
-
-	resp, err := rf.LLM.Chat(msgs, &ollama.ModelOptions{
-		Temperature: 0.5,
-		NumPredict:  150,
-		NumCtx:      1024,
-	})
-	if err != nil {
-		return result.Data, err
-	}
-
-	return strings.TrimSpace(resp.Message.Content), nil
+	return result.Data, nil
 }
 
 // FormatStream is the streaming version of Format.
 func (rf *ResponseFormatter) FormatStream(query string, result *ActionResult, conv *Conversation, onToken func(string, bool)) (string, error) {
-	// Direct response — zero LLM calls.
-	if result.DirectResponse != "" {
-		onToken(result.DirectResponse, true)
-		return result.DirectResponse, nil
+	text := result.DirectResponse
+	if text == "" {
+		text = result.Data
 	}
-
-	if rf.LLM == nil {
-		onToken(result.Data, true)
-		return result.Data, nil
+	if text == "" {
+		text = "I'm not sure how to answer that — could you rephrase?"
 	}
-
-	msgs := []ollama.Message{
-		{Role: "system", Content: responseSystemPrompt},
-		{Role: "user", Content: fmt.Sprintf("Question: %s\nData: %s\nAnswer:", query, result.Data)},
-	}
-
-	var fullAnswer strings.Builder
-	_, err := rf.LLM.ChatStream(msgs, &ollama.ModelOptions{
-		Temperature: 0.5,
-		NumPredict:  150,
-		NumCtx:      1024,
-	}, func(token string, done bool) {
-		if !done {
-			fullAnswer.WriteString(token)
-		}
-		onToken(token, done)
-	})
-	if err != nil {
-		return "", err
-	}
-
-	return strings.TrimSpace(fullAnswer.String()), nil
+	onToken(text, true)
+	return text, nil
 }

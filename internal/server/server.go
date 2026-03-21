@@ -32,10 +32,11 @@ type Server struct {
 	apiKey     string
 	server     *http.Server
 
-	// New architecture: NLU → Action → Response (max 1 LLM call)
+	// New architecture: NLU → Action → Compose (0 LLM calls)
 	nlu       *cognitive.NLU
 	actions   *cognitive.ActionRouter
 	formatter *cognitive.ResponseFormatter
+	composer  *cognitive.Composer
 
 	// Extended data sources for dashboard/memory endpoints
 	workingMem  *memory.WorkingMemory
@@ -136,10 +137,22 @@ func New(addr string, board *blackboard.Blackboard, perceiver *cognitive.Perceiv
 func (s *Server) SetFastPath(responder *cognitive.FastPathResponder, conv *cognitive.Conversation) {
 	s.fastPath = responder
 	s.conv = conv
-	// Wire the response formatter with the same LLM
-	if responder != nil && responder.LLM != nil {
-		s.formatter = &cognitive.ResponseFormatter{LLM: responder.LLM}
+	// Wire the response formatter
+	if responder != nil {
+		s.formatter = &cognitive.ResponseFormatter{}
 	}
+}
+
+// SetPersonalResp wires the PersonalResponseGenerator into the response formatter.
+func (s *Server) SetPersonalResp(pr *cognitive.PersonalResponseGenerator) {
+	if s.formatter != nil {
+		s.formatter.PersonalResp = pr
+	}
+}
+
+// SetComposer wires the Composer engine for fully LLM-free response generation.
+func (s *Server) SetComposer(c *cognitive.Composer) {
+	s.composer = c
 }
 
 // SetDataSources connects memory, tools, training, and session subsystems
@@ -214,7 +227,7 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 
 		start := time.Now()
 
-		// NEW: NLU → Action → Response pipeline (max 1 LLM call)
+		// NLU → Action → Compose pipeline (0 LLM calls)
 		if s.nlu != nil && s.actions != nil && s.conv != nil {
 			nluResult := s.nlu.UnderstandWithContext(message, s.conv)
 			if nluResult.Confidence >= 0.5 {
@@ -224,14 +237,18 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 					s.conv.Assistant(actionResult.DirectResponse)
 					return actionResult.DirectResponse, time.Since(start).Milliseconds()
 				}
-				if actionResult.NeedsLLM && s.formatter != nil {
-					answer, err := s.formatter.Format(message, actionResult, s.conv)
-					if err == nil {
-						s.conv.User(message)
-						s.conv.Assistant(answer)
-						return answer, time.Since(start).Milliseconds()
-					}
-				}
+			}
+		}
+
+		// Composer engine: generates response without any LLM
+		if s.composer != nil && s.actions != nil && s.conv != nil {
+			respType := s.actions.ClassifyForComposer(message)
+			ctx := s.actions.BuildComposeContext()
+			resp := s.composer.Compose(message, respType, ctx)
+			if resp != nil && resp.Text != "" {
+				s.conv.User(message)
+				s.conv.Assistant(resp.Text)
+				return resp.Text, time.Since(start).Milliseconds()
 			}
 		}
 
@@ -315,8 +332,7 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 
 		start := time.Now()
 
-		// === NEW ARCHITECTURE: NLU → Action → Response ===
-		// Maximum 1 LLM call (response formatting). Most queries need 0.
+		// === NLU → Action → Compose (0 LLM calls) ===
 		if s.nlu != nil && s.actions != nil && s.conv != nil {
 			nluResult := s.nlu.UnderstandWithContext(message, s.conv)
 
@@ -334,43 +350,26 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 					ms := time.Since(start).Milliseconds()
 					fmt.Fprintf(w, "data: {\"t\":\"\",\"d\":true,\"ms\":%d}\n\n", ms)
 					flusher.Flush()
-
-					// Learn for crystal cache
-					if s.fastPath != nil && s.fastPath.ResponseCrystals != nil && len(actionResult.DirectResponse) > 20 {
-						s.fastPath.ResponseCrystals.Learn(message, actionResult.DirectResponse, 0.8)
-					}
 					return
 				}
+			}
+		}
 
-				// Action gathered data → 1 LLM call to format response
-				if actionResult.NeedsLLM && s.formatter != nil {
-					s.conv.User(message)
-					var answer string
-					_, err := s.formatter.FormatStream(message, actionResult, s.conv, func(token string, done bool) {
-						if done {
-							if token != "" {
-								tokenJSON, _ := json.Marshal(token)
-								fmt.Fprintf(w, "data: {\"t\":%s,\"d\":false}\n\n", tokenJSON)
-								flusher.Flush()
-							}
-							ms := time.Since(start).Milliseconds()
-							fmt.Fprintf(w, "data: {\"t\":\"\",\"d\":true,\"ms\":%d}\n\n", ms)
-						} else {
-							answer += token
-							tokenJSON, _ := json.Marshal(token)
-							fmt.Fprintf(w, "data: {\"t\":%s,\"d\":false}\n\n", tokenJSON)
-						}
-						flusher.Flush()
-					})
-					if err == nil {
-						s.conv.Assistant(strings.TrimSpace(answer))
-						if s.fastPath != nil && s.fastPath.ResponseCrystals != nil && len(answer) > 20 {
-							s.fastPath.ResponseCrystals.Learn(message, strings.TrimSpace(answer), 0.7)
-						}
-						return
-					}
-					// LLM formatting failed — fall through to legacy pipeline
-				}
+		// Composer engine: generates response without any LLM (streaming)
+		if s.composer != nil && s.actions != nil && s.conv != nil {
+			respType := s.actions.ClassifyForComposer(message)
+			ctx := s.actions.BuildComposeContext()
+			resp := s.composer.Compose(message, respType, ctx)
+			if resp != nil && resp.Text != "" {
+				s.conv.User(message)
+				s.conv.Assistant(resp.Text)
+				tokenJSON, _ := json.Marshal(resp.Text)
+				fmt.Fprintf(w, "data: {\"t\":%s,\"d\":false}\n\n", tokenJSON)
+				flusher.Flush()
+				ms := time.Since(start).Milliseconds()
+				fmt.Fprintf(w, "data: {\"t\":\"\",\"d\":true,\"ms\":%d}\n\n", ms)
+				flusher.Flush()
+				return
 			}
 		}
 

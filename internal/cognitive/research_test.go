@@ -11,14 +11,12 @@ func TestInlineResearcher_NoTools(t *testing.T) {
 	ir := &InlineResearcher{Tools: nil}
 	result := ir.Research("quantum physics")
 
-	if !result.NeedsLLM {
-		t.Error("expected NeedsLLM=true when tools are nil")
-	}
 	if result.Source != "research" {
 		t.Errorf("source = %q, want research", result.Source)
 	}
-	if !strings.Contains(result.Data, "unavailable") {
-		t.Errorf("expected 'unavailable' in Data, got %q", result.Data)
+	output := result.Data + result.DirectResponse
+	if !strings.Contains(output, "unavailable") {
+		t.Errorf("expected 'unavailable' in output, got %q", output)
 	}
 }
 
@@ -48,22 +46,19 @@ func TestInlineResearcher_CombinesResults(t *testing.T) {
 	ir := &InlineResearcher{Tools: reg}
 	result := ir.Research("quantum physics")
 
-	if !result.NeedsLLM {
-		t.Error("expected NeedsLLM=true")
-	}
 	if result.Source != "research" {
 		t.Errorf("source = %q, want research", result.Source)
 	}
 
 	// Should contain both web search and wikipedia sections
-	if !strings.Contains(result.Data, "[Web Search Results]") {
-		t.Error("expected [Web Search Results] section in Data")
+	if !strings.Contains(result.DirectResponse, "[Web Search Results]") {
+		t.Error("expected [Web Search Results] section in DirectResponse")
 	}
-	if !strings.Contains(result.Data, "[Wikipedia]") {
-		t.Error("expected [Wikipedia] section in Data")
+	if !strings.Contains(result.DirectResponse, "[Wikipedia]") {
+		t.Error("expected [Wikipedia] section in DirectResponse")
 	}
-	if !strings.Contains(result.Data, "quantum physics") {
-		t.Error("expected topic name in Data")
+	if !strings.Contains(result.DirectResponse, "quantum physics") {
+		t.Error("expected topic name in DirectResponse")
 	}
 
 	// Should have structured metadata
@@ -100,8 +95,8 @@ func TestActionRouter_Research(t *testing.T) {
 	if result.Source != "research" {
 		t.Errorf("source = %q, want research", result.Source)
 	}
-	if !result.NeedsLLM {
-		t.Error("research should need LLM for formatting")
+	if result.DirectResponse == "" {
+		t.Error("research should produce a DirectResponse")
 	}
 }
 
