@@ -12,7 +12,7 @@ All benchmarks measured on AMD Ryzen 7 5800H (16 threads), Go 1.22, Linux.
 | Pipeline: add 5 steps | 43.1 μs | 24 | 19,104 B |
 | Pipeline: build context (10 steps) | 1.88 μs | 25 | 2,361 B |
 
-**Takeaway**: The entire pipeline overhead per reasoning step is <50μs. LLM inference takes 500ms-5s, so pipeline overhead is <0.01% of total step time.
+**Takeaway**: The entire pipeline overhead per reasoning step is <50μs — negligible compared to even the fastest cognitive generation paths.
 
 ## Anti-Hallucination (Grounding)
 
@@ -34,7 +34,7 @@ All benchmarks measured on AMD Ryzen 7 5800H (16 threads), Go 1.22, Linux.
 | Medium path ("explain GC") | 41.7 μs | 1 | 113 B |
 | Worst case (no pattern match) | 96.8 μs | 1 | 291 B |
 
-**Takeaway**: Fast queries are classified in <3μs with zero allocations. Even the worst case (checking all 30+ regex patterns) takes <100μs. The classifier saves 2-10 seconds by avoiding the full pipeline for simple queries.
+**Takeaway**: Fast queries are classified in <3μs with zero allocations. Even the worst case (checking all 30+ regex patterns) takes <100μs. The classifier routes simple queries to instant responses.
 
 ## Diff Algorithm (LCS)
 
@@ -78,20 +78,20 @@ All benchmarks measured on AMD Ryzen 7 5800H (16 threads), Go 1.22, Linux.
 
 ## Summary
 
-| Category | Typical Latency | vs LLM Inference |
-|----------|----------------|-----------------|
-| Token estimation | <1 ns | 0.0000002% |
-| Tool classification | <10 ns | 0.000002% |
-| Cache lookup | ~500 ns | 0.0001% |
-| Grounding check | ~400 ns | 0.00008% |
-| Query classification | ~3 μs | 0.0006% |
-| Step compression | ~8 μs | 0.0016% |
-| Pipeline overhead | ~50 μs | 0.01% |
-| Recipe matching | ~80 μs | 0.016% |
-| Diff (50 lines) | ~18 μs | 0.0036% |
-| **Total overhead per step** | **~150 μs** | **0.03%** |
+| Category | Typical Latency |
+|----------|----------------|
+| Token estimation | <1 ns |
+| Tool classification | <10 ns |
+| Cache lookup | ~500 ns |
+| Grounding check | ~400 ns |
+| Query classification | ~3 μs |
+| Step compression | ~8 μs |
+| Pipeline overhead | ~50 μs |
+| Recipe matching | ~80 μs |
+| Diff (50 lines) | ~18 μs |
+| **Total overhead per step** | **~150 μs** |
 
-The cognitive architecture adds approximately **0.03% overhead** compared to raw LLM inference time. All the innovation — grounding, prediction, recipes, classification — is essentially free from a performance perspective.
+The cognitive architecture overhead is approximately **150 μs per step**. All the innovation — grounding, prediction, recipes, classification — runs in microseconds, enabling pure cognitive processing without any external dependencies.
 
 ## Running Benchmarks
 

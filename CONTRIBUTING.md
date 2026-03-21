@@ -7,8 +7,7 @@ Thank you for your interest in contributing to Nous! This document provides guid
 ### Prerequisites
 
 - Go 1.22 or later
-- [Ollama](https://ollama.ai) installed and running
-- A local model pulled (e.g., `ollama pull qwen2.5:1.5b`)
+- That's it — no external services or model downloads needed
 
 ### Setup
 
@@ -74,7 +73,7 @@ Open an issue with:
 1. What you expected to happen
 2. What actually happened
 3. Steps to reproduce
-4. Your environment (OS, Go version, Ollama version, model)
+4. Your environment (OS, Go version)
 
 ### Feature Requests
 
@@ -108,13 +107,13 @@ Open an issue describing:
 - **Language support for codebase index** &mdash; Currently Go-only. Adding Python, TypeScript, Rust AST parsing would be very valuable.
 - **Streaming in server mode** &mdash; Server-Sent Events for real-time token streaming
 - **Better prediction strategies** &mdash; More intelligent speculative pre-computation
-- **Model-specific optimizations** &mdash; Tuning prompts and parameters for specific models (llama3, mistral, phi, etc.)
+- **Cognitive engine improvements** &mdash; Better discourse planning, frame templates, and compositional generation strategies
 
 ### Medium Impact
 
 - **More tools** &mdash; Docker, Kubernetes, database clients, HTTP testing, Bluetooth, Wi-Fi management
 - **macOS/Windows sentinel** &mdash; FSEvents and ReadDirectoryChanges equivalents
-- **Fine-tuning datasets** &mdash; Curated training data for common coding tasks
+- **Knowledge packages** &mdash; New domain knowledge packages for specialized topics
 - **Web UI improvements** &mdash; Markdown rendering, code highlighting, file browser
 
 ### Good First Issues

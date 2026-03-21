@@ -2,11 +2,11 @@
 
 ## Threat Model
 
-Nous runs locally and communicates only with a local Ollama server. The primary security concerns are:
+Nous runs entirely locally with a pure cognitive engine — no external services or models required. The primary security concerns are:
 
 1. **Tool execution safety** — preventing unintended file modifications or command execution
 2. **Sandbox enforcement** — containing shell command effects
-3. **Input validation** — handling malicious or malformed LLM outputs
+3. **Input validation** — handling malicious or malformed inputs
 4. **Network exposure** — securing the HTTP server mode
 
 ## Defense Layers
@@ -65,7 +65,7 @@ When running with `--serve`:
 
 ### 6. Reflection Gate (Anti-Looping)
 
-The reflection gate prevents the LLM from entering infinite tool-call loops:
+The reflection gate prevents the cognitive engine from entering infinite tool-call loops:
 - Detects repeated tool calls via SHA256 hash comparison
 - Escalates: 2 repeats → warning, 3 repeats → force stop
 - Hard cap at 6 tool calls per reasoning cycle
@@ -73,17 +73,18 @@ The reflection gate prevents the LLM from entering infinite tool-call loops:
 
 ### 7. Context Budget Protection
 
-The context budget system prevents token overflow attacks:
+The context budget system prevents runaway processing:
 - Tracks estimated token usage per message
 - Forces compression at 75% usage
 - Forces immediate answer at 85% usage
-- Prevents the LLM from consuming its own context window
+- Prevents unbounded knowledge context growth
 
 ## Privacy
 
 - **No cloud**: All processing is local. No data leaves the machine.
 - **No telemetry**: Nous collects no usage data.
-- **No external APIs**: Only communicates with the local Ollama server.
+- **No external APIs**: Pure cognitive engine with no external service dependencies.
+- **No model downloads**: No weights, checkpoints, or model files to trust or verify.
 - **Data location**: All persistent data stored in `~/.nous/` (configurable with `--memory`)
 
 ## Reporting Security Issues

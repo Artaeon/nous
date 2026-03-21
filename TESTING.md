@@ -37,7 +37,7 @@ Every package has unit tests covering:
 - **Predictor**: Cache hits/misses, expiry, eviction, concurrent access, prediction strategies
 - **Recipes**: Recording, deduplication, matching, replay, parameter substitution, pruning
 - **Memory systems**: Working memory decay, long-term persistence, episodic search
-- **Tools**: All 45 built-in tools, browser automation, HTML parsing
+- **Tools**: All 51 built-in tools, browser automation, HTML parsing
 - **Training**: Data collection, quality filtering, export formats, auto-tuning
 - **Server**: HTTP endpoints, fast path routing, job management
 - **Sentinel**: inotify watcher, event debouncing, recursive monitoring
@@ -74,7 +74,7 @@ Key results (AMD Ryzen 7 5800H):
 | Recipe match (40 recipes) | 80 μs/op | 13 |
 | LCS diff (200 lines) | 195 μs/op | 211 |
 
-**Key insight**: All hot-path operations (token estimation, tool classification, cache lookups) are sub-microsecond. The cognitive pipeline adds <50μs overhead per step — negligible compared to LLM inference time.
+**Key insight**: All hot-path operations (token estimation, tool classification, cache lookups) are sub-microsecond. The cognitive pipeline adds <50μs overhead per step.
 
 ### Fuzz Tests (7 targets)
 
@@ -107,7 +107,7 @@ The predictor specifically has concurrent access tests that exercise simultaneou
 
 - `cmd/nous/main_test.go` — REPL command parsing, flag handling
 - `cmd/nous/integration_test.go` — Full system initialization
-- `internal/compress/atoms_test.go` — Mock Ollama server integration
+- `internal/compress/atoms_test.go` — Compression and atom parsing integration
 - `internal/server/server_test.go` — HTTP endpoint integration
 
 ## Coverage by Package
@@ -117,8 +117,8 @@ The predictor specifically has concurrent access tests that exercise simultaneou
 | cognitive/ | High | 28 test files, benchmarks, fuzz tests |
 | tools/ | High | 7,800+ lines of tool tests (45 tools) |
 | memory/ | High | Working, long-term, project, episodic |
-| ollama/ | High | 707 lines, mock server tests |
-| training/ | High | Collection, auto-tune, modelfile |
+| cognitive/ (engine) | High | Thinking engine, discourse planner, generation |
+| training/ | High | Collection, data export |
 | server/ | Good | HTTP endpoints, CORS, jobs |
 | hands/ | Good | 11 test files, runners, webhooks |
 | channels/ | Good | Discord, Telegram, Matrix mocks |
@@ -155,7 +155,7 @@ func TestFoo(t *testing.T) {
 ```
 
 - Use `t.TempDir()` for filesystem tests
-- Use `httptest.NewServer` for Ollama mock servers
+- Use `httptest.NewServer` for HTTP mock servers
 - Use `t.Run` for sub-tests
 - Test both success and error paths
 - Include edge cases: empty input, nil values, boundary conditions
