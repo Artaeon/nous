@@ -64,9 +64,10 @@ type WordEntry struct {
 
 // ClausePattern is a generative rule for building a clause.
 type ClausePattern struct {
-	Name   string
-	Build  func(g *GenerativeEngine, subj, verb, obj string, t Tense) string
-	Weight float64 // higher = more likely to be selected
+	Name         string
+	Build        func(g *GenerativeEngine, subj, verb, obj string, t Tense) string
+	Weight       float64 // higher = more likely to be selected
+	DomainFilter string  // "person", "place", "concept", "event", "" = any
 }
 
 // GenerativeEngine builds sentences from grammar rules.
@@ -541,6 +542,17 @@ func (g *GenerativeEngine) registerPatterns() {
 			},
 		},
 	}
+
+	// Register extended pattern sets
+	RegisterSyntacticPatterns(g)
+	RegisterDomainPatterns(g)
+	RegisterTonePatterns(g)
+	RegisterRhetoricalPatterns(g)
+}
+
+// AddPatterns appends additional clause patterns to the engine.
+func (g *GenerativeEngine) AddPatterns(patterns []ClausePattern) {
+	g.patterns = append(g.patterns, patterns...)
 }
 
 // -----------------------------------------------------------------------
@@ -1086,19 +1098,49 @@ func (g *GenerativeEngine) pickPatternFor(rel RelType) ClausePattern {
 		candidates = g.patterns
 	}
 
+	// Compute effective weights with domain filter adjustments
 	var totalWeight float64
-	for _, p := range candidates {
-		totalWeight += p.Weight
+	effectiveWeights := make([]float64, len(candidates))
+	for i, p := range candidates {
+		w := p.Weight
+		if p.DomainFilter != "" && g.topicCategory != "" {
+			domain := g.domainForCategory()
+			if p.DomainFilter == domain {
+				w *= 1.5 // boost matching domain
+			} else {
+				w *= 0.2 // reduce non-matching domain by 80%
+			}
+		}
+		effectiveWeights[i] = w
+		totalWeight += w
 	}
 	r := g.rng.Float64() * totalWeight
 	var cumulative float64
-	for _, p := range candidates {
-		cumulative += p.Weight
+	for i, p := range candidates {
+		cumulative += effectiveWeights[i]
 		if r <= cumulative {
 			return p
 		}
 	}
 	return candidates[0]
+}
+
+// domainForCategory maps topicCategory to a domain filter string.
+func (g *GenerativeEngine) domainForCategory() string {
+	if isPerson(g.topicCategory) {
+		return "person"
+	}
+	switch g.topicCategory {
+	case "city", "country", "region", "town", "village", "continent",
+		"state", "province", "territory", "island", "mountain", "river",
+		"location", "place", "area", "district", "neighborhood":
+		return "place"
+	case "event", "war", "battle", "revolution", "movement", "incident",
+		"disaster", "ceremony", "festival", "election", "crisis":
+		return "event"
+	default:
+		return "concept"
+	}
 }
 
 func (g *GenerativeEngine) pick(options []string) string {
