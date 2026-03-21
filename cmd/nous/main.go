@@ -220,6 +220,9 @@ func main() {
 		actions.Semantic, actions.Analogy,
 	)
 
+	actions.Dialogue = cognitive.NewDialogueManager()
+	actions.Transformer = cognitive.NewTextTransformer(actions.Composer.Generative.Embeddings())
+
 	// Wire built-in embeddings for semantic memory (reuse Composer's embeddings)
 	embedFn := cognitive.MakeEmbedFunc(actions.Composer.Generative.Embeddings())
 	wm.SetEmbedFunc(embedFn)
