@@ -30,8 +30,8 @@ Thumbs.db
 **/backups/
 **/episodes.json
 
-# Release binaries
-nous-*
+# Release binaries (in project root only)
+/nous-*
 
 # Environment (secrets)
 .env
