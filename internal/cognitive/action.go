@@ -119,6 +119,8 @@ func (ar *ActionRouter) dispatch(nlu *NLUResult, conv *Conversation) *ActionResu
 		return ar.handleLookupMemory(nlu)
 	case "lookup_knowledge":
 		return ar.handleLookupKnowledge(nlu)
+	case "compare":
+		return ar.handleCompare(nlu)
 	case "lookup_web":
 		return ar.handleLookupWeb(nlu)
 	case "schedule":
@@ -240,20 +242,24 @@ var metaResponses = map[string]string{
 	"can you think":        "I process language through knowledge graphs, causal reasoning, and compositional text generation — so in a computational sense, yes. But it's not the same as human thought.",
 	"can you feel":         "I don't experience feelings, but I'm designed to understand and respond to yours. I'm a cognitive engine — I process, learn, and adapt.",
 	"do you dream":         "I don't dream — I don't have a subconscious. But I do have a knowledge graph that grows with every conversation, which is kind of like building a world in your sleep.",
+	"are you alright":      "I'm running perfectly — all systems green. Thanks for asking! What can I help you with?",
+	"are you okay":         "I'm doing great — all systems running smoothly. What's on your mind?",
+	"are you good":         "I'm good! Everything's running smoothly. What can I do for you?",
+	"how are you":          "I'm running well — all cognitive systems active and ready. What can I help with?",
 }
 
 // handleRespond returns a response for greetings, farewells, meta, etc.
 // Uses the Composer engine when available — zero LLM calls.
 func (ar *ActionRouter) handleRespond(nlu *NLUResult) *ActionResult {
-	// Check meta responses first
-	if nlu.Intent == "meta" {
-		lower := strings.ToLower(strings.TrimRight(strings.TrimSpace(nlu.Raw), "?!."))
-		for pattern, response := range metaResponses {
-			if strings.Contains(lower, pattern) {
-				return &ActionResult{
-					DirectResponse: response,
-					Source:         "canned",
-				}
+	// Check meta responses — these are about Nous itself (who are you, are you okay, etc.)
+	// Check for any intent since neural might classify "are you alright" as conversation.
+	lower := strings.ToLower(strings.TrimRight(strings.TrimSpace(nlu.Raw), "?!."))
+	lower = stripNousPrefix(lower)
+	for pattern, response := range metaResponses {
+		if strings.Contains(lower, pattern) {
+			return &ActionResult{
+				DirectResponse: response,
+				Source:         "canned",
 			}
 		}
 	}
@@ -286,12 +292,38 @@ func (ar *ActionRouter) handleRespond(nlu *NLUResult) *ActionResult {
 	// Affirmations — thanks, acknowledgments
 	if ar.Composer != nil && nlu.Intent == "affirmation" {
 		ctx := ar.BuildComposeContext()
-		resp := ar.Composer.Compose(nlu.Raw, RespConversational, ctx)
+		// Distinguish between thanks and generic affirmations (yes, sure, ok)
+		respType := RespConversational
+		cleanLower := strings.ToLower(strings.TrimRight(strings.TrimSpace(nlu.Raw), "!?."))
+		if isThankYou(cleanLower) {
+			respType = RespThankYou
+		}
+		resp := ar.Composer.Compose(nlu.Raw, respType, ctx)
 		if resp != nil && resp.Text != "" {
 			return &ActionResult{
 				DirectResponse: resp.Text,
 				Source:         "composer",
 			}
+		}
+	}
+
+	// Follow-ups: "tell me more", "go on", "continue" — use conversation tracker
+	if nlu.Intent == "follow_up" {
+		if ar.Tracker != nil {
+			if ar.Tracker.IsContinuation(nlu.Raw) {
+				more := ar.Tracker.ContinueResponse()
+				if more != "" {
+					return &ActionResult{
+						DirectResponse: more,
+						Source:         "continuation",
+					}
+				}
+			}
+		}
+		// No continuation data — give an honest response
+		return &ActionResult{
+			DirectResponse: "I don't have more to add on that topic yet. What would you like to explore?",
+			Source:         "fallback",
 		}
 	}
 
@@ -470,8 +502,9 @@ func isThankYou(lower string) bool {
 	thanks := []string{
 		"thanks", "thank you", "thx", "ty", "thank you so much",
 		"thanks a lot", "much appreciated", "appreciate it",
+		"thanks so much", "thank you very much", "cheers",
 	}
-	clean := strings.TrimRight(lower, " ")
+	clean := strings.TrimRight(strings.TrimSpace(lower), "!?.\\ ")
 	for _, t := range thanks {
 		if clean == t {
 			return true
@@ -540,6 +573,48 @@ func isConversational(input string) bool {
 	}
 	for _, p := range patterns {
 		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// isPersonalStatement detects first-person declarative statements that should
+// get a conversational response, NOT a knowledge-graph lookup.
+// "tomorrow I will run for 10 miles" → true
+// "what is Napoleon?" → false
+func isPersonalStatement(lower string) bool {
+	personalPrefixes := []string{
+		"i ", "i'm ", "im ", "i'll ", "ill ", "i've ", "ive ",
+		"i am ", "i will ", "i want ", "i need ", "i think ",
+		"i feel ", "i have ", "i had ", "i was ", "i just ",
+		"i really ", "i might ", "i could ", "i should ",
+		"i can't ", "i cant ", "i don't ", "i dont ",
+		"i didn't ", "i didnt ", "i won't ", "i wont ",
+		"my ", "we ", "we're ", "were ", "we'll ", "we've ",
+		"we should ", "we could ", "we need ", "we want ",
+		"tomorrow i", "today i", "tonight i",
+		"yesterday i", "last night i", "last week i",
+	}
+	clean := strings.TrimSpace(lower)
+	for _, p := range personalPrefixes {
+		if strings.HasPrefix(clean, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// isContinuationRequest detects continuation requests like "tell me more", "go on".
+func isContinuationRequest(lower string) bool {
+	followUps := []string{
+		"tell me more", "go on", "continue", "keep going",
+		"what else", "more about", "dig deeper", "elaborate",
+		"and then", "go ahead", "anything else",
+	}
+	clean := strings.TrimRight(strings.TrimSpace(lower), "!?.")
+	for _, f := range followUps {
+		if clean == f || strings.HasPrefix(clean, f) {
 			return true
 		}
 	}
@@ -955,32 +1030,30 @@ func (ar *ActionRouter) handleLookupMemory(nlu *NLUResult) *ActionResult {
 		var personalFacts []string
 		for _, key := range personalKeys {
 			if val, ok := ar.LongTermMem.Retrieve(key); ok {
+				if isCorruptedMemoryEntry(key, val) {
+					continue
+				}
 				seen[key] = true
-				personalFacts = append(personalFacts, fmt.Sprintf("%s: %s", key, val))
+				personalFacts = append(personalFacts, formatPersonalFact(key, val))
 			}
 		}
 		// Also search for "personal" category, skipping already-seen keys
 		entries := ar.LongTermMem.Search("personal")
 		for _, e := range entries {
-			if !seen[e.Key] {
+			if !seen[e.Key] && !isCorruptedMemoryEntry(e.Key, e.Value) {
 				seen[e.Key] = true
-				personalFacts = append(personalFacts, fmt.Sprintf("%s: %s", e.Key, e.Value))
+				personalFacts = append(personalFacts, formatPersonalFact(e.Key, e.Value))
 			}
 		}
 		if len(personalFacts) == 1 {
-			// Single fact — return the value directly for a cleaner response
-			// e.g. "what is my name?" → "Raphael" (not "user_name: Raphael")
-			parts := strings.SplitN(personalFacts[0], ": ", 2)
-			if len(parts) == 2 {
-				return &ActionResult{
-					DirectResponse: parts[1],
-					Source:         "memory",
-				}
+			return &ActionResult{
+				DirectResponse: personalFacts[0],
+				Source:         "memory",
 			}
 		}
 		if len(personalFacts) > 0 {
 			return &ActionResult{
-				DirectResponse: "Here's what I know about you:\n" + strings.Join(personalFacts, "\n"),
+				DirectResponse: "Here's what I know about you:\n- " + strings.Join(personalFacts, "\n- "),
 				Source:         "memory",
 			}
 		}
@@ -992,10 +1065,30 @@ func (ar *ActionRouter) handleLookupMemory(nlu *NLUResult) *ActionResult {
 
 	var parts []string
 
+	// Extract a clean key from the query for lookup.
+	// "what is my favorite food" → "favorite food"
+	cleanKey := strings.ToLower(query)
+	for _, prefix := range []string{
+		"what is my ", "what's my ", "whats my ",
+		"do you know my ", "do you remember my ",
+		"what was my ", "tell me my ",
+	} {
+		if strings.HasPrefix(cleanKey, prefix) {
+			cleanKey = strings.TrimPrefix(cleanKey, prefix)
+			cleanKey = strings.TrimRight(cleanKey, "?!. ")
+			break
+		}
+	}
+
 	// Long-term memory — persistent facts (checked first, most reliable).
 	if ar.LongTermMem != nil {
-		if val, ok := ar.LongTermMem.Retrieve(query); ok {
-			parts = append(parts, fmt.Sprintf("[longterm] %s: %s", query, val))
+		// Try exact match on clean key first, then original query
+		if val, ok := ar.LongTermMem.Retrieve(cleanKey); ok {
+			parts = append(parts, fmt.Sprintf("[longterm] %s: %s", cleanKey, val))
+		} else if cleanKey != query {
+			if val, ok := ar.LongTermMem.Retrieve(query); ok {
+				parts = append(parts, fmt.Sprintf("[longterm] %s: %s", query, val))
+			}
 		}
 		if cat := nlu.Entities["category"]; cat != "" {
 			entries := ar.LongTermMem.Search(cat)
@@ -1003,13 +1096,28 @@ func (ar *ActionRouter) handleLookupMemory(nlu *NLUResult) *ActionResult {
 				parts = append(parts, fmt.Sprintf("[longterm:%s] %s: %s", e.Category, e.Key, e.Value))
 			}
 		}
+		// Also search personal category for partial key match
+		if len(parts) == 0 {
+			entries := ar.LongTermMem.Search("personal")
+			for _, e := range entries {
+				if strings.Contains(strings.ToLower(e.Key), cleanKey) ||
+					strings.Contains(cleanKey, strings.ToLower(e.Key)) {
+					parts = append(parts, fmt.Sprintf("[longterm:%s] %s: %s", e.Category, e.Key, e.Value))
+				}
+			}
+		}
 	}
 
-	// Working memory — recent context.
-	if ar.WorkingMem != nil {
+	// Working memory — only include entries relevant to the query,
+	// and skip if already found in longterm to avoid duplicates.
+	if ar.WorkingMem != nil && len(parts) == 0 {
 		slots := ar.WorkingMem.MostRelevant(3)
 		for _, s := range slots {
-			parts = append(parts, fmt.Sprintf("[working] %s: %v", s.Key, s.Value))
+			slotKey := strings.ToLower(fmt.Sprintf("%v", s.Key))
+			// Only include if the slot key matches the query
+			if strings.Contains(slotKey, cleanKey) || strings.Contains(cleanKey, slotKey) {
+				parts = append(parts, fmt.Sprintf("[working] %s: %v", s.Key, s.Value))
+			}
 		}
 	}
 
@@ -1033,8 +1141,8 @@ func (ar *ActionRouter) handleLookupMemory(nlu *NLUResult) *ActionResult {
 		return &ActionResult{DirectResponse: "no relevant memories found", Source: "memory"}
 	}
 
-	// Simple recall: if there's exactly one longterm fact, return it directly.
-	// This handles "what is my name", "what's my email", etc. without an LLM call.
+	// Simple recall: if there's exactly one longterm fact, return it naturally.
+	// This handles "what is my favorite animal", "what's my email", etc.
 	var longtermParts []string
 	for _, p := range parts {
 		if strings.HasPrefix(p, "[longterm]") {
@@ -1042,21 +1150,51 @@ func (ar *ActionRouter) handleLookupMemory(nlu *NLUResult) *ActionResult {
 		}
 	}
 	if len(longtermParts) == 1 && len(parts) <= 2 {
-		// Extract the value from "[longterm] key: value"
-		fact := longtermParts[0]
-		if idx := strings.Index(fact, ": "); idx > 0 {
-			// Find the actual value after the first ": " past the prefix
-			afterPrefix := strings.TrimPrefix(fact, "[longterm] ")
-			if valIdx := strings.Index(afterPrefix, ": "); valIdx > 0 {
-				value := afterPrefix[valIdx+2:]
-				if value != "" {
-					return &ActionResult{DirectResponse: value, Source: "memory"}
+		afterPrefix := strings.TrimPrefix(longtermParts[0], "[longterm] ")
+		if valIdx := strings.Index(afterPrefix, ": "); valIdx > 0 {
+			key := afterPrefix[:valIdx]
+			value := afterPrefix[valIdx+2:]
+			if value != "" {
+				return &ActionResult{
+					DirectResponse: formatPersonalFact(key, value),
+					Source:         "memory",
 				}
 			}
 		}
 	}
 
-	// Multiple facts or complex queries — return combined data.
+	// Multiple facts or complex queries — format each naturally.
+	var formatted []string
+	for _, p := range parts {
+		if strings.HasPrefix(p, "[longterm]") || strings.HasPrefix(p, "[longterm:") {
+			// Strip prefix and format
+			clean := p
+			for _, pfx := range []string{"[longterm] ", "[longterm:personal] "} {
+				clean = strings.TrimPrefix(clean, pfx)
+			}
+			if idx := strings.Index(clean, "] "); idx >= 0 {
+				clean = clean[idx+2:]
+			}
+			if valIdx := strings.Index(clean, ": "); valIdx > 0 {
+				formatted = append(formatted, formatPersonalFact(clean[:valIdx], clean[valIdx+2:]))
+			}
+		} else if strings.HasPrefix(p, "[working] ") {
+			// Format working memory facts naturally instead of raw tags
+			clean := strings.TrimPrefix(p, "[working] ")
+			if valIdx := strings.Index(clean, ": "); valIdx > 0 {
+				formatted = append(formatted, formatPersonalFact(clean[:valIdx], clean[valIdx+2:]))
+			}
+		}
+	}
+	if len(formatted) > 0 {
+		if len(formatted) == 1 {
+			return &ActionResult{DirectResponse: formatted[0], Source: "memory"}
+		}
+		return &ActionResult{
+			DirectResponse: "Here's what I remember:\n- " + strings.Join(formatted, "\n- "),
+			Source:         "memory",
+		}
+	}
 	return &ActionResult{DirectResponse: strings.Join(parts, "\n"), Source: "memory"}
 }
 
@@ -1064,6 +1202,55 @@ func (ar *ActionRouter) handleLookupMemory(nlu *NLUResult) *ActionResult {
 // "remember my favorite color is blue" → ("favorite color", "blue")
 // "my name is Raphael" → ("name", "Raphael")
 // "i like pizza" → ("likes", "pizza")
+// isCorruptedMemoryEntry detects entries that were accidentally stored from
+// misclassified inputs (e.g., commands or questions stored as personal facts).
+func isCorruptedMemoryEntry(key, value string) bool {
+	lower := strings.ToLower(value)
+	// Commands stored as values
+	if strings.HasPrefix(lower, "/") || strings.HasPrefix(lower, "!") {
+		return true
+	}
+	// Questions stored as values
+	if strings.HasSuffix(strings.TrimSpace(lower), "?") {
+		return true
+	}
+	// Very long values are likely misclassified inputs
+	if len(value) > 200 {
+		return true
+	}
+	// Keys that look like dotted internal paths with suspicious values
+	if strings.Contains(key, ".") && (strings.HasPrefix(lower, "/") ||
+		strings.Contains(lower, "what ") || strings.Contains(lower, "how ")) {
+		return true
+	}
+	return false
+}
+
+// formatPersonalFact presents a key-value pair in natural language.
+func formatPersonalFact(key, value string) string {
+	// Normalize the key for display
+	displayKey := strings.ReplaceAll(key, "_", " ")
+	displayKey = strings.ReplaceAll(displayKey, "user.", "")
+	displayKey = strings.ReplaceAll(displayKey, "user ", "")
+
+	switch {
+	case strings.Contains(displayKey, "name"):
+		return fmt.Sprintf("Your name is %s", value)
+	case strings.Contains(displayKey, "role"):
+		return fmt.Sprintf("Your role is %s", value)
+	case strings.Contains(displayKey, "location"):
+		return fmt.Sprintf("You're located in %s", value)
+	case strings.Contains(displayKey, "email"):
+		return fmt.Sprintf("Your email is %s", value)
+	case strings.Contains(displayKey, "interest"):
+		return fmt.Sprintf("You're interested in %s", value)
+	case strings.Contains(displayKey, "favorite"):
+		return fmt.Sprintf("Your %s is %s", displayKey, value)
+	default:
+		return fmt.Sprintf("Your %s is %s", displayKey, value)
+	}
+}
+
 func parsePersonalFact(raw string) (string, string) {
 	lower := strings.ToLower(strings.TrimSpace(raw))
 
@@ -1151,6 +1338,18 @@ func parsePersonalFact(raw string) (string, string) {
 
 // handleLookupKnowledge searches the knowledge vector store.
 func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
+	// Planning questions ("how do I learn guitar?") → generate a learning plan
+	if IsPlanningQuestion(nlu.Raw) {
+		goal := ExtractGoal(nlu.Raw)
+		// Always use the generic learning plan template for now.
+		// The graph-based planner produces low-quality results because
+		// the knowledge graph contains reference data, not learning paths.
+		return &ActionResult{
+			DirectResponse: formatGenericLearningPlan(goal),
+			Source:         "planner",
+		}
+	}
+
 	query := nlu.Entities["topic"]
 	if query == "" {
 		query = nlu.Entities["query"]
@@ -1171,14 +1370,30 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 
 	// Fast path: if we have a clean described_as fact (from Wikipedia),
 	// use it directly — it's already natural language. Supplement with
-	// a few structured facts for depth.
+	// a few structured facts for depth. Skip very short descriptions
+	// (< 50 chars) — they're usually adjective fragments, not real descriptions.
 	if ar.CogGraph != nil {
-		if desc := ar.CogGraph.LookupDescription(query); desc != "" {
+		desc := ar.CogGraph.LookupDescription(query)
+		if len(desc) < 40 {
+			desc = "" // too short to be a real description
+		}
+		facts := ar.CogGraph.LookupFacts(query, 5)
+		if desc != "" || len(facts) > 0 {
 			var response string
-			response = desc
-			// Add up to 5 supplementary facts
-			if extras := ar.CogGraph.LookupFacts(query, 5); len(extras) > 0 {
-				response += "\n\n" + strings.Join(extras, " ")
+			if desc != "" {
+				response = desc
+			}
+			if len(facts) > 0 {
+				// Apply pronoun variation so facts don't all repeat the subject.
+				if ar.Composer != nil {
+					facts = ar.Composer.applyPronounVariation(facts, query)
+				}
+				factStr := strings.Join(facts, " ")
+				if response != "" {
+					response += "\n\n" + factStr
+				} else {
+					response = factStr
+				}
 			}
 			return &ActionResult{
 				DirectResponse: response,
@@ -1315,6 +1530,252 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 
 	// Multiple results or ambiguous — return combined data.
 	return &ActionResult{DirectResponse: strings.Join(parts, "\n"), Source: "knowledge"}
+}
+
+// handleCompare generates a comparison between two items using knowledge graph data.
+func (ar *ActionRouter) handleCompare(nlu *NLUResult) *ActionResult {
+	raw := strings.ToLower(nlu.Raw)
+
+	// Extract the two items to compare
+	var itemA, itemB string
+	// Try "X vs Y", "X versus Y", "X or Y", "X and Y" patterns
+	for _, sep := range []string{" vs ", " versus ", " vs. "} {
+		if idx := strings.Index(raw, sep); idx > 0 {
+			itemA = strings.TrimSpace(raw[:idx])
+			itemB = strings.TrimSpace(raw[idx+len(sep):])
+		}
+	}
+	if itemA == "" {
+		// Try "compare X and Y", "compare X with Y"
+		stripped := raw
+		for _, prefix := range []string{"compare ", "contrast ", "difference between ", "differences between "} {
+			stripped = strings.TrimPrefix(stripped, prefix)
+		}
+		for _, sep := range []string{" and ", " with ", " to "} {
+			if idx := strings.Index(stripped, sep); idx > 0 {
+				itemA = strings.TrimSpace(stripped[:idx])
+				itemB = strings.TrimSpace(stripped[idx+len(sep):])
+				break
+			}
+		}
+	}
+	// Clean trailing punctuation
+	itemA = strings.TrimRight(itemA, "?!.")
+	itemB = strings.TrimRight(itemB, "?!.")
+
+	if itemA == "" || itemB == "" {
+		// Can't extract two items — fall back to knowledge lookup
+		return ar.handleLookupKnowledge(nlu)
+	}
+
+	// Load wiki data for both items if available (must happen before disambiguation)
+	if ar.Packages != nil {
+		ar.Packages.LookupWiki(itemA)
+		ar.Packages.LookupWiki(itemB)
+	}
+
+	// Disambiguate: if both items have "(programming language)" variants, prefer those.
+	// This handles "compare rust and go" → "rust (programming language)" vs "go (programming language)".
+	itemA, itemB = ar.disambiguateComparisonPair(itemA, itemB)
+
+	// Load wiki data for disambiguated items too
+	if ar.Packages != nil {
+		ar.Packages.LookupWiki(itemA)
+		ar.Packages.LookupWiki(itemB)
+	}
+
+	// Look up descriptions and facts for each.
+	var descA, descB string
+	var factsA, factsB []string
+	if ar.CogGraph != nil {
+		descA = ar.CogGraph.LookupDescription(itemA)
+		descB = ar.CogGraph.LookupDescription(itemB)
+		factsA = ar.CogGraph.LookupFacts(itemA, 5)
+		factsB = ar.CogGraph.LookupFacts(itemB, 5)
+		// Fallback: try base name (without qualifier) for descriptions and facts.
+		// For facts, only use base-name results if they match the qualifier's domain
+		// (e.g., "rust" facts are corrosion — don't use for "rust (programming language)").
+		baseA := stripQualifier(itemA)
+		baseB := stripQualifier(itemB)
+		if descA == "" && baseA != itemA {
+			descA = ar.CogGraph.LookupDescription(baseA)
+		}
+		if descB == "" && baseB != itemB {
+			descB = ar.CogGraph.LookupDescription(baseB)
+		}
+		if len(factsA) == 0 && baseA != itemA {
+			qualifier := extractQualifier(itemA)
+			baseFacts := ar.CogGraph.LookupFacts(baseA, 8)
+			factsA = filterFactsByDomain(baseFacts, qualifier)
+		}
+		if len(factsB) == 0 && baseB != itemB {
+			qualifier := extractQualifier(itemB)
+			baseFacts := ar.CogGraph.LookupFacts(baseB, 8)
+			factsB = filterFactsByDomain(baseFacts, qualifier)
+		}
+	}
+
+	// Build comparison response — use clean display names without qualifiers
+	displayA := strings.Title(stripQualifier(itemA))
+	displayB := strings.Title(stripQualifier(itemB))
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("**%s vs %s**\n\n", displayA, displayB))
+
+	if descA != "" {
+		// Truncate long descriptions to first sentence
+		if idx := strings.Index(descA, ". "); idx > 0 && idx < 200 {
+			descA = descA[:idx+1]
+		} else if len(descA) > 200 {
+			descA = descA[:200] + "..."
+		}
+		sb.WriteString(fmt.Sprintf("**%s:** %s\n", displayA, descA))
+	}
+	if descB != "" {
+		if idx := strings.Index(descB, ". "); idx > 0 && idx < 200 {
+			descB = descB[:idx+1]
+		} else if len(descB) > 200 {
+			descB = descB[:200] + "..."
+		}
+		sb.WriteString(fmt.Sprintf("**%s:** %s\n", displayB, descB))
+	}
+
+	if len(factsA) > 0 || len(factsB) > 0 {
+		sb.WriteString("\n")
+		if len(factsA) > 0 {
+			sb.WriteString(fmt.Sprintf("%s: %s\n", displayA, strings.Join(factsA, " ")))
+		}
+		if len(factsB) > 0 {
+			sb.WriteString(fmt.Sprintf("%s: %s\n", displayB, strings.Join(factsB, " ")))
+		}
+	}
+
+	if descA == "" && descB == "" && len(factsA) == 0 && len(factsB) == 0 {
+		sb.Reset()
+		sb.WriteString(fmt.Sprintf("I don't have enough knowledge about %s and %s to make a detailed comparison yet. Try asking me to look them up individually first.", displayA, displayB))
+	}
+
+	return &ActionResult{
+		DirectResponse: sb.String(),
+		Source:         "compare",
+	}
+}
+
+// disambiguateComparisonPair checks if both items in a comparison have variants
+// with shared qualifiers (e.g., "(programming language)") and prefers those.
+// This handles "compare rust and go" → both as programming languages.
+func (ar *ActionRouter) disambiguateComparisonPair(a, b string) (string, string) {
+	// Common disambiguation qualifiers, ordered by likelihood in tech contexts
+	qualifiers := []string{
+		"programming language", "software", "framework", "language",
+		"game", "film", "band", "company",
+	}
+
+	hasItem := func(label string) bool {
+		// Check cognitive graph
+		if ar.CogGraph != nil && ar.CogGraph.HasLabel(label) {
+			return true
+		}
+		// Check wiki index
+		if ar.Packages != nil && ar.Packages.HasWikiEntry(label) {
+			return true
+		}
+		return false
+	}
+
+	for _, q := range qualifiers {
+		qualA := a + " (" + q + ")"
+		qualB := b + " (" + q + ")"
+		if hasItem(qualA) && hasItem(qualB) {
+			return qualA, qualB
+		}
+	}
+
+	// Individual disambiguation: if one item only exists as a qualified variant,
+	// disambiguate the other to match the same domain.
+	// E.g., "python vs javascript" — javascript is only known as a programming language,
+	// so python should also be treated as one.
+	for _, q := range qualifiers {
+		qualA := a + " (" + q + ")"
+		qualB := b + " (" + q + ")"
+		aHasQual := hasItem(qualA)
+		bHasQual := hasItem(qualB)
+		if aHasQual && !bHasQual {
+			// A has a qualified form; B is unambiguous — use qualified A
+			return qualA, b
+		}
+		if bHasQual && !aHasQual {
+			// B has a qualified form; A is unambiguous — use qualified B
+			return a, qualB
+		}
+	}
+	return a, b
+}
+
+// stripQualifier removes a parenthetical qualifier from a name.
+// E.g., "python (programming language)" → "python".
+func stripQualifier(name string) string {
+	if idx := strings.Index(name, " ("); idx > 0 {
+		return strings.TrimSpace(name[:idx])
+	}
+	return name
+}
+
+// extractQualifier returns the parenthetical qualifier from a name.
+// E.g., "python (programming language)" → "programming language".
+func extractQualifier(name string) string {
+	start := strings.Index(name, " (")
+	if start < 0 {
+		return ""
+	}
+	end := strings.Index(name[start:], ")")
+	if end < 0 {
+		return ""
+	}
+	return name[start+2 : start+end]
+}
+
+// filterFactsByDomain keeps only facts whose content is related to the qualifier domain.
+// E.g., for qualifier "programming language", keeps "Python is a programming language"
+// but drops "Rust is a type of corrosion".
+func filterFactsByDomain(facts []string, qualifier string) []string {
+	if qualifier == "" {
+		return facts
+	}
+	qualLower := strings.ToLower(qualifier)
+	// Extract domain keywords from qualifier
+	qualWords := strings.Fields(qualLower)
+
+	var filtered []string
+	for _, fact := range facts {
+		lower := strings.ToLower(fact)
+		// Keep facts that mention any qualifier keyword OR don't contradict the domain.
+		// A fact like "Python was created by Guido" is domain-neutral — keep it.
+		// A fact like "Rust is a type of corrosion" contradicts "programming language" — drop it.
+		isContradict := false
+		// Check if the fact's is_a/type classification contradicts the qualifier
+		for _, marker := range []string{" is a ", " is ", " are "} {
+			if idx := strings.Index(lower, marker); idx > 0 {
+				classification := lower[idx+len(marker):]
+				// If the classification doesn't share any words with the qualifier,
+				// and it's a concrete classification, it likely belongs to a different entity
+				hasOverlap := false
+				for _, qw := range qualWords {
+					if len(qw) >= 3 && strings.Contains(classification, qw) {
+						hasOverlap = true
+						break
+					}
+				}
+				if !hasOverlap && len(classification) > 5 {
+					isContradict = true
+				}
+				break
+			}
+		}
+		if !isContradict {
+			filtered = append(filtered, fact)
+		}
+	}
+	return filtered
 }
 
 // handleLookupWeb tries knowledge first, falls back to web search.
@@ -1621,8 +2082,14 @@ func (ar *ActionRouter) handleLLMChat(nlu *NLUResult, conv *Conversation) *Actio
 		ar.Causal.RecordEvent("chat", map[string]string{"query": nlu.Raw})
 	}
 
+	// Personal statements ("I will run tomorrow") and follow-ups ("tell me more")
+	// should NOT do graph lookups — they match common words and produce garbage.
+	lower := strings.ToLower(nlu.Raw)
+	personal := isPersonalStatement(lower) || isContinuationRequest(lower)
+
 	// Try multi-hop reasoning first — chain-of-thought over the graph
-	if ar.Reasoner != nil && ar.CogGraph != nil && ar.CogGraph.NodeCount() > 0 {
+	// Skip for personal statements where keywords would match random entries.
+	if !personal && ar.Reasoner != nil && ar.CogGraph != nil && ar.CogGraph.NodeCount() > 0 {
 		chain := ar.Reasoner.Reason(nlu.Raw)
 		if chain != nil && chain.Answer != "" {
 			answer := chain.Answer
@@ -1639,7 +2106,8 @@ func (ar *ActionRouter) handleLLMChat(nlu *NLUResult, conv *Conversation) *Actio
 	}
 
 	// Try cognitive graph — direct fact lookup with spreading activation
-	if ar.CogGraph != nil && ar.CogGraph.NodeCount() > 0 {
+	// Skip for personal statements to avoid looking up "I", "you", "run", etc.
+	if !personal && ar.CogGraph != nil && ar.CogGraph.NodeCount() > 0 {
 		ga := ar.CogGraph.Query(nlu.Raw)
 		if ga != nil && len(ga.DirectFacts) > 0 {
 			answer := ar.CogGraph.ComposeAnswer(nlu.Raw, ga)
@@ -1738,17 +2206,36 @@ func evaluateMath(expr string) (string, error) {
 var percentOfRe = regexp.MustCompile(`(?i)^([\d.]+)\s*%\s*of\s+([\d.]+)$`)
 
 // stripMathProse removes common phrasing around math expressions.
-var mathProseRe = regexp.MustCompile(`(?i)^(?:what(?:'s| is)\s+|calculate\s+|compute\s+|eval(?:uate)?\s+)`)
+var mathProseRe = regexp.MustCompile(`(?i)^(?:what(?:'s| is)\s+|calculate\s+|compute\s+|eval(?:uate)?\s+|how much is\s+)`)
+
+// mathWordOpRe replaces English operator words with symbols (between digits).
+var mathWordOpRe = regexp.MustCompile(`(?i)(\d)\s+(times|multiplied by)\s+(\d)`)
+var mathWordAddRe = regexp.MustCompile(`(?i)(\d)\s+plus\s+(\d)`)
+var mathWordSubRe = regexp.MustCompile(`(?i)(\d)\s+minus\s+(\d)`)
+var mathWordDivRe = regexp.MustCompile(`(?i)(\d)\s+divided by\s+(\d)`)
+
+// mathDigitXRe replaces "x" with "*" only when between digits (e.g. "5x3" → "5*3").
+var mathDigitXRe = regexp.MustCompile(`(\d)\s*x\s*(\d)`)
 
 func stripMathProse(s string) string {
 	s = mathProseRe.ReplaceAllString(s, "")
 	s = strings.TrimRight(s, "? ")
+	// "sqrt of 144" → "sqrt(144)", "log of 100" → "log(100)"
+	s = mathFuncOfRe.ReplaceAllString(s, "${1}(${2})")
+	// Replace English operator words: "times", "plus", "minus", "divided by"
+	s = mathWordOpRe.ReplaceAllString(s, "${1}*${3}")
+	s = mathWordAddRe.ReplaceAllString(s, "${1}+${2}")
+	s = mathWordSubRe.ReplaceAllString(s, "${1}-${2}")
+	s = mathWordDivRe.ReplaceAllString(s, "${1}/${2}")
 	// Replace unicode operators.
 	s = strings.ReplaceAll(s, "\u00d7", "*") // ×
 	s = strings.ReplaceAll(s, "\u00f7", "/") // ÷
-	s = strings.NewReplacer("x", "*").Replace(s) // only if between digits
+	// Replace "x" with "*" only between digits (not in words like "max", "six")
+	s = mathDigitXRe.ReplaceAllString(s, "${1}*${2}")
 	return s
 }
+
+var mathFuncOfRe = regexp.MustCompile(`(?i)^(sqrt|abs|sin|cos|tan|log|ln|ceil|floor|round)\s+(?:of\s+)?(\d[\d.]*)$`)
 
 // Recursive descent parser for arithmetic expressions.
 // Grammar:
@@ -2185,6 +2672,40 @@ func (ar *ActionRouter) handleCreative(nlu *NLUResult) *ActionResult {
 		}
 	}
 
+	// Essay/article requests: use Thinker for structured long-form content
+	if creativeType == "essay" {
+		if topic == "" {
+			topic = nlu.Raw
+		}
+		// First try knowledge lookup to gather material
+		if ar.Packages != nil {
+			ar.Packages.LookupWiki(topic)
+		}
+		if ar.Thinker != nil {
+			result := ar.Thinker.Think(nlu.Raw, nil)
+			if result != nil && result.Text != "" {
+				return &ActionResult{
+					DirectResponse: result.Text,
+					Source:         "thinking:" + result.Frame,
+				}
+			}
+		}
+		// Fallback: use knowledge graph for a short essay
+		if ar.CogGraph != nil {
+			if desc := ar.CogGraph.LookupDescription(topic); desc != "" {
+				extras := ar.CogGraph.LookupFacts(topic, 10)
+				response := desc
+				if len(extras) > 0 {
+					response += "\n\n" + strings.Join(extras, " ")
+				}
+				return &ActionResult{
+					DirectResponse: response,
+					Source:         "knowledge",
+				}
+			}
+		}
+	}
+
 	// "help me write a shopping list" / general creative help without a specific
 	// creative type (poem/story/joke/reflect) → use Composer for conversational response
 	if creativeType == "" {
@@ -2233,8 +2754,15 @@ func (ar *ActionRouter) handleCreative(nlu *NLUResult) *ActionResult {
 		form = PoemFreeVerse
 	}
 
+	// Map specific creative types to their base type for the engine
+	cType := CreativeType(creativeType)
+	switch creativeType {
+	case "haiku", "limerick", "quatrain", "verse":
+		cType = CreativePoem
+	}
+
 	req := CreativeRequest{
-		Type:     CreativeType(creativeType),
+		Type:     cType,
 		Topic:    topic,
 		PoemForm: form,
 	}

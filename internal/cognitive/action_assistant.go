@@ -6,6 +6,37 @@ import (
 	"strings"
 )
 
+// normalizeMathFunc converts natural-language math function calls to proper syntax.
+// "sqrt of 144" → "sqrt(144)", "abs of -5" → "abs(-5)"
+var mathFuncNormRe = regexp.MustCompile(`(?i)^(sqrt|abs|sin|cos|tan|log|ln|ceil|floor|round)\s+(?:of\s+)?(-?[\d.]+)$`)
+
+func normalizeMathFunc(expr string) string {
+	if m := mathFuncNormRe.FindStringSubmatch(expr); len(m) == 3 {
+		return strings.ToLower(m[1]) + "(" + m[2] + ")"
+	}
+	return expr
+}
+
+// convertMathWords replaces English math words with operator symbols.
+// "15 times 23" → "15 * 23", "100 divided by 5" → "100 / 5"
+func convertMathWords(expr string) string {
+	r := regexp.MustCompile(`(?i)\s+times\s+`)
+	expr = r.ReplaceAllString(expr, " * ")
+	r = regexp.MustCompile(`(?i)\s+multiplied\s+by\s+`)
+	expr = r.ReplaceAllString(expr, " * ")
+	r = regexp.MustCompile(`(?i)\s+divided\s+by\s+`)
+	expr = r.ReplaceAllString(expr, " / ")
+	r = regexp.MustCompile(`(?i)\s+plus\s+`)
+	expr = r.ReplaceAllString(expr, " + ")
+	r = regexp.MustCompile(`(?i)\s+minus\s+`)
+	expr = r.ReplaceAllString(expr, " - ")
+	r = regexp.MustCompile(`(?i)\s+to\s+the\s+power\s+of\s+`)
+	expr = r.ReplaceAllString(expr, " ^ ")
+	r = regexp.MustCompile(`(?i)\s+mod\s+`)
+	expr = r.ReplaceAllString(expr, " % ")
+	return strings.TrimSpace(expr)
+}
+
 // -----------------------------------------------------------------------
 // Personal assistant action handlers.
 // Each handler delegates to the corresponding tool in the tools registry.
@@ -679,6 +710,12 @@ func (ar *ActionRouter) handleCalculate(nlu *NLUResult) *ActionResult {
 		}
 		expr = strings.TrimRight(expr, "?!. ")
 	}
+
+	// Normalize "sqrt of 144" → "sqrt(144)", "abs of -5" → "abs(-5)", etc.
+	expr = normalizeMathFunc(expr)
+
+	// Convert English operator words to symbols
+	expr = convertMathWords(expr)
 
 	result, err := tool.Execute(map[string]string{"expression": expr})
 	if err != nil {
