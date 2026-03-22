@@ -188,41 +188,58 @@ func (ce *CreativeEngine) writeFreeVerse(topic string) string {
 }
 
 func (ce *CreativeEngine) writeHaiku(topic string) string {
-	// Haiku: 3 lines, nature-themed, contemplative
-	line1Pool := []string{
+	// Haiku: 5-7-5 syllable structure, contemplative, nature-inspired.
+	// Pre-crafted line pools organized by syllable count (5 or 7).
+
+	// 5-syllable lines (for lines 1 and 3)
+	fiveSyl := []string{
 		fmt.Sprintf("%s drifts softly", topic),
-		fmt.Sprintf("beneath the %s sky", ce.pick(ce.adjectives["weather"])),
-		fmt.Sprintf("morning light on %s", topic),
+		"morning light falls",
 		fmt.Sprintf("still water holds %s", topic),
 		fmt.Sprintf("%s in the wind", topic),
-		fmt.Sprintf("a leaf falls toward %s", topic),
-		fmt.Sprintf("the %s moon rises", ce.pick(ce.adjectives["nature"])),
-		fmt.Sprintf("old stones know of %s", topic),
-	}
-
-	line2Pool := []string{
-		fmt.Sprintf("the %s %s stirs gently", ce.pick(ce.adjectives["nature"]), ce.pick(ce.nouns["nature"])),
-		fmt.Sprintf("a %s passes through the %s", ce.pick(ce.nouns["nature"]), ce.pick(ce.nouns["weather"])),
-		fmt.Sprintf("silence speaks of %s", ce.pick(ce.nouns["emotion"])),
-		fmt.Sprintf("%s %s drifting slowly", ce.pick(ce.adjectives["weather"]), ce.pick(ce.nouns["nature"])),
-		fmt.Sprintf("the world turns toward %s", ce.pick(ce.nouns["emotion"])),
-		fmt.Sprintf("between the %s and the %s", ce.pick(ce.nouns["nature"]), ce.pick(ce.nouns["nature"])),
-	}
-
-	line3Pool := []string{
+		fmt.Sprintf("old stones hold %s", topic),
+		fmt.Sprintf("silence holds %s", topic),
+		"the moon rises slow",
+		"a leaf drifts to earth",
+		"still the river flows",
+		"cold wind through the pines",
+		"first light on the lake",
+		"petals on the ground",
+		"dusk across the hills",
+		"frost upon the glass",
+		"the cricket falls still",
 		fmt.Sprintf("%s endures", topic),
-		fmt.Sprintf("all becomes %s", ce.pick(ce.adjectives["emotion"])),
-		fmt.Sprintf("peace at last — %s", topic),
 		fmt.Sprintf("nothing but %s", topic),
+		fmt.Sprintf("peace at last — %s", topic),
 		fmt.Sprintf("the %s knows why", ce.pick(ce.nouns["nature"])),
-		fmt.Sprintf("and %s remains", ce.pick(ce.nouns["emotion"])),
-		fmt.Sprintf("so it has always been"),
+		"all becomes quiet",
+		"shadows slowly fade",
+		"so it always was",
+		"the world breathes again",
+	}
+
+	// 7-syllable lines (for line 2)
+	sevenSyl := []string{
+		fmt.Sprintf("silence speaks softly of %s", topic),
+		fmt.Sprintf("the world slowly turns toward %s", topic),
+		fmt.Sprintf("a %s whispers of %s", ce.pick(ce.nouns["nature"]), topic),
+		"the wind carries ancient songs",
+		"shadows pass across the stone",
+		"softly rain begins to fall",
+		"between the mountain and sky",
+		"the river remembers all",
+		"a distant bell rings the hour",
+		"the forest holds its own breath",
+		"light and shadow trade places",
+		"the last bird sings before dark",
+		"water finds its way to sea",
+		"the old path leads through the mist",
 	}
 
 	return fmt.Sprintf("%s\n%s\n%s",
-		ce.pick(line1Pool),
-		ce.pick(line2Pool),
-		ce.pick(line3Pool),
+		ce.pick(fiveSyl),
+		ce.pick(sevenSyl),
+		ce.pick(fiveSyl),
 	)
 }
 
@@ -397,6 +414,11 @@ func (ce *CreativeEngine) generateCharName(arch characterArchetype) string {
 
 // TellJoke generates a joke about the given topic.
 func (ce *CreativeEngine) TellJoke(topic string) string {
+	if topic == "" {
+		// Pick a random generic topic for jokes without a specific subject
+		genericTopics := []string{"technology", "computers", "life", "science", "math", "coffee", "books", "music"}
+		topic = genericTopics[ce.rng.Intn(len(genericTopics))]
+	}
 	facts := ce.getTopicFacts(topic)
 
 	// If we have knowledge graph facts, prefer topical humor
@@ -415,10 +437,10 @@ func (ce *CreativeEngine) TellJoke(topic string) string {
 func (ce *CreativeEngine) topicalJoke(topic string, facts []string) string {
 	fact := facts[ce.rng.Intn(len(facts))]
 	templates := []string{
-		fmt.Sprintf("Why did %s cross the road? Because %s — and that changes everything.", topic, fact),
-		fmt.Sprintf("You know what's funny about %s? Well, %s. No wonder it keeps coming up!", topic, fact),
-		fmt.Sprintf("I tried to explain %s to my friend. I said, \"%s.\" They still don't get it.", topic, fact),
-		fmt.Sprintf("Have you ever noticed that %s? I mean, %s. Makes you think, right?", fact, topic),
+		fmt.Sprintf("I tried to explain %s to my friend. I said, \"%s.\" They said, \"That's it?\" I said, \"What more do you need?\"", topic, fact),
+		fmt.Sprintf("Fun fact: %s. I told that to someone at a party once. They haven't invited me back.", fact),
+		fmt.Sprintf("You know what's wild about %s? %s. I learned that and it kept me up at night.", topic, fact),
+		fmt.Sprintf("A teacher once asked me what I know about %s. I said, \"%s.\" Got full marks. Low bar, but still.", topic, fact),
 	}
 	return templates[ce.rng.Intn(len(templates))]
 }
@@ -429,12 +451,14 @@ func (ce *CreativeEngine) topicalJoke(topic string, facts []string) string {
 
 // Reflect generates a multi-perspective analysis on a topic.
 func (ce *CreativeEngine) Reflect(topic string, question string) string {
+	// Strip question framing from topic: "what is the meaning of life" → "the meaning of life"
+	topic = stripReflectPrefix(topic)
 	facts := ce.getTopicFacts(topic)
 	sections := make([]string, 0, 5)
 
 	// Opening frame
 	openers := []string{
-		fmt.Sprintf("%s is one of those topics that invites many perspectives.", strings.Title(topic)),
+		fmt.Sprintf("%s is one of those topics that invites many perspectives.", capitalizeFirst(topic)),
 		fmt.Sprintf("When we consider %s, several dimensions come to mind.", topic),
 		fmt.Sprintf("The question of %s is more nuanced than it might first appear.", topic),
 		fmt.Sprintf("There are many ways to think about %s. Here are some perspectives worth considering.", topic),
@@ -471,6 +495,27 @@ func (ce *CreativeEngine) Reflect(topic string, question string) string {
 	return strings.Join(sections, "\n\n")
 }
 
+// stripReflectPrefix removes question framing from a topic so it can be used
+// as a noun phrase in templates. E.g., "what is the meaning of life" → "the meaning of life".
+func stripReflectPrefix(topic string) string {
+	lower := strings.ToLower(strings.TrimSpace(topic))
+	prefixes := []string{
+		"what is ", "what's ", "what are ", "what does ",
+		"why is ", "why are ", "why do ", "why does ",
+		"how is ", "how are ", "how do ", "how does ",
+		"tell me about ", "explain ", "describe ",
+		"what do you think about ", "your thoughts on ",
+		"your opinion on ", "opinion on ",
+		"think about ", "reflect on ", "thoughts on ",
+	}
+	for _, p := range prefixes {
+		if strings.HasPrefix(lower, p) {
+			return strings.TrimSpace(topic[len(p):])
+		}
+	}
+	return topic
+}
+
 // -----------------------------------------------------------------------
 // Knowledge Graph Integration
 // -----------------------------------------------------------------------
@@ -486,6 +531,11 @@ func (ce *CreativeEngine) getTopicFacts(topic string) []string {
 	edges = append(edges, ce.Graph.EdgesTo(topic)...)
 
 	for _, edge := range edges {
+		// Skip described_as edges — they contain full Wikipedia paragraphs
+		// that produce garbage in creative text ("X is X was a French...")
+		if edge.Relation == RelDescribedAs {
+			continue
+		}
 		fact := ce.Graph.edgeToFact(edge)
 		if fact != "" {
 			facts = append(facts, fact)
