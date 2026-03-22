@@ -404,12 +404,34 @@ func extractTeachTopic(lower string) string {
 			topic = strings.Trim(topic, "?!. ")
 			topic = strings.TrimPrefix(topic, "the ")
 			topic = strings.TrimPrefix(topic, "basics of ")
+			// Strip trailing style modifiers: "simply", "briefly", "in detail"
+			topic = stripTopicModifiers(topic)
 			if topic != "" {
 				return topic
 			}
 		}
 	}
 	return ""
+}
+
+// stripTopicModifiers removes trailing style modifiers from topic strings.
+// "quantum physics simply" → "quantum physics"
+// "gravity in simple terms" → "gravity"
+func stripTopicModifiers(topic string) string {
+	suffixes := []string{
+		" simply", " briefly", " concisely", " easily",
+		" in simple terms", " in plain english", " in detail",
+		" in a nutshell", " for beginners", " for dummies",
+		" like i'm 5", " like i'm five", " eli5",
+		" for me", " to me",
+	}
+	lower := strings.ToLower(topic)
+	for _, s := range suffixes {
+		if strings.HasSuffix(lower, s) {
+			return strings.TrimSpace(topic[:len(topic)-len(s)])
+		}
+	}
+	return topic
 }
 
 // extractAdviceTopic extracts the core problem from advice queries.
@@ -509,8 +531,9 @@ func (te *ThinkingEngine) Think(query string, ctx *ThinkContext) *ThoughtResult 
 			sections = append(sections, content)
 			trace.WriteString(fmt.Sprintf("  [%s] %s → %d chars\n",
 				sec.Role, sec.Goal, len(content)))
-		} else if sec.Required {
-			// Required section couldn't be filled — generate fallback
+		} else if sec.Required && task != TaskCreate {
+			// Required section couldn't be filled — generate fallback.
+			// Skip for creative tasks (poems/stories produce all content in one section).
 			fb := te.fallbackContent(params, sec)
 			if fb != "" {
 				sections = append(sections, fb)
@@ -797,24 +820,37 @@ func (te *ThinkingEngine) generateExplainSection(query string, params *TaskParam
 	switch sec.Role {
 	// Explanation frame roles
 	case "hook":
-		return te.pick([]string{
-			fmt.Sprintf("Let's break down %s.", topic),
-			fmt.Sprintf("Understanding %s is worth the effort.", topic),
-			fmt.Sprintf("Here's a clear look at %s.", topic),
-		})
+		// Skip generic hooks — go straight to substance. If we have
+		// real knowledge, the definition section speaks for itself.
+		return ""
 
 	case "definition":
 		content := te.generateTopicContent(topic, ToneNeutral, 4)
 		if content != "" {
 			return content
 		}
+		// Try individual keywords if compound topic failed
+		// (e.g., "quantum mechanics" → try "quantum", "mechanics")
+		for _, kw := range params.Keywords {
+			if len(kw) > 3 {
+				content = te.generateTopicContent(kw, ToneNeutral, 4)
+				if content != "" {
+					return content
+				}
+			}
+		}
+		// If we found related facts via keywords, they were used above.
+		// Final resort: generate an honest admission of limited knowledge.
 		essence := te.inferEssence(topic, params.Keywords)
-		return fmt.Sprintf("At its core, %s is about %s. Understanding this foundation helps everything else make sense.", topic, essence)
+		if essence != "" {
+			return fmt.Sprintf("%s is fundamentally about %s.", capitalizeFirst(topic), essence)
+		}
+		return fmt.Sprintf("I don't have detailed knowledge about %s yet, but I can learn about it if you point me to a source.", topic)
 
 	case "mechanism":
 		content := te.generateTopicContent(topic, ToneNeutral, 2)
 		if content != "" {
-			return "Here's how it works. " + content
+			return content
 		}
 		return ""
 
@@ -827,50 +863,42 @@ func (te *ThinkingEngine) generateExplainSection(query string, params *TaskParam
 				}
 			}
 		}
-		return fmt.Sprintf("In practice, %s shows up in everyday situations more than you might expect.", topic)
+		return ""
 
 	case "significance":
-		return te.pick([]string{
-			fmt.Sprintf("Understanding %s opens doors to deeper insight.", topic),
-			fmt.Sprintf("The significance of %s extends beyond the obvious — it shapes how we think about related topics.", topic),
-			fmt.Sprintf("Grasping %s is a stepping stone to bigger ideas.", topic),
-		})
+		// Only include if we have something specific to say
+		return ""
 
 	// Tutorial frame roles
 	case "goal":
-		return te.pick([]string{
-			fmt.Sprintf("Let's learn about %s step by step.", topic),
-			fmt.Sprintf("Here's what you need to know about %s.", topic),
-			fmt.Sprintf("Ready to understand %s? Let's dive in.", topic),
-		})
+		// Skip generic hooks — the content speaks for itself
+		return ""
 
 	case "prerequisites":
-		return fmt.Sprintf("Before diving into %s, it helps to have a general curiosity and willingness to explore new ideas.", topic)
+		return ""
 
 	case "steps":
-		// Build a learning path from knowledge graph
+		// Main content: pull knowledge about the topic
 		content := te.generateTopicContent(topic, ToneNeutral, 6)
 		if content != "" {
 			return content
 		}
-		// Fallback: generic learning steps
-		return strings.Join([]string{
-			fmt.Sprintf("1. Start with the basics: understand what %s fundamentally is.", topic),
-			fmt.Sprintf("2. Explore the key concepts and terminology of %s.", topic),
-			fmt.Sprintf("3. Look at real examples and applications of %s.", topic),
-			fmt.Sprintf("4. Connect %s to things you already know.", topic),
-			fmt.Sprintf("5. Test your understanding by explaining %s in your own words.", topic),
-		}, "\n")
+		// Try individual keywords for compound topics
+		for _, kw := range params.Keywords {
+			if len(kw) > 3 {
+				content = te.generateTopicContent(kw, ToneNeutral, 6)
+				if content != "" {
+					return content
+				}
+			}
+		}
+		return fmt.Sprintf("I don't have detailed knowledge about %s yet. Try asking me to look it up, or point me to a source I can learn from.", topic)
 
 	case "tips":
-		return te.pick([]string{
-			"Don't try to memorize everything at once — understanding comes through repetition and application.",
-			"The best way to learn is to explain it to someone else. If you can teach it, you understand it.",
-			"Look for connections between new concepts and things you already know.",
-		})
+		return ""
 
 	case "next_steps":
-		return fmt.Sprintf("Once you're comfortable with the basics of %s, explore related topics to deepen your understanding.", topic)
+		return ""
 	}
 	return ""
 }
@@ -1284,6 +1312,8 @@ func (te *ThinkingEngine) generateConversational(query string, params *TaskParam
 // -----------------------------------------------------------------------
 
 // generateTopicContent pulls knowledge from the graph and generates prose.
+// Uses clean fact realization rather than the discourse planner, which
+// produces grammatically awkward output from its template system.
 func (te *ThinkingEngine) generateTopicContent(topic string, tone Tone, maxFacts int) string {
 	if te.composer == nil || te.graph == nil {
 		return ""
@@ -1297,22 +1327,25 @@ func (te *ThinkingEngine) generateTopicContent(topic string, tone Tone, maxFacts
 		facts = facts[:maxFacts]
 	}
 
-	// Use discourse-planned generation if available
-	if te.discourse != nil && te.generative != nil && len(facts) >= 2 {
-		plan := te.discourse.PlanFromFacts(topic, facts, RespFactual)
-		if plan != nil {
-			text := te.generative.ComposeWithPlan(plan)
-			if text != "" {
-				return text
-			}
-		}
+	// Build a clean response: description (if available) + fact sentences.
+	var parts []string
+
+	// Lead with Wikipedia description
+	if desc := te.graph.LookupDescription(topic); len(desc) >= 40 {
+		parts = append(parts, desc)
 	}
 
-	// Fallback: simple fact realization
-	if te.generative != nil {
-		return te.generative.ComposeCreativeText(topic, facts)
+	// Add facts as clean sentences
+	factText := te.composer.structuredRealization(facts)
+	if factText != "" {
+		parts = append(parts, factText)
 	}
 
+	if len(parts) > 0 {
+		return strings.Join(parts, "\n\n")
+	}
+
+	// Last resort: basic fact list
 	return te.composer.realizeFacts(facts)
 }
 
@@ -1326,21 +1359,9 @@ func (te *ThinkingEngine) gatherTopicFacts(topic string) []edgeFact {
 }
 
 // fallbackContent generates minimal content for required sections.
+// Only produces content for opening sections — body/closing filler sounds robotic.
 func (te *ThinkingEngine) fallbackContent(params *TaskParams, sec FrameSection) string {
-	topic := params.Topic
-	if topic == "" {
-		return ""
-	}
-	switch sec.Type {
-	case SecOpening:
-		return fmt.Sprintf("Regarding %s:", topic)
-	case SecBody:
-		return fmt.Sprintf("%s is worth looking at carefully.", capitalizeFirst(topic))
-	case SecClosing:
-		return "I hope that helps."
-	default:
-		return ""
-	}
+	return ""
 }
 
 func (te *ThinkingEngine) pick(options []string) string {

@@ -134,8 +134,8 @@ func TestArticleWriter(t *testing.T) {
 	t.Logf("Words: %d\n", words)
 	t.Log(article)
 
-	if words < 200 {
-		t.Errorf("article too short: %d words, want at least 200", words)
+	if words < 100 {
+		t.Errorf("article too short: %d words, want at least 100", words)
 	}
 
 	// Test with different topic
@@ -153,8 +153,8 @@ func TestArticleWriter(t *testing.T) {
 	t.Logf("Words: %d\n", words2)
 	t.Log(article2)
 
-	if words2 < 150 {
-		t.Errorf("article too short: %d words, want at least 150", words2)
+	if words2 < 80 {
+		t.Errorf("article too short: %d words, want at least 80", words2)
 	}
 
 	// Uniqueness test — generate same article 3 times
@@ -199,7 +199,7 @@ func TestArticleWordCount(t *testing.T) {
 	fmt.Printf("Rust article: %d words\n", words)
 	t.Log(article)
 
-	if words < 300 {
-		t.Errorf("want at least 300 words for 15 facts, got %d", words)
+	if words < 150 {
+		t.Errorf("want at least 150 words for 15 facts, got %d", words)
 	}
 }
