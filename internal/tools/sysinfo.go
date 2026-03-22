@@ -20,21 +20,24 @@ import (
 func GetSystemInfo(query string) (string, error) {
 	query = strings.ToLower(strings.TrimSpace(query))
 
-	switch query {
-	case "disk", "storage":
+	switch {
+	case query == "disk" || query == "storage":
 		return getSysDisk()
-	case "memory", "ram":
+	case query == "memory" || query == "ram":
 		return getSysMemory()
-	case "cpu":
+	case query == "cpu":
 		return getSysCPU()
-	case "ip":
+	case query == "ip":
 		return getSysIP()
-	case "uptime":
+	case query == "uptime":
 		return getSysUptime()
-	case "hostname":
+	case query == "hostname":
 		return getSysHostname()
-	case "os", "system":
+	case query == "os" || query == "system":
 		return getSysOS()
+	case strings.Contains(query, "time"):
+		now := time.Now()
+		return now.Format("3:04 PM (Monday, January 2, 2006)"), nil
 	default:
 		return getSysAll()
 	}

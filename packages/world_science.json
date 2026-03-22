@@ -29,7 +29,7 @@
 
     {"s": "Albert Einstein", "r": "is_a", "o": "theoretical physicist"},
     {"s": "Albert Einstein", "r": "located_in", "o": "Germany"},
-    {"s": "Albert Einstein", "r": "created_by", "o": "Ulm, Germany"},
+    {"s": "Albert Einstein", "r": "founded_in", "o": "1879"},
     {"s": "Albert Einstein", "r": "has", "o": "Nobel Prize in Physics"},
     {"s": "Albert Einstein", "r": "described_as", "o": "brilliant and imaginative"},
     {"s": "Albert Einstein", "r": "related_to", "o": "special relativity"},
