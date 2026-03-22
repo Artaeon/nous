@@ -221,6 +221,7 @@ func main() {
 	actions.Thinker = cognitive.NewThinkingEngine(actions.CogGraph, actions.Composer)
 	actions.Reasoner.Analogy = actions.Analogy
 	actions.CausalReasoner = cognitive.NewGraphCausalReasoner(actions.CogGraph)
+	actions.GoalPlanner = cognitive.NewGoalPlanner(actions.CogGraph, actions.Semantic)
 	actions.Pipeline = cognitive.NewReasoningPipeline(
 		actions.CogGraph, actions.Inference, actions.Reasoner,
 		actions.Thinker, actions.CausalReasoner, actions.Composer,
@@ -249,6 +250,18 @@ func main() {
 			}
 			fmt.Printf("  loaded %d knowledge packages (%d facts, %d vocab)\n", len(results), totalFacts, totalVocab)
 		}
+	}
+
+	// Load mined Wikipedia sentence templates if available
+	tmplPath := filepath.Join(packDir, "templates", "wiki-templates.json")
+	if err := cognitive.LoadMinedTemplates(tmplPath); err == nil {
+		fmt.Println("  loaded Wikipedia sentence templates")
+	}
+
+	// Load GRU text generation model if available
+	textgenPath := filepath.Join(filepath.Dir(*memoryPath), "nous-textgen.bin")
+	if err := actions.Composer.LoadTextGen(textgenPath); err == nil {
+		fmt.Println("  loaded GRU text generation model")
 	}
 
 	// Conversational Learning Engine — Nous learns from every interaction
@@ -804,6 +817,9 @@ func main() {
 		}
 
 		input := strings.TrimSpace(scanner.Text())
+		// Strip stray backslashes from terminal escaping (e.g., "thanks\!" → "thanks!")
+		input = strings.ReplaceAll(input, "\\!", "!")
+		input = strings.ReplaceAll(input, "\\?", "?")
 		if input == "" {
 			continue
 		}
