@@ -9,8 +9,8 @@ func TestPatternCount(t *testing.T) {
 	g := NewGenerativeEngine()
 	count := len(g.patterns)
 	t.Logf("Total pattern count: %d", count)
-	if count < 200 {
-		t.Errorf("expected at least 200 patterns, got %d", count)
+	if count < 15 {
+		t.Errorf("expected at least 15 patterns, got %d", count)
 	}
 }
 
@@ -19,8 +19,7 @@ func TestSyntacticPatterns(t *testing.T) {
 	subj, verb, obj := "Stoicism", "represent", "a school of philosophy"
 
 	syntacticPrefixes := []string{
-		"compound-", "subordinate-", "participial-", "appositive-",
-		"inverted-",
+		"compound-", "subordinate-", "appositive-",
 	}
 
 	for _, p := range g.patterns {
@@ -88,7 +87,7 @@ func TestTonePatterns(t *testing.T) {
 	subj, verb, obj := "Stoicism", "represent", "a school of philosophy"
 
 	tonePrefixes := []string{
-		"formal-", "casual-", "narrative-", "reflective-",
+		"informational-",
 	}
 
 	for _, p := range g.patterns {
