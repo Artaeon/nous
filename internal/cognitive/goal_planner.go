@@ -246,6 +246,74 @@ func FormatGoalPlan(plan *GoalPlan) string {
 	return b.String()
 }
 
+// formatGenericLearningPlan generates a learning plan for a topic.
+// Uses domain-specific advice when possible, generic structure otherwise.
+func formatGenericLearningPlan(goal string) string {
+	// Check for domain-specific learning advice
+	lower := strings.ToLower(goal)
+	if plan, ok := domainLearningPlans[lower]; ok {
+		return plan
+	}
+	// Check partial matches
+	for domain, plan := range domainLearningPlans {
+		if strings.Contains(lower, domain) {
+			return plan
+		}
+	}
+
+	// Generic learning plan — varied structure, no robotic repetition
+	return fmt.Sprintf(`Learning %s — a starting point:
+
+1. Get oriented — read an overview of %s to understand the landscape. What are the main ideas? Who are the key figures?
+2. Learn the vocabulary — every field has its own language. Identify the 10-20 terms you'll see everywhere.
+3. Find a good resource — a well-regarded book, course, or tutorial series. One solid source beats ten scattered ones.
+4. Practice actively — don't just read. Try exercises, build something small, or explain what you've learned to someone else.
+5. Go deeper — once the basics click, pick a subtopic that interests you and explore it. Curiosity is the best teacher.`, goal, goal)
+}
+
+// domainLearningPlans provides specific advice for common learning goals.
+var domainLearningPlans = map[string]string{
+	"guitar": `Learning guitar — a practical roadmap:
+
+1. Get a guitar that's comfortable to hold. Acoustic is great for beginners — no amp needed.
+2. Learn basic open chords: G, C, D, Em, Am. These five chords unlock hundreds of songs.
+3. Practice chord transitions — the hard part isn't the chords, it's switching between them smoothly.
+4. Learn a simple strumming pattern (down-down-up-up-down-up) and play along to songs you like.
+5. Start with easy songs — "Knockin' on Heaven's Door", "Horse With No Name", or "Wonderwall" are classics for beginners.
+6. Build calluses and finger strength by playing a little every day. 15 minutes daily beats 2 hours once a week.
+7. Once you're comfortable, explore barre chords, fingerpicking, or music theory to level up.`,
+
+	"piano": `Learning piano — a practical roadmap:
+
+1. Learn where the notes are — the pattern of black and white keys repeats every octave. Find middle C.
+2. Practice scales — start with C major (all white keys). This builds finger independence and muscle memory.
+3. Learn basic chords: C, F, G, Am. Play them with your left hand while your right hand plays melodies.
+4. Start with simple songs — "Mary Had a Little Lamb", "Ode to Joy", or "Let It Be" are great first pieces.
+5. Read sheet music — learn treble and bass clef. Start with just the right hand, then add the left.
+6. Practice hands together — this is the hardest leap. Start very slowly, even one note at a time.
+7. Explore what excites you — classical, jazz, pop. The best practice is playing music you love.`,
+
+	"programming": `Learning programming — a practical roadmap:
+
+1. Pick one language to start — Python is great for beginners. It reads almost like English.
+2. Learn the fundamentals: variables, if/else, loops, functions. Every language has these.
+3. Build tiny programs — a calculator, a to-do list, a number guessing game. Start small.
+4. Learn to debug — reading error messages is a superpower. Google the error, read the stack trace.
+5. Build a real project — something you actually want. A personal website, a Discord bot, a simple game.
+6. Learn version control (Git) and how to read other people's code.
+7. Join a community — Stack Overflow, Reddit, Discord servers. Programming is learned by doing and asking.`,
+
+	"cooking": `Learning cooking — a practical roadmap:
+
+1. Master the basics: boil water, cook rice, make scrambled eggs, sear meat. Technique matters more than recipes.
+2. Learn knife skills — how to chop an onion, mince garlic, dice vegetables. This saves time and fingers.
+3. Understand heat — high heat for searing, medium for sauteing, low for simmering. Most beginners cook too hot.
+4. Start with simple recipes: pasta with garlic and olive oil, stir-fry, omelets, soups.
+5. Season as you go — salt early and often. Taste before serving. Acid (lemon, vinegar) brightens everything.
+6. Learn 5 mother sauces or master one cuisine you love.
+7. Cook for others — feedback (and compliments) is the best motivator.`,
+}
+
 // findGoalNode finds the best matching node for a goal string.
 func (gp *GoalPlanner) findGoalNode(goal string) string {
 	lower := strings.ToLower(strings.TrimSpace(goal))
