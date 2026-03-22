@@ -192,6 +192,15 @@ func (cg *CognitiveGraph) GetNode(id string) *CogNode {
 	return cg.nodes[id]
 }
 
+// HasLabel returns true if the knowledge graph has a node with the given label.
+func (cg *CognitiveGraph) HasLabel(label string) bool {
+	cg.mu.RLock()
+	defer cg.mu.RUnlock()
+	lower := strings.ToLower(strings.TrimSpace(label))
+	ids := cg.byLabel[lower]
+	return len(ids) > 0
+}
+
 // LookupDescription returns the longest described_as fact for a topic.
 // Prefers longer descriptions (e.g., full Wikipedia summaries over short labels).
 func (cg *CognitiveGraph) LookupDescription(topic string) string {
@@ -200,14 +209,30 @@ func (cg *CognitiveGraph) LookupDescription(topic string) string {
 
 	lower := strings.ToLower(strings.TrimSpace(topic))
 	best := ""
-	if ids, ok := cg.byLabel[lower]; ok {
-		for _, id := range ids {
-			for _, edge := range cg.outEdges[id] {
-				if edge.Relation == RelDescribedAs {
-					if target, ok := cg.nodes[edge.To]; ok {
-						if len(target.Label) > len(best) {
-							best = target.Label
-						}
+
+	// Try exact match first, then partial match (e.g., "einstein" → "albert einstein")
+	ids := cg.byLabel[lower]
+	if len(ids) == 0 && len(lower) >= 4 {
+		ids = cg.partialLabelMatch(lower)
+	}
+
+	for _, id := range ids {
+		for _, edge := range cg.outEdges[id] {
+			if edge.Relation == RelDescribedAs {
+				if target, ok := cg.nodes[edge.To]; ok {
+					desc := target.Label
+					// Skip fragment descriptions (e.g., "from the atmosphere")
+					if isFragmentObject(desc) {
+						continue
+					}
+					// Prefer longer descriptions (Wikipedia paragraphs > short adjective phrases).
+					// A real description should be a sentence (50+ chars, contains a verb or period).
+					isReal := len(desc) >= 50
+					bestIsReal := len(best) >= 50
+					if isReal && (!bestIsReal || len(desc) > len(best)) {
+						best = desc
+					} else if !bestIsReal && len(desc) > len(best) {
+						best = desc // both short, keep the longer one
 					}
 				}
 			}
@@ -237,13 +262,77 @@ func (cg *CognitiveGraph) LookupDescription(topic string) string {
 }
 
 // LookupFacts returns up to maxFacts short facts about a topic (excluding described_as).
+// partialLabelMatch finds the best matching label when exact match fails.
+// Prefers: whole-word matches > suffix matches > substring matches,
+// then most connected entity (most edges = most important).
+// Must be called with cg.mu held.
+func (cg *CognitiveGraph) partialLabelMatch(lower string) []string {
+	type candidate struct {
+		ids      []string
+		label    string
+		score    int // higher = better match quality
+		edgeCount int // more edges = more prominent entity
+	}
+	var candidates []candidate
+
+	for label, labelIDs := range cg.byLabel {
+		if len(label) < 4 {
+			continue
+		}
+		if !strings.Contains(label, lower) {
+			continue
+		}
+		// Score: whole-word match (query appears as a complete word in label)
+		score := 0
+		idx := strings.Index(label, lower)
+		atStart := idx == 0
+		atEnd := idx+len(lower) == len(label)
+		beforeIsSpace := idx > 0 && label[idx-1] == ' '
+		afterIsSpace := idx+len(lower) < len(label) && label[idx+len(lower)] == ' '
+
+		if (atStart || beforeIsSpace) && (atEnd || afterIsSpace) {
+			score = 3 // whole word match: "albert einstein" contains "einstein" as word
+		} else if atEnd || afterIsSpace {
+			score = 2 // suffix match: label ends with query
+		} else if atStart || beforeIsSpace {
+			score = 1 // prefix match: label starts with query
+		}
+		// score 0 = substring only (e.g., "weinstein" contains "einstein") — worst
+
+		// Count edges for prominence (more edges = more important entity)
+		edges := 0
+		for _, id := range labelIDs {
+			edges += len(cg.outEdges[id])
+		}
+
+		candidates = append(candidates, candidate{ids: labelIDs, label: label, score: score, edgeCount: edges})
+	}
+
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	// Sort: highest match score first, then most edges (most prominent entity)
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score > candidates[j].score
+		}
+		return candidates[i].edgeCount > candidates[j].edgeCount
+	})
+
+	return candidates[0].ids
+}
+
 func (cg *CognitiveGraph) LookupFacts(topic string, maxFacts int) []string {
 	cg.mu.RLock()
 	defer cg.mu.RUnlock()
 
 	lower := strings.ToLower(strings.TrimSpace(topic))
-	ids, ok := cg.byLabel[lower]
-	if !ok {
+	ids := cg.byLabel[lower]
+	if len(ids) == 0 && len(lower) >= 4 {
+		ids = cg.partialLabelMatch(lower)
+	}
+	if len(ids) == 0 {
 		return nil
 	}
 
@@ -254,8 +343,11 @@ func (cg *CognitiveGraph) LookupFacts(topic string, maxFacts int) []string {
 				continue // skip — handled separately
 			}
 			if target, ok := cg.nodes[edge.To]; ok {
-				subj := cg.nodes[id].Label
 				obj := target.Label
+				if isFragmentObject(obj) {
+					continue
+				}
+				subj := cg.nodes[id].Label
 				fact := edgeToNaturalLanguage(subj, edge.Relation, obj)
 				if fact != "" && len(fact) < 200 {
 					facts = append(facts, fact)
@@ -328,33 +420,62 @@ func (cg *CognitiveGraph) RandomFact() string {
 
 // edgeToNaturalLanguage converts a graph edge to a simple sentence.
 func edgeToNaturalLanguage(subj string, rel RelType, obj string) string {
+	// Capitalize the subject for sentence-initial position.
+	subj = capitalizeFirst(subj)
+
+	plural := isLikelyPlural(subj)
+	is := " is "
+	has := " has "
+	if plural {
+		is = " are "
+		has = " have "
+	}
+	var sentence string
 	switch rel {
 	case RelIsA:
-		return subj + " is " + obj + "."
+		// Add article: "is a X" / "is an X" instead of bare "is X".
+		sentence = subj + is + articleFor(obj) + "."
 	case RelHas:
-		return subj + " has " + obj + "."
+		sentence = subj + has + obj + "."
 	case RelLocatedIn:
-		return subj + " is located in " + obj + "."
+		sentence = subj + is + "located in " + obj + "."
 	case RelPartOf:
-		return subj + " is part of " + obj + "."
+		sentence = subj + is + "part of " + obj + "."
 	case RelCreatedBy:
-		return subj + " was created by " + obj + "."
+		sentence = subj + " was created by " + obj + "."
 	case RelFoundedBy:
-		return subj + " was founded by " + obj + "."
+		sentence = subj + " was founded by " + obj + "."
 	case RelFoundedIn:
-		return subj + " was founded in " + obj + "."
+		if isPersonReference(subj) {
+			sentence = subj + " was born in " + obj + "."
+		} else {
+			sentence = subj + " was founded in " + obj + "."
+		}
 	case RelUsedFor:
-		return subj + " is used for " + obj + "."
+		sentence = subj + is + "used for " + obj + "."
 	case RelOffers:
-		return subj + " offers " + obj + "."
+		if plural {
+			sentence = subj + " offer " + obj + "."
+		} else {
+			sentence = subj + " offers " + obj + "."
+		}
 	case RelRelatedTo:
-		return subj + " is related to " + obj + "."
+		sentence = subj + is + "related to " + obj + "."
 	case RelCauses:
-		return subj + " causes " + obj + "."
+		if plural {
+			sentence = subj + " cause " + obj + "."
+		} else {
+			sentence = subj + " causes " + obj + "."
+		}
 	default:
-		return subj + " — " + obj + "."
+		sentence = subj + " — " + obj + "."
 	}
+	// Apply grammar fixes.
+	sentence = fixArticleAgreement(sentence)
+	sentence = fixOneOfThePlural(sentence)
+	return sentence
 }
+
 
 // FindNodes finds nodes whose label contains the query.
 func (cg *CognitiveGraph) FindNodes(query string) []*CogNode {
@@ -601,10 +722,13 @@ func (cg *CognitiveGraph) Query(question string) *GraphAnswer {
 		if ids, ok := cg.byLabel[kw]; ok {
 			matchedIDs = append(matchedIDs, ids...)
 		}
-		// Also check for substring matches in node labels
-		for id, node := range cg.nodes {
-			if strings.Contains(strings.ToLower(node.Label), kw) {
-				matchedIDs = append(matchedIDs, id)
+		// Also check for substring matches in node labels,
+		// but only for keywords 4+ chars to avoid matching random letters.
+		if len(kw) >= 4 {
+			for id, node := range cg.nodes {
+				if strings.Contains(strings.ToLower(node.Label), kw) {
+					matchedIDs = append(matchedIDs, id)
+				}
 			}
 		}
 	}
@@ -839,32 +963,50 @@ func (cg *CognitiveGraph) edgeToFact(edge *CogEdge) string {
 	subj := from.Label
 	obj := to.Label
 
+	plural := isLikelyPlural(subj)
+	is, has := "is", "has"
+	if plural {
+		is, has = "are", "have"
+	}
+
 	switch edge.Relation {
 	case RelIsA:
-		return fmt.Sprintf("%s is %s", subj, articleFor(obj))
+		return fmt.Sprintf("%s %s %s", subj, is, articleFor(obj))
 	case RelLocatedIn:
-		return fmt.Sprintf("%s is located in %s", subj, obj)
+		return fmt.Sprintf("%s %s located in %s", subj, is, obj)
 	case RelPartOf:
-		return fmt.Sprintf("%s is part of %s", subj, obj)
+		return fmt.Sprintf("%s %s part of %s", subj, is, obj)
 	case RelCreatedBy:
 		return fmt.Sprintf("%s was created by %s", subj, obj)
 	case RelFoundedBy:
 		return fmt.Sprintf("%s was founded by %s", subj, obj)
 	case RelFoundedIn:
+		if isPersonReference(subj) {
+			return fmt.Sprintf("%s was born in %s", subj, obj)
+		}
 		return fmt.Sprintf("%s was founded in %s", subj, obj)
 	case RelHas:
-		return fmt.Sprintf("%s has %s", subj, obj)
+		return fmt.Sprintf("%s %s %s", subj, has, obj)
 	case RelOffers:
+		if plural {
+			return fmt.Sprintf("%s offer %s", subj, obj)
+		}
 		return fmt.Sprintf("%s offers %s", subj, obj)
 	case RelUsedFor:
-		return fmt.Sprintf("%s is used for %s", subj, obj)
+		return fmt.Sprintf("%s %s used for %s", subj, is, obj)
 	case RelRelatedTo:
-		return fmt.Sprintf("%s is related to %s", subj, obj)
+		return fmt.Sprintf("%s %s related to %s", subj, is, obj)
 	case RelSimilarTo:
-		return fmt.Sprintf("%s is similar to %s", subj, obj)
+		return fmt.Sprintf("%s %s similar to %s", subj, is, obj)
 	case RelCauses:
+		if plural {
+			return fmt.Sprintf("%s cause %s", subj, obj)
+		}
 		return fmt.Sprintf("%s causes %s", subj, obj)
 	case RelContradicts:
+		if plural {
+			return fmt.Sprintf("%s contradict %s", subj, obj)
+		}
 		return fmt.Sprintf("%s contradicts %s", subj, obj)
 	case RelPrefers:
 		return fmt.Sprintf("prefers %s", obj)
