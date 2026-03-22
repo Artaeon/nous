@@ -613,9 +613,10 @@ func tokenize(text string) []string {
 		if len(w) < 2 {
 			continue
 		}
-		if !isExtractiveStop(w) {
-			filtered = append(filtered, w)
+		if isExtractiveStop(w) || contentStopWords[w] {
+			continue
 		}
+		filtered = append(filtered, w)
 	}
 	return filtered
 }

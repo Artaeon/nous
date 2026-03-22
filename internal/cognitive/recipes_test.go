@@ -182,16 +182,17 @@ func TestRecipeConfidence(t *testing.T) {
 
 func TestExtractKeywords(t *testing.T) {
 	keywords := extractKeywords("How can I read the main.go file please?")
-	// Should include "read", "main.go", "file" but not "how", "can", "the", "please"
+	// "read" is now a content stop word (common verb), "how", "can", "the", "please" are stop words
+	// Should include "main.go" and "file" as actual content keywords
 	found := make(map[string]bool)
 	for _, k := range keywords {
 		found[k] = true
 	}
-	if found["how"] || found["can"] || found["the"] || found["please"] {
+	if found["how"] || found["can"] || found["the"] || found["please"] || found["read"] {
 		t.Errorf("stop words not filtered: %v", keywords)
 	}
-	if !found["read"] || !found["file"] {
-		t.Errorf("expected 'read' and 'file' in keywords: %v", keywords)
+	if !found["main.go"] || !found["file"] {
+		t.Errorf("expected 'main.go' and 'file' in keywords: %v", keywords)
 	}
 }
 
@@ -450,12 +451,13 @@ func TestExtractKeywordsShortWords(t *testing.T) {
 }
 
 func TestExtractKeywordsPunctuation(t *testing.T) {
-	keywords := extractKeywords("find, the 'function' definition! in (main.go)")
+	keywords := extractKeywords("analyze, the 'function' definition! in (main.go)")
 	found := make(map[string]bool)
 	for _, k := range keywords {
 		found[k] = true
 	}
-	if !found["find"] || !found["function"] || !found["definition"] {
+	// "find" is a content stop word, but "function", "definition", "main.go" should survive
+	if !found["function"] || !found["definition"] || !found["main.go"] {
 		t.Errorf("punctuation should be stripped, got: %v", keywords)
 	}
 }

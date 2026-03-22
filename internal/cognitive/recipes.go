@@ -361,22 +361,83 @@ func generateRecipeName(steps []StepResult) string {
 func extractKeywords(input string) []string {
 	words := strings.Fields(strings.ToLower(input))
 	var keywords []string
-	stopWords := map[string]bool{
-		"the": true, "and": true, "for": true, "that": true, "this": true,
-		"with": true, "from": true, "are": true, "was": true, "have": true,
-		"has": true, "can": true, "will": true, "how": true, "what": true,
-		"where": true, "when": true, "who": true, "which": true, "does": true,
-		"please": true, "could": true, "would": true, "should": true,
-	}
 
 	for _, w := range words {
 		w = strings.Trim(w, ".,!?;:'\"()[]")
-		if len(w) >= 3 && !stopWords[w] {
+		if len(w) >= 3 && !extractiveStopWords[w] && !contentStopWords[w] {
 			keywords = append(keywords, w)
 		}
 	}
 
 	return keywords
+}
+
+// contentStopWords supplements extractiveStopWords with common verbs,
+// pronouns, and filler words that should never be used as knowledge-graph
+// lookup keys. Without these, queries like "tell me more" or "I will run"
+// match trivial graph entries ("tell", "run") and produce garbage.
+var contentStopWords = map[string]bool{
+	// Common verbs that are rarely topics
+	"tell": true, "told": true, "say": true, "said": true, "says": true,
+	"run": true, "ran": true, "running": true,
+	"get": true, "got": true, "getting": true, "gets": true,
+	"let": true, "lets": true,
+	"see": true, "saw": true, "seen": true,
+	"come": true, "came": true, "coming": true,
+	"take": true, "took": true, "taken": true, "taking": true,
+	"give": true, "gave": true, "given": true,
+	"make": true, "made": true, "makes": true, "making": true,
+	"know": true, "knew": true, "known": true, "knows": true,
+	"think": true, "thought": true, "thinks": true,
+	"want": true, "wants": true, "wanted": true,
+	"need": true, "needs": true, "needed": true,
+	"like": true, "liked": true, "likes": true,
+	"write": true, "wrote": true, "written": true,
+	"read": true,
+	"going": true, "gone": true, "goes": true,
+	"put": true, "puts": true,
+	"use": true, "used": true, "uses": true, "using": true,
+	"try": true, "tried": true, "tries": true,
+	"keep": true, "kept": true, "keeps": true,
+	"start": true, "stop": true,
+	"look": true, "looked": true, "looks": true,
+	"feel": true, "felt": true, "feels": true,
+	"seem": true, "seems": true, "seemed": true,
+	"help": true, "helped": true, "helps": true,
+	"show": true, "showed": true, "shown": true,
+	"hear": true, "heard": true,
+	"play": true, "played": true,
+	"move": true, "moved": true,
+	"live": true, "lived": true,
+	"call": true, "called": true,
+	"work": true, "worked": true, "works": true,
+	"find": true, "found": true,
+	// Pronouns and possessives (3+ chars, shorter filtered by length)
+	"you": true, "your": true, "yours": true, "yourself": true,
+	"him": true, "his": true, "himself": true,
+	"her": true, "hers": true, "herself": true,
+	"its": true, "itself": true,
+	"our": true, "ours": true, "ourselves": true,
+	"them": true, "their": true, "theirs": true, "themselves": true,
+	"she": true, "they": true, "who": true, "whom": true, "whose": true,
+	// Filler words and quantifiers
+	"more": true, "most": true, "much": true, "many": true,
+	"some": true, "any": true, "all": true, "each": true, "every": true,
+	"other": true, "another": true,
+	"really": true, "very": true, "just": true, "also": true,
+	"still": true, "already": true, "even": true, "yet": true,
+	"well": true, "quite": true, "pretty": true,
+	"something": true, "anything": true, "everything": true, "nothing": true,
+	"thing": true, "things": true, "stuff": true,
+	"here": true, "there": true, "now": true, "then": true,
+	"way": true, "lot": true, "bit": true,
+	// Auxiliary / linking
+	"please": true, "thank": true, "thanks": true, "okay": true,
+	"yes": true, "yeah": true, "yep": true, "nah": true, "nope": true,
+	"sure": true, "right": true, "alright": true,
+	// Time words (rarely useful as lookup keys)
+	"today": true, "tomorrow": true, "yesterday": true,
+	"morning": true, "evening": true, "night": true, "afternoon": true,
 }
 
 // keywordOverlap returns 0.0-1.0 representing how many keywords match.
