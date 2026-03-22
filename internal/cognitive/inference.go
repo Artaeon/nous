@@ -36,7 +36,9 @@ func NewInferenceEngine(graph *CognitiveGraph) *InferenceEngine {
 func (ie *InferenceEngine) RunAll() []Inference {
 	var all []Inference
 	all = append(all, ie.Transitive()...)
+	all = append(all, ie.PropertyInheritance()...)
 	all = append(all, ie.Analogical()...)
+	all = append(all, ie.TemporalInference()...)
 	all = append(all, ie.Contradictions()...)
 	return all
 }
@@ -152,7 +154,7 @@ func (ie *InferenceEngine) Analogical() []Inference {
 						}
 
 						// Only infer for certain safe relation types
-						if edge.Relation == RelDomain || edge.Relation == RelRelatedTo {
+						if edge.Relation == RelDomain || edge.Relation == RelRelatedTo || edge.Relation == RelUsedFor {
 							confidence := edge.Confidence * 0.4 // lower confidence for analogy
 							reason := fmt.Sprintf("%s and %s are both in the same category; %s %s %s → %s might also %s %s",
 								aNode.Label, bNode.Label,
@@ -396,7 +398,7 @@ func (ie *InferenceEngine) AnalogicalFrom(nodeIDs []string) []Inference {
 					if propEdge.Inferred || propEdge.Relation == RelIsA {
 						continue
 					}
-					if propEdge.Relation != RelDomain && propEdge.Relation != RelRelatedTo {
+					if propEdge.Relation != RelDomain && propEdge.Relation != RelRelatedTo && propEdge.Relation != RelUsedFor {
 						continue
 					}
 
@@ -468,6 +470,149 @@ func (ie *InferenceEngine) InferAt(nodeIDs []string) []Inference {
 	}
 
 	return combined
+}
+
+// PropertyInheritance infers properties from parent categories.
+// If A is_a B, and B has/used_for/offers X, then A might also have/used_for/offers X.
+// Example: "Go is_a programming language" + "programming language used_for software" → "Go used_for software"
+func (ie *InferenceEngine) PropertyInheritance() []Inference {
+	ie.graph.mu.Lock()
+	defer ie.graph.mu.Unlock()
+
+	var inferences []Inference
+	inheritableRels := map[RelType]bool{
+		RelHas:     true,
+		RelUsedFor: true,
+		RelOffers:  true,
+		RelDomain:  true,
+	}
+
+	// Find all is_a edges: child → parent
+	for _, edge := range ie.graph.edges {
+		if edge.Relation != RelIsA || edge.Inferred {
+			continue
+		}
+		childID := edge.From
+		parentID := edge.To
+
+		// Look at parent's properties
+		for _, parentEdge := range ie.graph.outEdges[parentID] {
+			if parentEdge.Inferred || !inheritableRels[parentEdge.Relation] {
+				continue
+			}
+			// Does child already have this property?
+			if ie.hasEdgeLocked(childID, parentEdge.To, parentEdge.Relation) {
+				continue
+			}
+
+			childNode := ie.graph.nodes[childID]
+			parentNode := ie.graph.nodes[parentID]
+			objNode := ie.graph.nodes[parentEdge.To]
+			if childNode == nil || parentNode == nil || objNode == nil {
+				continue
+			}
+
+			confidence := edge.Confidence * parentEdge.Confidence * 0.5
+			reason := fmt.Sprintf("%s is_a %s, and %s %s %s → %s likely %s %s",
+				childNode.Label, parentNode.Label,
+				parentNode.Label, parentEdge.Relation, objNode.Label,
+				childNode.Label, parentEdge.Relation, objNode.Label,
+			)
+
+			ie.graph.addEdgeLocked(childID, parentEdge.To, parentEdge.Relation,
+				"inference:inheritance", confidence, true)
+
+			inferences = append(inferences, Inference{
+				Subject:    childNode.Label,
+				Relation:   parentEdge.Relation,
+				Object:     objNode.Label,
+				Confidence: confidence,
+				Reason:     reason,
+			})
+		}
+	}
+	return inferences
+}
+
+// TemporalInference detects temporal relationships between entities that share
+// a category and have founded_in dates.
+// Example: "Go founded_in 2009" + "Rust founded_in 2010" + both is_a "programming language"
+// → "Go predates Rust" (inferred).
+func (ie *InferenceEngine) TemporalInference() []Inference {
+	ie.graph.mu.Lock()
+	defer ie.graph.mu.Unlock()
+
+	var inferences []Inference
+
+	// Collect entities with founded_in dates, grouped by is_a category
+	type datedEntity struct {
+		id    string
+		label string
+		year  string
+	}
+	categoryEntities := make(map[string][]datedEntity) // category → entities
+
+	for _, edge := range ie.graph.edges {
+		if edge.Relation != RelFoundedIn || edge.Inferred {
+			continue
+		}
+		entityID := edge.From
+		yearNode := ie.graph.nodes[edge.To]
+		entityNode := ie.graph.nodes[entityID]
+		if entityNode == nil || yearNode == nil {
+			continue
+		}
+
+		// Find what category this entity belongs to
+		for _, isaEdge := range ie.graph.outEdges[entityID] {
+			if isaEdge.Relation == RelIsA && !isaEdge.Inferred {
+				catNode := ie.graph.nodes[isaEdge.To]
+				if catNode == nil {
+					continue
+				}
+				categoryEntities[isaEdge.To] = append(categoryEntities[isaEdge.To], datedEntity{
+					id:    entityID,
+					label: entityNode.Label,
+					year:  yearNode.Label,
+				})
+			}
+		}
+	}
+
+	// For entities in the same category, infer temporal ordering
+	for _, entities := range categoryEntities {
+		if len(entities) < 2 {
+			continue
+		}
+		for i := 0; i < len(entities); i++ {
+			for j := i + 1; j < len(entities); j++ {
+				a, b := entities[i], entities[j]
+				if a.year == b.year {
+					continue
+				}
+				// Determine which came first
+				older, newer := a, b
+				if a.year > b.year {
+					older, newer = b, a
+				}
+				// Add a "follows" relationship: newer follows older
+				if !ie.hasEdgeLocked(newer.id, older.id, RelFollows) {
+					ie.graph.addEdgeLocked(newer.id, older.id, RelFollows,
+						"inference:temporal", 0.7, true)
+
+					inferences = append(inferences, Inference{
+						Subject:    newer.label,
+						Relation:   RelFollows,
+						Object:     older.label,
+						Confidence: 0.7,
+						Reason: fmt.Sprintf("%s (%s) came after %s (%s)",
+							newer.label, newer.year, older.label, older.year),
+					})
+				}
+			}
+		}
+	}
+	return inferences
 }
 
 // hasEdgeLocked checks if an edge exists (caller must hold lock).
