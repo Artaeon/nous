@@ -3,6 +3,7 @@ package cognitive
 import (
 	"fmt"
 	"math/rand"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -104,6 +105,10 @@ type Composer struct {
 	// Discourse Planner — RST-based rhetorical structure planning.
 	// Plans section order and transitions before text generation.
 	Discourse *DiscoursePlanner
+
+	// TextGen — GRU-based neural text generation model.
+	// When loaded, used as an alternative to template-based sentence generation.
+	TextGen *TextGenModel
 }
 
 // NewComposer creates a response composer wired to the cognitive systems.
@@ -148,6 +153,17 @@ func NewComposer(graph *CognitiveGraph, semantic *SemanticEngine, causal *Causal
 		emotionalMem:   make(map[string]float64),
 		sessionPhrases: make(map[string]int),
 	}
+}
+
+// LoadTextGen loads a trained GRU text generation model from disk.
+// If the file doesn't exist, the composer continues using templates only.
+func (c *Composer) LoadTextGen(path string) error {
+	model := NewTextGenModel(DefaultTextGenConfig())
+	if err := model.Load(path); err != nil {
+		return err
+	}
+	c.TextGen = model
+	return nil
 }
 
 // RecordTurn saves a conversation turn for contextual follow-ups.
@@ -667,7 +683,13 @@ func (c *Composer) composeFactual(query string) *ComposedResponse {
 	if desc := c.Graph.LookupDescription(cleanQuery); desc != "" {
 		text := desc
 		if extras := c.Graph.LookupFacts(cleanQuery, 4); len(extras) > 0 {
-			text += "\n\n" + strings.Join(extras, " ")
+			// Use extracted topic for pronoun matching (not full query like "what is gravity").
+			topic := cleanQuery
+			if t := c.extractTopic(query); t != "" {
+				topic = strings.ToLower(t)
+			}
+			varied := c.applyPronounVariation(extras, topic)
+			text += "\n\n" + strings.Join(varied, " ")
 		}
 		return &ComposedResponse{
 			Text:    text,
@@ -677,42 +699,42 @@ func (c *Composer) composeFactual(query string) *ComposedResponse {
 	}
 
 	facts, sources := c.gatherFacts(query)
-	if len(facts) == 0 {
-		return nil
+
+	// Determine topic from facts or query
+	topic := cleanQuery
+	if len(facts) > 0 {
+		topic = facts[0].Subject
 	}
 
-	topic := facts[0].Subject
-
-	// Discourse-planned generation: plan rhetorical structure, then fill
-	if c.Discourse != nil && c.Generative != nil && len(facts) >= 2 {
-		plan := c.Discourse.PlanFromFacts(topic, facts, RespFactual)
-		if plan != nil && len(plan.Sections) > 0 {
-			text := c.Generative.ComposeWithPlan(plan)
-			if text != "" {
-				return &ComposedResponse{
-					Text:    text,
-					Sources: uniqueStrings(sources),
-					Type:    RespFactual,
+	// Clean factual output: description + structured realization.
+	var parts []string
+	if desc := c.Graph.LookupDescription(topic); len(desc) >= 40 {
+		parts = append(parts, desc)
+	}
+	if len(facts) > 0 {
+		// For rich topics (4+ facts), use discourse planner for paragraph structure
+		if c.Discourse != nil && len(facts) >= 4 {
+			plan := c.Discourse.PlanFromFacts(topic, facts, RespFactual)
+			if plan != nil && len(plan.Sections) > 1 {
+				text := c.realizePlan(plan)
+				if text != "" {
+					parts = append(parts, text)
 				}
 			}
 		}
-	}
-
-	// Fallback: generative without discourse plan
-	if c.Generative != nil && len(facts) >= 2 {
-		text := c.Generative.ComposeCreativeText(topic, facts)
-		if text != "" {
-			return &ComposedResponse{
-				Text:    text,
-				Sources: uniqueStrings(sources),
-				Type:    RespFactual,
+		// Fallback or few facts: flat structured realization
+		if len(parts) <= 1 {
+			factText := c.structuredRealization(facts)
+			if factText != "" {
+				parts = append(parts, factText)
 			}
 		}
 	}
-
-	text := c.realizeFacts(facts)
+	if len(parts) == 0 {
+		return nil
+	}
 	return &ComposedResponse{
-		Text:    text,
+		Text:    strings.Join(parts, "\n\n"),
 		Sources: uniqueStrings(sources),
 		Type:    RespFactual,
 	}
@@ -760,6 +782,11 @@ func (c *Composer) gatherFacts(query string) ([]edgeFact, []string) {
 		}
 
 		for _, edge := range c.Graph.outEdges[id] {
+			// Skip described_as — handled separately via LookupDescription
+			// to avoid duplicating the wiki description inside fact templates.
+			if edge.Relation == RelDescribedAs {
+				continue
+			}
 			to := c.Graph.nodes[edge.To]
 			if to == nil {
 				continue
@@ -797,20 +824,29 @@ func (c *Composer) realizeFacts(facts []edgeFact) string {
 		return ""
 	}
 
+	// Filter out fragment objects before realization
+	var clean []edgeFact
+	for _, f := range facts {
+		if !isFragmentObject(f.Object) {
+			clean = append(clean, f)
+		}
+	}
+	if len(clean) == 0 {
+		return ""
+	}
+
 	// Shuffle facts for different emphasis each time
-	shuffled := make([]edgeFact, len(facts))
-	copy(shuffled, facts)
+	shuffled := make([]edgeFact, len(clean))
+	copy(shuffled, clean)
 	c.rng.Shuffle(len(shuffled), func(i, j int) {
 		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
 	})
 
-	// Strategy selection — 6 strategies: 5 template-based + 1 generative.
-	// Generative engine builds sentences from grammar rules for maximum variety.
-	strategy := c.rng.Intn(6)
+	// Strategy selection — 5 template-based strategies.
+	// (Generative engine disabled for factual output — quality too low.)
+	strategy := c.rng.Intn(5)
 
 	switch {
-	case strategy == 5 && c.Generative != nil:
-		return c.generativeRealization(shuffled)
 	case len(shuffled) >= 3 && strategy == 0:
 		return c.fusedRealization(shuffled)
 	case len(shuffled) >= 2 && strategy == 1:
@@ -877,6 +913,9 @@ func (c *Composer) fusedRealization(facts []edgeFact) string {
 
 // factFragment returns a sentence fragment for fusion (no subject, no period).
 func (c *Composer) factFragment(f edgeFact) string {
+	if isFragmentObject(f.Object) {
+		return ""
+	}
 	switch f.Relation {
 	case RelIsA:
 		return c.pick([]string{
@@ -906,6 +945,12 @@ func (c *Composer) factFragment(f edgeFact) string {
 			"was built from the ground up by " + f.Object,
 		})
 	case RelFoundedIn:
+		if looksLikePersonName(f.Subject) {
+			return c.pick([]string{
+				"was born in " + f.Object,
+				"came into the world in " + f.Object,
+			})
+		}
 		return c.pick([]string{
 			"was founded in " + f.Object,
 			"was established in " + f.Object,
@@ -1014,7 +1059,7 @@ func (c *Composer) appositiveRealization(facts []edgeFact) string {
 	if len(remaining) > 0 {
 		// "Stoicera, a philosophy company, is based in Vienna."
 		first := remaining[0]
-		verb := c.relationVerb(first.Relation, first.Object)
+		verb := c.relationVerb(first.Relation, first.Object, subject)
 		b.WriteString(subject + ", " + apposition + ", " + verb + ".")
 
 		// Handle rest with pronouns
@@ -1089,11 +1134,15 @@ func (c *Composer) topicPhrase(f edgeFact) string {
 			"Brought into being by " + f.Object,
 		})
 	case RelFoundedIn:
+		if looksLikePersonName(f.Subject) {
+			return c.pick([]string{
+				"Born in " + f.Object,
+			})
+		}
 		return c.pick([]string{
 			"Established in " + f.Object,
 			"Dating back to " + f.Object,
 			"Around since " + f.Object,
-			"Born in " + f.Object,
 		})
 	case RelIsA:
 		return c.pick([]string{
@@ -1120,7 +1169,7 @@ func (c *Composer) topicPhrase(f edgeFact) string {
 }
 
 // relationVerb returns a verb phrase for a relation (used in appositive construction).
-func (c *Composer) relationVerb(rel RelType, object string) string {
+func (c *Composer) relationVerb(rel RelType, object string, subject string) string {
 	switch rel {
 	case RelLocatedIn:
 		return c.pick([]string{
@@ -1136,6 +1185,9 @@ func (c *Composer) relationVerb(rel RelType, object string) string {
 			"owes its existence to " + object,
 		})
 	case RelFoundedIn:
+		if isPersonReference(subject) {
+			return "was born in " + object
+		}
 		return c.pick([]string{
 			"was established in " + object,
 			"has been around since " + object,
@@ -1183,16 +1235,26 @@ func (c *Composer) flowingRealization(facts []edgeFact) string {
 }
 
 // structuredRealization: one fact per sentence with varied templates.
+// taggedSentence pairs a rendered sentence with its source relation type.
+type taggedSentence struct {
+	Text     string
+	Relation RelType
+}
+
 func (c *Composer) structuredRealization(facts []edgeFact) string {
 	if len(facts) == 0 {
 		return ""
 	}
 
-	var sentences []string
+	var tagged []taggedSentence
 	subject := facts[0].Subject
 	mentionCount := 0
 
 	for _, f := range facts {
+		// Skip fragment objects that produce nonsense sentences
+		if isFragmentObject(f.Object) {
+			continue
+		}
 		displaySubj := f.Subject
 		if f.Subject == subject {
 			mentionCount++
@@ -1202,11 +1264,57 @@ func (c *Composer) structuredRealization(facts []edgeFact) string {
 		}
 		sentence := c.edgeToSentence(displaySubj, f.Relation, f.Object, f.Inferred)
 		if sentence != "" {
-			sentences = append(sentences, sentence)
+			tagged = append(tagged, taggedSentence{Text: sentence, Relation: f.Relation})
 		}
 	}
 
-	return c.combineWithFlow(sentences)
+	return c.combineTaggedWithFlow(tagged)
+}
+
+// combineTaggedWithFlow joins sentences using relation-aware connectors.
+func (c *Composer) combineTaggedWithFlow(tagged []taggedSentence) string {
+	if len(tagged) == 0 {
+		return ""
+	}
+	if len(tagged) == 1 {
+		return tagged[0].Text
+	}
+
+	var b strings.Builder
+	b.WriteString(tagged[0].Text)
+	for i := 1; i < len(tagged); i++ {
+		connector := c.connectorBetween(tagged[i-1].Relation, tagged[i].Relation)
+		b.WriteString(" " + connector + " " + connectorLowerFirst(tagged[i].Text))
+	}
+	return b.String()
+}
+
+// realizePlan renders a discourse plan into paragraphed text.
+// Each non-empty section becomes a paragraph, connected by its discourse connector.
+func (c *Composer) realizePlan(plan *DiscoursePlan) string {
+	if plan == nil || len(plan.Sections) == 0 {
+		return ""
+	}
+
+	var paragraphs []string
+	for _, section := range plan.Sections {
+		if len(section.Facts) == 0 {
+			continue // Skip hook/close sections with no facts
+		}
+		text := c.structuredRealization(section.Facts)
+		if text == "" {
+			continue
+		}
+		// Prepend the section's discourse connector if present
+		if section.Connector != "" {
+			text = section.Connector + " " + connectorLowerFirst(text)
+		}
+		paragraphs = append(paragraphs, text)
+	}
+	if len(paragraphs) == 0 {
+		return ""
+	}
+	return strings.Join(paragraphs, "\n\n")
 }
 
 // generativeRealization uses the grammar-rule-based GenerativeEngine
@@ -1322,6 +1430,9 @@ func (c *Composer) emphaticSentence(f edgeFact) string {
 
 // smartRef returns a contextually appropriate reference for a subject.
 func (c *Composer) smartRef(subject string, mentionCount int) string {
+	// Always capitalize the subject for sentence-initial position.
+	subject = capitalizeFirst(subject)
+
 	if mentionCount <= 1 {
 		return subject
 	}
@@ -1334,15 +1445,17 @@ func (c *Composer) smartRef(subject string, mentionCount int) string {
 	isLanguage := containsAny(lower, "script", "lang") ||
 		isIn(lower, "go", "rust", "python", "java", "ruby", "swift", "kotlin", "c", "c++", "javascript", "typescript")
 
+	isPlural := isLikelyPlural(subject)
+
 	if mentionCount == 2 {
 		// Second mention: pronoun or short ref
 		if isPerson {
-			// Use first name
+			// Use last name (more natural: "Einstein" not "Albert")
 			parts := strings.Fields(subject)
 			if len(parts) > 1 {
-				return parts[0]
+				return parts[len(parts)-1]
 			}
-			return "they"
+			return genderPronoun(detectGender(subject))
 		}
 		if isCompany {
 			return c.pick([]string{"It", "The company", "The team"})
@@ -1350,16 +1463,20 @@ func (c *Composer) smartRef(subject string, mentionCount int) string {
 		if isLanguage {
 			return c.pick([]string{"It", "The language"})
 		}
+		if isPlural {
+			return "They"
+		}
 		return "It"
 	}
 
 	// Third+ mention: vary more
 	if isPerson {
+		pronoun := genderPronoun(detectGender(subject))
 		parts := strings.Fields(subject)
 		if len(parts) > 1 {
-			return c.pick([]string{parts[0], "They", "They"})
+			return c.pick([]string{parts[len(parts)-1], pronoun, pronoun})
 		}
-		return "They"
+		return pronoun
 	}
 	if isCompany {
 		return c.pick([]string{"It", "The company", "They", "The organization"})
@@ -1367,7 +1484,82 @@ func (c *Composer) smartRef(subject string, mentionCount int) string {
 	if isLanguage {
 		return c.pick([]string{"It", "The language", "It"})
 	}
-	return c.pick([]string{"It", "It also", subject})
+	if isPlural {
+		return c.pick([]string{"They", "They", subject})
+	}
+	return c.pick([]string{"It", "It", subject})
+}
+
+// applyPronounVariation replaces repeated subject names with pronouns in a
+// list of fact sentences. The first sentence keeps the full subject; subsequent
+// ones use "It"/"They" etc.
+func (c *Composer) applyPronounVariation(sentences []string, topic string) []string {
+	if len(sentences) <= 1 {
+		return sentences
+	}
+	// Detect the actual subject from the first sentence. The topic from NLU
+	// may be partial (e.g., "einstein" for "Albert Einstein"), so we find the
+	// longest common prefix that repeats across sentences.
+	subject := detectRepeatedSubject(sentences)
+	if subject == "" {
+		subject = capitalizeFirst(topic)
+	}
+	result := make([]string, len(sentences))
+	result[0] = sentences[0]
+	for i := 1; i < len(sentences); i++ {
+		s := sentences[i]
+		ref := c.smartRef(subject, i+1)
+		if strings.HasPrefix(s, subject+" ") {
+			s = ref + s[len(subject):]
+			// Fix verb agreement when pronoun changes number.
+			// E.g., "They" replacing singular subject needs "has"→"have", "is"→"are".
+			if isLikelyPlural(ref) && !isLikelyPlural(subject) {
+				s = fixSubjectVerbAgreement(s, ref)
+			}
+		}
+		result[i] = s
+	}
+	return result
+}
+
+// detectRepeatedSubject finds the common subject prefix across sentences.
+// E.g., ["Albert Einstein is...", "Albert Einstein has..."] → "Albert Einstein"
+func detectRepeatedSubject(sentences []string) string {
+	if len(sentences) < 2 {
+		return ""
+	}
+	// Try progressively longer prefixes from the first sentence,
+	// stopping before verb words.
+	words := strings.Fields(sentences[0])
+	verbs := map[string]bool{
+		"is": true, "are": true, "was": true, "were": true,
+		"has": true, "have": true, "had": true,
+		"does": true, "do": true, "did": true,
+		"can": true, "could": true, "will": true, "would": true,
+		"causes": true, "leads": true, "offers": true,
+		"includes": true, "features": true, "relates": true,
+	}
+	best := ""
+	for n := 1; n <= len(words) && n <= 5; n++ {
+		word := strings.ToLower(words[n-1])
+		// Stop if this word is a verb — it's not part of the subject.
+		if verbs[word] {
+			break
+		}
+		candidate := strings.Join(words[:n], " ")
+		matches := 0
+		for _, s := range sentences[1:] {
+			if strings.HasPrefix(s, candidate+" ") {
+				matches++
+			}
+		}
+		if matches >= len(sentences[1:])/2 {
+			best = candidate
+		} else {
+			break
+		}
+	}
+	return best
 }
 
 // -----------------------------------------------------------------------
@@ -1660,35 +1852,29 @@ func (c *Composer) composeExplain(query string) *ComposedResponse {
 	}
 
 	facts, sources := c.gatherFacts(query)
-	if len(facts) == 0 {
-		return nil
+
+	// Determine topic from facts or query
+	topic := c.extractTopic(query)
+	if len(facts) > 0 {
+		topic = facts[0].Subject
 	}
 
-	topic := facts[0].Subject
-
-	// Discourse-planned explanation
-	text := ""
-	if c.Discourse != nil && c.Generative != nil && len(facts) >= 2 {
-		plan := c.Discourse.PlanFromFacts(topic, facts, RespExplain)
-		if plan != nil && len(plan.Sections) > 0 {
-			text = c.Generative.ComposeWithPlan(plan)
+	// Build a clean explanation from description + structured facts.
+	var parts []string
+	if desc := c.Graph.LookupDescription(topic); len(desc) >= 40 {
+		parts = append(parts, desc)
+	}
+	if len(facts) > 0 {
+		factText := c.structuredRealization(facts)
+		if factText != "" {
+			parts = append(parts, factText)
 		}
 	}
-	// Fallback: generative without plan
-	if text == "" && c.Generative != nil && len(facts) >= 2 {
-		text = c.Generative.ComposeCreativeText(topic, facts)
+	if len(parts) == 0 {
+		return nil
 	}
-	if text == "" {
-		text = c.realizeFacts(facts)
-	}
-
-	// Optionally add a follow-up question
-	if c.rng.Float64() < 0.4 && len(facts) > 0 {
-		text += " " + c.pick(followUpQuestions)
-	}
-
 	return &ComposedResponse{
-		Text:    text,
+		Text:    strings.Join(parts, "\n\n"),
 		Sources: uniqueStrings(sources),
 		Type:    RespExplain,
 	}
@@ -1723,23 +1909,35 @@ func (c *Composer) composeUncertain(query string) *ComposedResponse {
 // -----------------------------------------------------------------------
 
 func (c *Composer) composeConversational(query string, ctx *ComposeContext) *ComposedResponse {
+	// Personal statements ("I will run tomorrow", "we should try that") and
+	// follow-ups ("tell me more", "go on") should NEVER do a knowledge lookup.
+	// They need a conversational response, not a fact dump about "run" or "tell".
+	skipKnowledge := isPersonalStatement(strings.ToLower(query)) || isContinuationRequest(strings.ToLower(query))
+
 	// If we have substantial knowledge about the query topic, USE it.
-	// Don't just acknowledge and ask follow-ups — actually share what we know.
-	if c.Graph != nil && c.Generative != nil {
+	// Use clean fact sentences — no decorative prose, no hooks/closers.
+	if !skipKnowledge && c.Graph != nil {
 		facts, sources := c.gatherFacts(query)
 		if len(facts) >= 2 {
-			// Use the full generative engine for a knowledge-rich response
+			// Lead with description if available, then structured facts
 			topic := facts[0].Subject
-			text := c.Generative.ComposeCreativeText(topic, facts)
-			if text != "" {
+			var parts []string
+			if desc := c.Graph.LookupDescription(topic); len(desc) >= 40 {
+				parts = append(parts, desc)
+			}
+			factText := c.structuredRealization(facts)
+			if factText != "" {
+				parts = append(parts, factText)
+			}
+			if len(parts) > 0 {
 				return &ComposedResponse{
-					Text:    text,
+					Text:    strings.Join(parts, "\n\n"),
 					Sources: uniqueStrings(sources),
 					Type:    RespConversational,
 				}
 			}
 		} else if len(facts) == 1 {
-			// Single fact — compose a brief sentence + follow-up
+			// Single fact — compose a brief sentence
 			sent := c.edgeToSentence(facts[0].Subject, facts[0].Relation, facts[0].Object, facts[0].Inferred)
 			followUp := c.pick([]string{
 				"Want to know more?",
@@ -1754,7 +1952,7 @@ func (c *Composer) composeConversational(query string, ctx *ComposeContext) *Com
 		}
 	}
 
-	// No knowledge found — fall back to the 4-stage conversational pipeline
+	// Personal statements / follow-ups / no knowledge → 4-stage conversational pipeline
 	tone := c.randomTone()
 	sentiment := c.detectSentiment(query)
 	var parts []string
@@ -1767,10 +1965,14 @@ func (c *Composer) composeConversational(query string, ctx *ComposeContext) *Com
 	}
 
 	// Stage 2: BRIDGE — connect to something relevant
-	bridge := c.bridgeToKnowledge(query, ctx)
-	if bridge != "" {
-		parts = append(parts, bridge)
-		sources = append(sources, "knowledge_graph")
+	// Skip for personal statements — knowledge bridges produce garbage
+	// ("I will run" → "I is the ninth letter...")
+	if !skipKnowledge {
+		bridge := c.bridgeToKnowledge(query, ctx)
+		if bridge != "" {
+			parts = append(parts, bridge)
+			sources = append(sources, "knowledge_graph")
+		}
 	}
 
 	// Stage 3: CONTRIBUTE — add value from what we know
@@ -1780,10 +1982,14 @@ func (c *Composer) composeConversational(query string, ctx *ComposeContext) *Com
 		sources = append(sources, "insight")
 	}
 
-	// Stage 4: ENGAGE — keep the conversation alive
-	engage := c.engageFollowUp(query, sentiment, ctx)
-	if engage != "" {
-		parts = append(parts, engage)
+	// Stage 4: ENGAGE — only add a follow-up question if the response
+	// is otherwise thin (no bridge/insight content). Avoids the robotic
+	// "What's your take on X?" that fires on every input.
+	if len(parts) <= 1 {
+		engage := c.engageFollowUp(query, sentiment, ctx)
+		if engage != "" {
+			parts = append(parts, engage)
+		}
 	}
 
 	if len(parts) == 0 {
@@ -2176,6 +2382,10 @@ func (c *Composer) findBridgeTopic(query string) string {
 // edgeToSentenceUnlocked is like edgeToSentence but assumes graph lock is held.
 func (c *Composer) edgeToSentenceUnlocked(subject string, rel RelType, object string, inferred bool) string {
 	templates, ok := relationTemplates[rel]
+	if rel == RelFoundedIn && isPersonReference(subject) {
+		templates = []string{"%s was born in %s."}
+		ok = true
+	}
 	if !ok || len(templates) == 0 {
 		return ""
 	}
@@ -2191,18 +2401,77 @@ func (c *Composer) edgeToSentenceUnlocked(subject string, rel RelType, object st
 // -----------------------------------------------------------------------
 
 func (c *Composer) edgeToSentence(subject string, rel RelType, object string, inferred bool) string {
+	if isFragmentObject(object) {
+		return ""
+	}
+
+	// Try GRU neural generation first (if model is loaded)
+	if c.TextGen != nil {
+		neural := c.TextGen.Generate(subject, rel, object, 0.5)
+		if isAcceptableSentence(neural, subject, object) {
+			if inferred {
+				neural = c.pick(inferredPrefixes) + neural
+			}
+			return neural
+		}
+	}
+
 	templates, ok := relationTemplates[rel]
+	if rel == RelFoundedIn && isPersonReference(subject) {
+		templates = []string{"%s was born in %s."}
+		ok = true
+	}
 	if !ok || len(templates) == 0 {
 		return ""
 	}
 
+	// Capitalize subject for sentence-initial position.
+	subject = capitalizeFirst(subject)
+
 	sentence := fmt.Sprintf(c.pick(templates), subject, object)
+
+	// Fix subject-verb agreement for plural subjects
+	if isLikelyPlural(subject) {
+		sentence = fixSubjectVerbAgreement(sentence, subject)
+	}
+
+	// Fix article agreement: "a acceleration" → "an acceleration"
+	sentence = fixArticleAgreement(sentence)
+
+	// Fix "one of the" + singular: "one of the language" → "one of the languages"
+	sentence = fixOneOfThePlural(sentence)
 
 	if inferred {
 		sentence = c.pick(inferredPrefixes) + sentence
 	}
 
 	return sentence
+}
+
+// isAcceptableSentence checks if a neural-generated sentence meets minimum
+// quality standards. Rejects garbage, repetitions, or sentences that don't
+// mention the subject or object at all.
+func isAcceptableSentence(s, subject, object string) bool {
+	if len(s) < 10 || len(s) > 300 {
+		return false
+	}
+	// Must end with punctuation
+	if !strings.HasSuffix(s, ".") && !strings.HasSuffix(s, "!") && !strings.HasSuffix(s, "?") {
+		return false
+	}
+	lower := strings.ToLower(s)
+	// Must reference at least the subject
+	if !strings.Contains(lower, strings.ToLower(subject)) {
+		return false
+	}
+	// Reject if it contains repeated character sequences (degenerate output)
+	for i := 0; i+6 < len(s); i++ {
+		chunk := s[i : i+3]
+		if strings.Count(s[i:], chunk) > 4 {
+			return false
+		}
+	}
+	return true
 }
 
 // -----------------------------------------------------------------------
@@ -2238,7 +2507,7 @@ func (c *Composer) flowConnectors(sentences []string) string {
 	b.WriteString(sentences[0])
 	for i := 1; i < len(sentences); i++ {
 		connector := c.pick(allConnectors)
-		b.WriteString(" " + connector + " " + lowerFirst(sentences[i]))
+		b.WriteString(" " + connector + " " + connectorLowerFirst(sentences[i]))
 	}
 	return b.String()
 }
@@ -2255,7 +2524,7 @@ func (c *Composer) flowMixed(sentences []string) string {
 	for i := 1; i < len(sentences); i++ {
 		if i%2 == 1 {
 			connector := c.pick(allConnectors)
-			b.WriteString(" " + connector + " " + lowerFirst(sentences[i]))
+			b.WriteString(" " + connector + " " + connectorLowerFirst(sentences[i]))
 		} else {
 			b.WriteString(" " + sentences[i])
 		}
@@ -2268,13 +2537,10 @@ func (c *Composer) flowRhythmic(sentences []string) string {
 	var b strings.Builder
 	for i, s := range sentences {
 		if i > 0 {
-			// Every other sentence gets a connector, creating rhythm
-			if i%3 == 0 {
-				b.WriteString(" " + c.pick(contrastConnectors) + " " + lowerFirst(s))
-			} else if i%2 == 0 {
+			if i%2 == 0 {
 				b.WriteString(" " + s)
 			} else {
-				b.WriteString(" " + c.pick(allConnectors) + " " + lowerFirst(s))
+				b.WriteString(" " + c.pick(allConnectors) + " " + connectorLowerFirst(s))
 			}
 		} else {
 			b.WriteString(s)
@@ -2289,39 +2555,32 @@ func (c *Composer) flowRhythmic(sentences []string) string {
 
 var relationTemplates = map[RelType][]string{
 	RelIsA: {
-		"%s is a %s.", "%s is a type of %s.", "%s is classified as a %s.",
-		"%s falls under %s.", "%s qualifies as a %s.", "%s is considered a %s.",
-		"%s is best described as a %s.", "%s fits the mold of a %s.",
+		"%s is a %s.", "%s is a type of %s.",
+		"%s is considered a %s.",
 	},
 	RelLocatedIn: {
 		"%s is based in %s.", "%s is located in %s.", "%s is in %s.",
-		"%s operates from %s.", "%s is headquartered in %s.", "%s calls %s home.",
-		"%s has its roots in %s.", "%s is planted firmly in %s.",
+		"%s is headquartered in %s.",
 	},
 	RelFoundedBy: {
 		"%s was founded by %s.", "%s was created by %s.", "%s was started by %s.",
 		"%s was built by %s.", "%s was established by %s.",
-		"%s is the creation of %s.", "%s came from the vision of %s.",
-		"%s was brought to life by %s.",
 	},
 	RelFoundedIn: {
 		"%s was founded in %s.", "%s was established in %s.", "%s started in %s.",
-		"%s has been around since %s.", "%s began in %s.", "%s launched in %s.",
-		"%s dates back to %s.", "%s first appeared in %s.",
+		"%s began in %s.", "%s dates back to %s.",
 	},
 	RelOffers: {
 		"%s offers %s.", "%s provides %s.", "%s features %s.",
-		"%s includes %s.", "%s delivers %s.", "%s brings %s to the table.",
-		"%s makes %s available.",
+		"%s includes %s.",
 	},
 	RelHas: {
-		"%s has %s.", "%s includes %s.", "%s comes with %s.",
-		"%s features %s.", "%s encompasses %s.", "%s is equipped with %s.",
+		"%s has %s.", "%s includes %s.",
+		"%s features %s.",
 	},
 	RelUsedFor: {
-		"%s is used for %s.", "%s serves as %s.", "%s is applied to %s.",
-		"%s helps with %s.", "%s is designed for %s.", "%s enables %s.",
-		"%s is built for %s.", "%s is geared toward %s.",
+		"%s is used for %s.", "%s is applied to %s.",
+		"%s is designed for %s.",
 	},
 	RelCreatedBy: {
 		"%s was created by %s.", "%s was built by %s.", "%s was made by %s.",
@@ -2329,43 +2588,252 @@ var relationTemplates = map[RelType][]string{
 		"%s came from %s.",
 	},
 	RelDomain: {
-		"%s is in the %s domain.", "%s relates to %s.", "%s belongs to the field of %s.",
-		"%s falls within %s.", "%s is part of the %s space.",
-		"%s sits in the %s world.",
+		"%s is in the field of %s.", "%s relates to %s.", "%s belongs to the field of %s.",
 	},
 	RelDescribedAs: {
-		"%s is %s.", "%s is described as %s.", "%s is known for being %s.",
-		"%s is characterized as %s.", "%s stands out as %s.", "%s is recognized as %s.",
-		"%s has a reputation for being %s.",
+		"%s is %s.", "%s is described as %s.", "%s is known as %s.",
 	},
 	RelPartOf: {
-		"%s is part of %s.", "%s belongs to %s.", "%s is a component of %s.",
-		"%s sits within %s.", "%s falls under %s.", "%s is embedded in %s.",
+		"%s is part of %s.", "%s belongs to %s.",
 	},
 	RelPrefers: {
-		"%s prefers %s.", "%s favors %s.", "%s leans toward %s.",
-		"%s gravitates to %s.", "%s tends to choose %s.",
-		"%s has a soft spot for %s.",
+		"%s prefers %s.", "%s favors %s.", "%s tends to choose %s.",
 	},
 	RelDislikes: {
 		"%s dislikes %s.", "%s avoids %s.", "%s isn't fond of %s.",
-		"%s tends to stay away from %s.", "%s has little patience for %s.",
 	},
 	RelContradicts: {
-		"%s contradicts %s.", "There's a conflict between %s and %s.",
-		"%s and %s don't align.", "%s is at odds with %s.",
-		"%s runs counter to %s.",
+		"%s contradicts %s.", "%s is at odds with %s.",
+		"%s runs counter to %s.", "%s conflicts with %s.",
 	},
 	RelCauses: {
-		"%s leads to %s.", "%s causes %s.", "%s tends to result in %s.",
-		"%s contributes to %s.", "%s drives %s.", "%s triggers %s.",
-		"%s sets off %s.",
+		"%s leads to %s.", "%s causes %s.",
+		"%s contributes to %s.",
 	},
 	RelRelatedTo: {
 		"%s is connected to %s.", "%s relates to %s.", "%s is linked to %s.",
-		"%s has ties to %s.", "%s intersects with %s.",
-		"%s and %s share common ground.",
 	},
+}
+
+// fixArticleAgreement corrects article-noun agreement in both directions:
+//   "a acceleration" → "an acceleration"
+//   "an programming" → "a programming"
+var articleToAnRe = regexp.MustCompile(`\b(a) ([aeiouAEIOU]\w*)`)
+var articleToARe = regexp.MustCompile(`\b(an) ([^aeiouAEIOU\s]\w*)`)
+
+func fixArticleAgreement(sentence string) string {
+	// Fix "a" → "an" before vowel sounds
+	sentence = articleToAnRe.ReplaceAllStringFunc(sentence, func(match string) string {
+		parts := articleToAnRe.FindStringSubmatch(match)
+		if len(parts) < 3 {
+			return match
+		}
+		word := strings.ToLower(parts[2])
+		// Exceptions: vowel letter but consonant sound
+		for _, ex := range []string{"uni", "use", "uti", "ubi"} {
+			if strings.HasPrefix(word, ex) {
+				return match
+			}
+		}
+		if parts[1] == "A" {
+			return "An " + parts[2]
+		}
+		return "an " + parts[2]
+	})
+	// Fix "an" → "a" before consonant sounds
+	sentence = articleToARe.ReplaceAllStringFunc(sentence, func(match string) string {
+		parts := articleToARe.FindStringSubmatch(match)
+		if len(parts) < 3 {
+			return match
+		}
+		word := strings.ToLower(parts[2])
+		// Exceptions: consonant letter but vowel sound ("an hour", "an honor")
+		for _, ex := range []string{"hour", "honor", "honest", "heir"} {
+			if strings.HasPrefix(word, ex) {
+				return match
+			}
+		}
+		if parts[1] == "An" {
+			return "A " + parts[2]
+		}
+		return "a " + parts[2]
+	})
+	return sentence
+}
+
+// fixOneOfThePlural fixes "one of the X" where X should be plural.
+// E.g., "is one of the programming language." → "...programming languages."
+// Handles multi-word noun phrases: takes the LAST word and pluralizes it.
+var oneOfTheRe = regexp.MustCompile(`one of the ([^.]+)\.`)
+
+func fixOneOfThePlural(sentence string) string {
+	return oneOfTheRe.ReplaceAllStringFunc(sentence, func(match string) string {
+		parts := oneOfTheRe.FindStringSubmatch(match)
+		if len(parts) < 2 {
+			return match
+		}
+		phrase := strings.TrimSpace(parts[1])
+		words := strings.Fields(phrase)
+		if len(words) == 0 {
+			return match
+		}
+		lastWord := words[len(words)-1]
+		// Already plural
+		if strings.HasSuffix(lastWord, "s") {
+			return match
+		}
+		// Simple pluralization of last word
+		plural := simplePlural(lastWord)
+		words[len(words)-1] = plural
+		return "one of the " + strings.Join(words, " ") + "."
+	})
+}
+
+
+// isFragmentObject detects fact objects that are sentence fragments rather than
+// proper noun phrases. E.g., "from the atmosphere" or "which are used in" are
+// fragments that produce nonsense when plugged into templates like "%s has %s."
+func isFragmentObject(obj string) bool {
+	if len(obj) < 3 {
+		return true
+	}
+	lower := strings.ToLower(strings.TrimSpace(obj))
+	// Starts with a preposition/conjunction/relative pronoun — likely a fragment
+	fragmentPrefixes := []string{
+		"from ", "with ", "in ", "on ", "at ", "by ", "for ", "to ",
+		"which ", "that ", "who ", "whom ", "whose ", "where ", "when ",
+		"of ", "into ", "onto ", "upon ", "through ", "during ",
+		"and ", "or ", "but ", "nor ", "yet ",
+		"than ", "as ", "like ",
+	}
+	for _, p := range fragmentPrefixes {
+		if strings.HasPrefix(lower, p) {
+			return true
+		}
+	}
+	// Contains wiki markup artifacts
+	if strings.Contains(obj, "]]") || strings.Contains(obj, "[[") {
+		return true
+	}
+	// Extremely long objects are likely raw wiki paragraph extracts, not facts
+	if len(obj) > 300 {
+		return true
+	}
+	return false
+}
+
+// isLikelyPlural detects plural subjects for verb agreement.
+// Handles common patterns: "black holes", "programming languages", "the Beatles".
+func isLikelyPlural(subject string) bool {
+	lower := strings.ToLower(strings.TrimSpace(subject))
+	// Check for known singular patterns
+	if strings.HasSuffix(lower, "ss") || strings.HasSuffix(lower, "us") ||
+		strings.HasSuffix(lower, "is") || strings.HasSuffix(lower, "ics") {
+		return false // "physics", "stoicism", "canvas", "analysis", etc.
+	}
+	// Pronouns
+	switch lower {
+	case "they", "we", "these", "those":
+		return true
+	case "it", "he", "she", "this", "that":
+		return false
+	}
+	// Most English plurals end in "s" (but not "ss", "us", etc.)
+	lastWord := lower
+	if idx := strings.LastIndex(lower, " "); idx >= 0 {
+		lastWord = lower[idx+1:]
+	}
+	if strings.HasSuffix(lastWord, "s") && !strings.HasSuffix(lastWord, "ss") &&
+		!strings.HasSuffix(lastWord, "us") && !strings.HasSuffix(lastWord, "is") {
+		return true
+	}
+	return false
+}
+
+// fixSubjectVerbAgreement corrects 3rd-person singular verbs to plural form
+// when the subject is plural. E.g., "black holes has X" → "black holes have X".
+func fixSubjectVerbAgreement(sentence string, subject string) string {
+	// Only fix verbs that immediately follow the subject
+	prefix := subject + " "
+	if !strings.HasPrefix(sentence, prefix) {
+		return sentence
+	}
+	rest := sentence[len(prefix):]
+
+	// Map singular → plural verb forms
+	fixes := []struct{ singular, plural string }{
+		{"has ", "have "},
+		{"was ", "were "},
+		{"is a ", "are a "},
+		{"is an ", "are an "},
+		{"is the ", "are the "},
+		{"is in ", "are in "},
+		{"is based ", "are based "},
+		{"is located ", "are located "},
+		{"is classified ", "are classified "},
+		{"is considered ", "are considered "},
+		{"is described ", "are described "},
+		{"is known ", "are known "},
+		{"is characterized ", "are characterized "},
+		{"is recognized ", "are recognized "},
+		{"is connected ", "are connected "},
+		{"is related ", "are related "},
+		{"is linked ", "are linked "},
+		{"is used ", "are used "},
+		{"is designed ", "are designed "},
+		{"is built ", "are built "},
+		{"is geared ", "are geared "},
+		{"is equipped ", "are equipped "},
+		{"is applied ", "are applied "},
+		{"is part ", "are part "},
+		{"is embedded ", "are embedded "},
+		{"is planted ", "are planted "},
+		{"is best described ", "are best described "},
+		{"is %s.", "are %s."},
+		{"includes ", "include "},
+		{"comes with ", "come with "},
+		{"features ", "feature "},
+		{"encompasses ", "encompass "},
+		{"offers ", "offer "},
+		{"provides ", "provide "},
+		{"delivers ", "deliver "},
+		{"brings ", "bring "},
+		{"makes ", "make "},
+		{"enables ", "enable "},
+		{"helps ", "help "},
+		{"serves ", "serve "},
+		{"falls ", "fall "},
+		{"qualifies ", "qualify "},
+		{"fits ", "fit "},
+		{"sits ", "sit "},
+		{"belongs ", "belong "},
+		{"stands ", "stand "},
+		{"calls ", "call "},
+		{"operates ", "operate "},
+		{"prefers ", "prefer "},
+		{"favors ", "favor "},
+		{"leans ", "lean "},
+		{"gravitates ", "gravitate "},
+		{"tends ", "tend "},
+		{"dislikes ", "dislike "},
+		{"avoids ", "avoid "},
+		{"contradicts ", "contradict "},
+		{"leads ", "lead "},
+		{"causes ", "cause "},
+		{"contributes ", "contribute "},
+		{"drives ", "drive "},
+		{"triggers ", "trigger "},
+		{"sets ", "set "},
+		{"relates ", "relate "},
+		{"intersects ", "intersect "},
+	}
+
+	for _, fix := range fixes {
+		if strings.HasPrefix(rest, fix.singular) {
+			return prefix + fix.plural + rest[len(fix.singular):]
+		}
+	}
+	return sentence
 }
 
 var inferredPrefixes = []string{
@@ -2377,19 +2845,76 @@ var inferredPrefixes = []string{
 }
 
 var allConnectors = []string{
-	"Additionally,", "Also,", "On top of that,", "Moreover,",
-	"Furthermore,", "Beyond that,", "What's more,",
-	"It's also worth noting that", "Notably,",
-	"Interestingly,", "Worth mentioning:", "One more thing —",
-	"To add to that,", "Along the same lines,", "Building on that,",
-	"On a related note,", "And here's another angle:",
-	"Digging a bit deeper,", "There's also the fact that",
+	"Additionally,", "Also,", "Moreover,",
+	"Furthermore,", "Beyond that,",
+	"Notably,",
 }
 
 var contrastConnectors = []string{
-	"That said,", "On the flip side,", "However,",
-	"At the same time,", "Then again,", "Meanwhile,",
-	"Counterpoint:", "But also,", "In contrast,",
+	"That said,", "However,",
+	"At the same time,", "Meanwhile,",
+	"In contrast,",
+}
+
+// semanticConnectors maps (previous relation, current relation) pairs to
+// contextually appropriate discourse connectors. All connectors MUST end
+// with a comma — they are prepended to the next sentence with the first
+// letter lowercased. Full-sentence connectors are avoided because they
+// duplicate verbs from the templated sentence.
+var semanticConnectors = map[RelType]map[RelType][]string{
+	// After identity → explaining properties/location/origin
+	RelIsA: {
+		RelLocatedIn:   {"Geographically,", "In terms of location,"},
+		RelFoundedIn:   {"Historically,", "In terms of origins,"},
+		RelFoundedBy:   {"In terms of its creation,", "Regarding its origins,"},
+		RelHas:         {"Among its characteristics,", "Notably,"},
+		RelUsedFor:     {"In practice,", "On the applied side,"},
+		RelDescribedAs: {"More specifically,", "In particular,"},
+	},
+	// After origin → properties/purpose
+	RelFoundedIn: {
+		RelFoundedBy: {"Regarding its creation,", "On the founding side,"},
+		RelHas:       {"Among its features,", "Notably,"},
+		RelUsedFor:   {"In practice,", "On the applied side,"},
+		RelIsA:       {"At its core,", "Fundamentally,"},
+	},
+	RelFoundedBy: {
+		RelFoundedIn: {"Historically,", "In terms of timing,"},
+		RelHas:       {"Among its features,", "Notably,"},
+		RelUsedFor:   {"In practice,", "On the applied side,"},
+	},
+	// After features → more features or purpose
+	RelHas: {
+		RelHas:     {"In addition,", "Beyond that,"},
+		RelUsedFor: {"In practice,", "On the applied side,"},
+		RelOffers:  {"Additionally,", "Beyond that,"},
+	},
+	// After purpose → related concepts
+	RelUsedFor: {
+		RelUsedFor:   {"Beyond that,", "In addition,"},
+		RelRelatedTo: {"On a related note,", "Connected to this,"},
+		RelHas:       {"Worth noting,", "Additionally,"},
+	},
+}
+
+// connectorBetween picks a semantically appropriate connector between two
+// consecutive facts based on their relation types. Falls back to generic
+// additive connectors if no specific mapping exists.
+func (c *Composer) connectorBetween(prev, cur RelType) string {
+	if m, ok := semanticConnectors[prev]; ok {
+		if conns, ok := m[cur]; ok {
+			return c.pick(conns)
+		}
+	}
+	// Same relation type → "Similarly," / "Likewise,"
+	if prev == cur {
+		return c.pick([]string{"Similarly,", "Likewise,", "Along the same lines,"})
+	}
+	// Contrast relations
+	if cur == RelContradicts {
+		return c.pick(contrastConnectors)
+	}
+	return c.pick(allConnectors)
 }
 
 var morningGreetings = []string{
@@ -3045,6 +3570,27 @@ func lowerFirst(s string) string {
 	return strings.ToLower(s[:1]) + s[1:]
 }
 
+// connectorLowerFirst lowercases the first letter of a sentence that follows
+// a discourse connector, but only for pronouns and generic references.
+// Proper nouns (Linux, Python, Albert Einstein) stay capitalized.
+func connectorLowerFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	// Lowercase if it starts with a pronoun/generic reference
+	pronounStarts := []string{
+		"It ", "They ", "The ", "He ", "She ", "We ",
+		"Its ", "Their ", "His ", "Her ", "Our ",
+	}
+	for _, p := range pronounStarts {
+		if strings.HasPrefix(s, p) {
+			return strings.ToLower(s[:1]) + s[1:]
+		}
+	}
+	// Otherwise keep original case (likely a proper noun)
+	return s
+}
+
 func capitalizeFirst(s string) string {
 	if s == "" {
 		return s
@@ -3103,7 +3649,10 @@ func (c *Composer) extractTopic(query string) string {
 			continue
 		}
 		// Keep capitalized short words (Go, AI, ML, C++)
-		if clean[0] >= 'A' && clean[0] <= 'Z' && !isStopWord(strings.ToLower(clean)) {
+		// But skip pronouns/stop words even when capitalized (I, We, My)
+		lowerClean := strings.ToLower(clean)
+		if clean[0] >= 'A' && clean[0] <= 'Z' && !isStopWord(lowerClean) &&
+			!extractiveStopWords[lowerClean] && !contentStopWords[lowerClean] {
 			return clean
 		}
 	}
@@ -3149,4 +3698,82 @@ func looksLikePersonName(s string) bool {
 		}
 	}
 	return true
+}
+
+// isPersonReference returns true if the subject is a person name or a personal pronoun
+// (covers all gendered and neutral pronoun forms).
+func isPersonReference(s string) bool {
+	lower := strings.ToLower(strings.TrimSpace(s))
+	switch lower {
+	case "he", "she", "him", "her", "his", "hers", "they", "them", "their":
+		return true
+	}
+	return looksLikePersonName(s)
+}
+
+// Gender represents grammatical gender for pronoun selection.
+type Gender int
+
+const (
+	GenderUnknown Gender = iota
+	GenderMale
+	GenderFemale
+)
+
+// Common female first names for gender detection.
+var femaleFirstNames = map[string]bool{
+	"marie": true, "maria": true, "mary": true, "ada": true, "elizabeth": true,
+	"victoria": true, "catherine": true, "margaret": true, "jane": true, "anne": true,
+	"anna": true, "emily": true, "charlotte": true, "rosa": true, "rosalind": true,
+	"florence": true, "amelia": true, "cleopatra": true, "frida": true, "indira": true,
+	"joan": true, "julia": true, "helen": true, "sophia": true, "alice": true,
+	"angela": true, "diana": true, "eva": true, "grace": true, "harriet": true,
+	"ida": true, "irene": true, "katharine": true, "katherine": true, "kate": true,
+	"lise": true, "louise": true, "lucy": true, "martha": true, "nancy": true,
+	"nefertiti": true, "olga": true, "rachel": true, "ruth": true, "sarah": true,
+	"simone": true, "susan": true, "sylvia": true, "hedy": true, "hypatia": true,
+	"dorothy": true, "emmy": true, "eleanor": true, "sojourner": true, "malala": true,
+	"oprah": true, "venus": true, "serena": true, "valentina": true, "wangari": true,
+	"aung": true, "benazir": true, "golda": true, "hildegard": true, "marie-curie": true,
+	"queen": true, "empress": true, "mrs": true, "ms": true, "madame": true,
+	"sister": true, "mother": true, "lady": true, "dame": true, "countess": true,
+	"duchess": true, "princess": true, "baroness": true,
+}
+
+// Common male first names/titles for gender detection.
+var maleFirstNames = map[string]bool{
+	"king": true, "emperor": true, "mr": true, "sir": true, "lord": true,
+	"prince": true, "duke": true, "baron": true, "count": true, "father": true,
+	"pope": true, "saint": true, "brother": true,
+}
+
+// detectGender infers grammatical gender from a person's name.
+func detectGender(name string) Gender {
+	parts := strings.Fields(name)
+	if len(parts) == 0 {
+		return GenderUnknown
+	}
+	first := strings.ToLower(parts[0])
+	first = strings.TrimSuffix(first, ".")
+	if femaleFirstNames[first] {
+		return GenderFemale
+	}
+	if maleFirstNames[first] {
+		return GenderMale
+	}
+	// Default to male for unknown person names (statistical majority in
+	// encyclopedic text). Use "they" only for truly unknown entities.
+	return GenderMale
+}
+
+// genderPronoun returns the appropriate pronoun form for a gender.
+func genderPronoun(g Gender) string {
+	switch g {
+	case GenderFemale:
+		return "She"
+	case GenderMale:
+		return "He"
+	default:
+		return "They"
+	}
 }
