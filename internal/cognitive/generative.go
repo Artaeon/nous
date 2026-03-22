@@ -89,6 +89,7 @@ type GenerativeEngine struct {
 	lastNameAt    int    // sentence index of last explicit name use
 	sentenceIdx   int    // current sentence counter
 	topicCategory string  // "language", "company", etc. from is_a facts
+	topicLabel    string  // the actual topic name (for gender detection)
 	currentRel    RelType // the relation being rendered (for pattern builders)
 
 	// Optional NLG subsystems — nil means fallback to hardcoded pools
@@ -140,26 +141,52 @@ func isPerson(category string) bool {
 	return false
 }
 
-// topicPronoun returns "he"/"she"/"it" based on the topic category.
+// topicGender returns the gender of the current topic.
+func (g *GenerativeEngine) topicGender() Gender {
+	if !isPerson(g.topicCategory) {
+		return GenderUnknown
+	}
+	if g.topicLabel != "" {
+		return detectGender(g.topicLabel)
+	}
+	return GenderMale
+}
+
+// topicPronoun returns "he"/"she"/"it" based on the topic category and gender.
 func (g *GenerativeEngine) topicPronoun() string {
 	if isPerson(g.topicCategory) {
-		return "he"
+		switch g.topicGender() {
+		case GenderFemale:
+			return "she"
+		default:
+			return "he"
+		}
 	}
 	return "it"
 }
 
-// topicPossessive returns "his"/"her"/"its" based on the topic category.
+// topicPossessive returns "his"/"her"/"its" based on the topic category and gender.
 func (g *GenerativeEngine) topicPossessive() string {
 	if isPerson(g.topicCategory) {
-		return "his"
+		switch g.topicGender() {
+		case GenderFemale:
+			return "her"
+		default:
+			return "his"
+		}
 	}
 	return "its"
 }
 
-// topicObject returns "him"/"her"/"it" based on the topic category.
+// topicObject returns "him"/"her"/"it" based on the topic category and gender.
 func (g *GenerativeEngine) topicObject() string {
 	if isPerson(g.topicCategory) {
-		return "him"
+		switch g.topicGender() {
+		case GenderFemale:
+			return "her"
+		default:
+			return "him"
+		}
 	}
 	return "it"
 }
@@ -433,7 +460,7 @@ func (g *GenerativeEngine) registerPatterns() {
 	g.patterns = []ClausePattern{
 		{
 			Name:   "active",
-			Weight: 3.0,
+			Weight: 5.0,
 			Build: func(g *GenerativeEngine, subj, verb, obj string, t Tense) string {
 				return subj + " " + g.conjugate(verb, t, Singular) + " " + obj
 			},
@@ -454,25 +481,6 @@ func (g *GenerativeEngine) registerPatterns() {
 			},
 		},
 		{
-			Name:   "existential",
-			Weight: 1.0,
-			Build: func(g *GenerativeEngine, subj, verb, obj string, t Tense) string {
-				// obj may already have an article (from is_a processing)
-				article := ""
-				if !strings.HasPrefix(obj, "a ") && !strings.HasPrefix(obj, "an ") && !strings.HasPrefix(obj, "the ") {
-					article = g.articleFor(obj) + " "
-				}
-				return "There " + g.conjugate("be", t, Singular) + " " + article + obj + " — " + subj
-			},
-		},
-		{
-			Name:   "fronted-object",
-			Weight: 1.5,
-			Build: func(g *GenerativeEngine, subj, verb, obj string, t Tense) string {
-				return obj + " — that " + g.conjugate("be", t, Singular) + " what " + subj + " " + g.conjugate(verb, t, Singular)
-			},
-		},
-		{
 			Name:   "relative-clause",
 			Weight: 2.0,
 			Build: func(g *GenerativeEngine, subj, verb, obj string, t Tense) string {
@@ -485,29 +493,6 @@ func (g *GenerativeEngine) registerPatterns() {
 					pronoun = "who"
 				}
 				return subj + ", " + pronoun + " " + g.conjugate(verb, t, Singular) + " " + obj + ", " + g.composeRelContinuation()
-			},
-		},
-		{
-			Name:   "nominalized",
-			Weight: 1.0,
-			Build: func(g *GenerativeEngine, subj, verb, obj string, t Tense) string {
-				gerund := g.gerund(verb)
-				doVerb := g.conjugate("do", t, Singular)
-				return capitalizeFirst(gerund) + " " + obj + " " + g.conjugate("be", t, Singular) + " what " + subj + " " + doVerb
-			},
-		},
-		{
-			Name:   "conditional",
-			Weight: 0.8,
-			Build: func(g *GenerativeEngine, subj, verb, obj string, t Tense) string {
-				// Strip leading article for "when it comes to" — sounds more natural
-				cleanObj := stripArticle(obj)
-				// For multi-word verbs like "be used for", don't insert "it" in the middle
-				conj := g.conjugate(verb, t, Singular)
-				if strings.Contains(conj, " ") {
-					return "When it comes to " + cleanObj + ", " + subj + " " + conj + " " + g.composeConditionalEnding()
-				}
-				return "When it comes to " + cleanObj + ", " + subj + " " + conj + " it " + g.composeConditionalEnding()
 			},
 		},
 		{
@@ -532,13 +517,6 @@ func (g *GenerativeEngine) registerPatterns() {
 					"notable for " + gerund,
 				})
 				return subj + ", " + intro + " " + obj + ", " + g.composeAppositiveTail()
-			},
-		},
-		{
-			Name:   "rhetorical",
-			Weight: 0.7,
-			Build: func(g *GenerativeEngine, subj, verb, obj string, t Tense) string {
-				return "What " + g.conjugate("make", t, Singular) + " " + subj + " " + g.pick(rhetoricalAdjs) + "? " + capitalizeFirst(subj) + " " + g.conjugate(verb, t, Singular) + " " + obj
 			},
 		},
 	}
@@ -779,33 +757,36 @@ func (g *GenerativeEngine) comparative(adj string) string {
 func (g *GenerativeEngine) relationToVerb(rel RelType) (verb, prep string) {
 	switch rel {
 	case RelIsA:
-		return g.pick([]string{"be", "represent", "constitute", "qualify as"}), ""
+		return g.pick([]string{"be", "be"}), ""
 	case RelLocatedIn:
-		return g.pick([]string{"be based in", "operate from", "call home"}), "in"
+		return g.pick([]string{"be based in", "be located in"}), "in"
 	case RelFoundedBy:
-		return g.pick([]string{"found", "create", "establish", "build", "start"}), "by"
+		return g.pick([]string{"found", "create", "establish"}), "by"
 	case RelFoundedIn:
-		return g.pick([]string{"begin", "start", "emerge", "launch"}), "in"
+		if isPerson(g.topicCategory) {
+			return "be born", "in"
+		}
+		return g.pick([]string{"begin", "start"}), "in"
 	case RelCreatedBy:
-		return g.pick([]string{"create", "develop", "build", "design"}), "by"
+		return g.pick([]string{"create", "develop", "build"}), "by"
 	case RelUsedFor:
-		return g.pick([]string{"serve", "enable", "power"}), "for"
+		return g.pick([]string{"be used for", "be designed for"}), "for"
 	case RelHas:
-		return g.pick([]string{"have", "include", "feature", "offer"}), ""
+		return g.pick([]string{"have", "include", "feature"}), ""
 	case RelOffers:
-		return g.pick([]string{"offer", "provide", "deliver", "bring"}), ""
+		return g.pick([]string{"offer", "provide"}), ""
 	case RelPartOf:
-		return g.pick([]string{"belong to", "be part of", "sit within"}), ""
+		return g.pick([]string{"belong to", "be part of"}), ""
 	case RelDescribedAs:
-		return g.pick([]string{"be", "be known as", "be recognized as"}), ""
+		return g.pick([]string{"be", "be known as"}), ""
 	case RelPrefers:
-		return g.pick([]string{"prefer", "favor", "gravitate toward"}), ""
+		return g.pick([]string{"prefer", "favor"}), ""
 	case RelDislikes:
-		return g.pick([]string{"dislike", "avoid", "steer clear of"}), ""
+		return g.pick([]string{"dislike", "avoid"}), ""
 	case RelRelatedTo:
-		return g.pick([]string{"relate to", "connect with", "intersect with"}), ""
+		return g.pick([]string{"relate to", "be connected to"}), ""
 	case RelCauses:
-		return g.pick([]string{"cause", "lead to", "trigger", "drive"}), ""
+		return g.pick([]string{"cause", "lead to"}), ""
 	default:
 		return "relate to", ""
 	}
@@ -825,64 +806,8 @@ func (g *GenerativeEngine) pickTense(rel RelType) Tense {
 // -----------------------------------------------------------------------
 
 func (g *GenerativeEngine) embellish(subject string, rel RelType, object string) string {
-	poss := g.topicPossessive()
-	switch rel {
-	case RelIsA:
-		return g.pick([]string{
-			"And that distinction matters.",
-			"A category worth paying attention to.",
-			"That classification runs deeper than it sounds.",
-			"Which says more than it might seem at first.",
-			"The label barely scratches the surface.",
-			"Worth sitting with for a moment.",
-			"A designation that carries weight.",
-			"And " + poss + " place in that category is secure.",
-		})
-	case RelFoundedBy, RelCreatedBy:
-		return g.pick([]string{
-			"A deliberate act of creation.",
-			"That origin story shapes everything that followed.",
-			"One person's conviction became something lasting.",
-			"Every great thing starts with someone willing to begin.",
-			"The act of building always leaves fingerprints.",
-			"Creation, in this case, was no accident.",
-			"And the fingerprints of that beginning remain visible.",
-		})
-	case RelLocatedIn:
-		return g.pick([]string{
-			"Geography matters more than people think.",
-			"Place and identity are hard to untangle.",
-			"Location is never accidental.",
-			"The roots run into that soil.",
-			"And that place left its mark.",
-			"Context always shapes content.",
-		})
-	case RelUsedFor:
-		return g.pick([]string{
-			"Purpose-built, not an afterthought.",
-			"That's " + poss + " reason for existing.",
-			"Function drove the design from the start.",
-			"And it does exactly what it was made to do.",
-			"Utility and elegance, in the same breath.",
-			"A tool sharpened for a specific job.",
-		})
-	case RelFoundedIn:
-		return g.pick([]string{
-			"Timing always matters.",
-			"That date anchors the whole story.",
-			"Context is everything — and so is when.",
-			"The era shaped what came next.",
-		})
-	case RelHas:
-		return g.pick([]string{
-			"A defining trait, not an incidental one.",
-			"That feature tells you what to expect.",
-			"And it makes all the difference.",
-			"Worth noting, because it matters in practice.",
-		})
-	default:
-		return ""
-	}
+	// Embellishments removed — factual output only.
+	return ""
 }
 
 func (g *GenerativeEngine) pickSemanticAdj(object string) string {
@@ -1026,70 +951,34 @@ func safeLowerFirst(s string) string {
 // -----------------------------------------------------------------------
 
 // pickPatternFor selects a clause pattern, excluding those incompatible with
-// the given relation type. Copular relations (is_a, described_as) can't use
-// passive ("X is been by Y") or nominalized ("Being Y is what X does").
+// the given relation type.
 func (g *GenerativeEngine) pickPatternFor(rel RelType) ClausePattern {
 	copular := rel == RelIsA || rel == RelDescribedAs
 	locative := rel == RelLocatedIn
 	possessive := rel == RelHas || rel == RelOffers
 	relational := rel == RelRelatedTo || rel == RelCauses
-	byRelation := rel == RelFoundedBy || rel == RelCreatedBy
 	temporal := rel == RelFoundedIn
 
-	// Almost every relation needs some patterns filtered out.
-	// Build a filtered candidate list.
 	candidates := make([]ClausePattern, 0, len(g.patterns))
 	for _, p := range g.patterns {
-		// Copular verbs: no passive, nominalized, or appositive
-		if copular && (p.Name == "passive" || p.Name == "nominalized" || p.Name == "appositive-lead") {
+		// Copular verbs: no passive or appositive
+		if copular && (p.Name == "passive" || p.Name == "appositive-lead") {
 			continue
 		}
-		// described_as is adjective-like — conditional ("When it comes to practical, X is it")
-		// and cleft ("It is practical that X is") are both broken.
-		if rel == RelDescribedAs && (p.Name == "conditional" || p.Name == "cleft") {
+		// described_as: no cleft
+		if rel == RelDescribedAs && p.Name == "cleft" {
 			continue
 		}
-		// Locative: no passive
-		if locative && p.Name == "passive" {
+		// Locative/possessive: no passive
+		if (locative || possessive) && p.Name == "passive" {
 			continue
 		}
-		// Possessive: no passive
-		if possessive && p.Name == "passive" {
-			continue
-		}
-		// Relational/causal: no appositive (awkward gerunds) or passive
+		// Relational/causal: no appositive or passive
 		if relational && (p.Name == "appositive-lead" || p.Name == "passive") {
 			continue
 		}
-		// Existential only makes sense for is_a ("There is a language — Go"),
-		// not described_as ("There is a practical — stoicism" is broken).
-		if p.Name == "existential" && rel != RelIsA {
-			continue
-		}
-		// Fronted-object is awkward for described_as ("practical — that is what X does")
-		if p.Name == "fronted-object" && rel == RelDescribedAs {
-			continue
-		}
-		// By-relations after swap: no conditional ("When it comes to Go, Google created it")
-		// — the "it" pronoun doesn't agree with the object after swap
-		if byRelation && p.Name == "conditional" {
-			continue
-		}
-		// Temporal (founded_in): only active, cleft, fronted, existential work naturally.
-		// Relative-clause excluded: produces "which founded in 300 BC" (missing "was").
-		if temporal && (p.Name == "nominalized" || p.Name == "passive" ||
-			p.Name == "conditional" || p.Name == "appositive-lead" || p.Name == "rhetorical" ||
-			p.Name == "relative-clause") {
-			continue
-		}
-		// Nominalized ("Qualifying as X was what Y does") sounds awkward for most relations.
-		// Only allow for used_for and has where it reads naturally.
-		if p.Name == "nominalized" && !possessive && rel != RelUsedFor {
-			continue
-		}
-		// Fronted-object cleft ("A language — that was what Y does") also sounds forced
-		// for copular, locative, temporal, and by-relations.
-		if p.Name == "fronted-object" && (copular || locative || temporal || byRelation) {
+		// Temporal: only active and cleft work
+		if temporal && (p.Name == "passive" || p.Name == "appositive-lead" || p.Name == "relative-clause") {
 			continue
 		}
 		candidates = append(candidates, p)
@@ -1266,6 +1155,19 @@ func (g *GenerativeEngine) ComposeCreativeText(topic string, facts []edgeFact) s
 	}
 	g.resetTracker()
 	g.topicCategory = inferCategory(facts)
+	g.topicLabel = topic
+
+	// Filter out described_as facts — they contain full Wikipedia paragraphs
+	// that produce garbage when composed into sentences ("X is X was a French...").
+	var usable []edgeFact
+	for _, f := range facts {
+		if f.Relation != RelDescribedAs {
+			usable = append(usable, f)
+		}
+	}
+	if len(usable) == 0 {
+		return ""
+	}
 
 	var parts []string
 
@@ -1273,7 +1175,7 @@ func (g *GenerativeEngine) ComposeCreativeText(topic string, facts []edgeFact) s
 	parts = append(parts, g.composeOpener(topic))
 
 	// Body: express facts with maximum variety
-	for i, f := range facts {
+	for i, f := range usable {
 		if i >= 4 {
 			break // keep it concise
 		}
@@ -1334,187 +1236,24 @@ var impactNouns = []string{
 	"profile", "nature", "role", "position", "place",
 }
 
-var connVerbs = []string{
-	"moreover", "beyond that", "furthermore", "in addition",
-	"on top of that", "equally", "along the same lines", "similarly",
-}
 
-// --- Rhetorical device pools ---
-
-var metaphorVehicles = []string{
-	"backbone", "engine", "foundation", "workhorse", "catalyst",
-	"cornerstone", "lifeblood", "bedrock", "pillar", "driving force",
-}
-
-var contrastPairs = [][2]string{
-	{"simple", "powerful"}, {"small", "capable"}, {"young", "mature"},
-	{"minimal", "expressive"}, {"lean", "robust"}, {"strict", "flexible"},
-	{"lightweight", "full-featured"}, {"focused", "versatile"},
-}
-
-var punchlines = []string{
-	"And it shows.", "Full stop.", "No question.",
-	"That matters.", "By design.", "From day one.",
-	"Without compromise.", "Period.", "And that is the point.",
-	"This changes everything.", "Built to last.",
-}
 
 // -----------------------------------------------------------------------
 // Rhetorical Devices — deliberate use of literary techniques
 // -----------------------------------------------------------------------
 
-// composeMetaphor generates "X is the [vehicle] of [domain]".
-func (g *GenerativeEngine) composeMetaphor(topic string, facts []edgeFact) string {
-	// Find a use-case domain from facts
-	domain := ""
-	for _, f := range facts {
-		if f.Relation == RelUsedFor {
-			domain = f.Object
-			break
-		}
-	}
-	if domain == "" {
-		// Find category from is_a
-		for _, f := range facts {
-			if f.Relation == RelIsA {
-				domain = f.Object
-				break
-			}
-		}
-	}
-	if domain == "" {
-		return ""
-	}
-	vehicle := g.pickUnique(metaphorVehicles)
-	return topic + " " + g.conjugate("be", TensePresent, Singular) +
-		" the " + vehicle + " of " + domain + "."
-}
-
-// composeAntithesis generates "Simple in X, powerful in Y".
-func (g *GenerativeEngine) composeAntithesis(topic string, facts []edgeFact) string {
-	pair := contrastPairs[g.rng.Intn(len(contrastPairs))]
-	nounA := g.pick([]string{"concept", "approach", "form", "principle", "foundation"})
-	nounB := g.pick([]string{"execution", "practice", "impact", "reach", "application"})
-	return capitalizeFirst(pair[0]) + " in " + nounA + ", " + pair[1] + " in " + nounB +
-		" — that " + g.conjugate("be", TensePresent, Singular) + " " + topic + "."
-}
-
-// composeParallelism generates "Fast to X, easy to Y, simple to Z" from 3+ same-type facts.
-func (g *GenerativeEngine) composeParallelism(topic string, facts []edgeFact) string {
-	// Gather objects from same relation type
-	var hasObjs, usedForObjs []string
-	for _, f := range facts {
-		if f.Subject == topic {
-			switch f.Relation {
-			case RelHas:
-				hasObjs = append(hasObjs, f.Object)
-			case RelUsedFor:
-				usedForObjs = append(usedForObjs, f.Object)
-			}
-		}
-	}
-
-	if len(hasObjs) >= 3 {
-		return capitalizeFirst(hasObjs[0]) + ". " + capitalizeFirst(hasObjs[1]) + ". " +
-			capitalizeFirst(hasObjs[2]) + ". This " +
-			g.conjugate("be", TensePresent, Singular) + " " + topic + "."
-	}
-	if len(usedForObjs) >= 3 {
-		verb := g.pick([]string{"built for", "designed for", "made for"})
-		return capitalizeFirst(verb) + " " + usedForObjs[0] + ", " +
-			verb + " " + usedForObjs[1] + ", " +
-			verb + " " + usedForObjs[2] + "."
-	}
-	return ""
-}
-
-// composeChiasmus generates "X doesn't just have Y — Y defines X".
-func (g *GenerativeEngine) composeChiasmus(topic string, fact edgeFact) string {
-	switch fact.Relation {
-	case RelHas:
-		return topic + " " + g.conjugate("do", TensePresent, Singular) + "n't just have " +
-			fact.Object + " — " + fact.Object + " " +
-			g.conjugate("define", TensePresent, Singular) + " " + topic + "."
-	case RelUsedFor:
-		return topic + " " + g.conjugate("do", TensePresent, Singular) + "n't just " +
-			g.pick([]string{"serve", "power", "enable"}) + " " + fact.Object +
-			" — it " + g.conjugate("transform", TensePresent, Singular) + " it."
-	case RelDescribedAs:
-		return topic + " " + g.conjugate("be", TensePresent, Singular) + "n't " +
-			fact.Object + " because it " + g.conjugate("try", TensePresent, Singular) +
-			" to be — it " + g.conjugate("be", TensePresent, Singular) + " " +
-			fact.Object + " because it " + g.conjugate("have", TensePresent, Singular) + " to be."
-	default:
-		return ""
-	}
-}
-
-// insertRhetoric adds a rhetorical device sentence to a section when appropriate.
-// Returns empty string if no suitable device can be built from the facts.
+// insertRhetoric is a no-op — rhetorical devices removed for factual output.
 func (g *GenerativeEngine) insertRhetoric(topic string, facts []edgeFact) string {
-	if len(facts) < 2 {
-		return ""
-	}
-	device := g.rng.Intn(5)
-	switch device {
-	case 0:
-		return g.composeMetaphor(topic, facts)
-	case 1:
-		return g.composeAntithesis(topic, facts)
-	case 2:
-		return g.composeParallelism(topic, facts)
-	case 3:
-		// Chiasmus on a random fact
-		f := facts[g.rng.Intn(len(facts))]
-		return g.composeChiasmus(topic, f)
-	default:
-		return ""
-	}
+	return ""
 }
 
 // -----------------------------------------------------------------------
 // Sentence Rhythm — vary length for natural flow
 // -----------------------------------------------------------------------
 
-// composePunchline generates a short punchy sentence (2-5 words) for emphasis.
-func (g *GenerativeEngine) composePunchline() string {
-	return g.pick(punchlines)
-}
-
-// rhythmCheck returns true if recent sentences have been long and a short
-// punchy sentence would improve the rhythm.
-func (g *GenerativeEngine) rhythmCheck(sentences []string) bool {
-	if len(sentences) < 2 {
-		return false
-	}
-	// Check if last 2 sentences are both 12+ words
-	last := sentences[len(sentences)-1]
-	prev := sentences[len(sentences)-2]
-	return len(strings.Fields(last)) >= 12 && len(strings.Fields(prev)) >= 12
-}
-
-// applyRhythm inserts punchlines after sequences of long sentences.
+// applyRhythm is a no-op — punchlines removed for factual output.
 func (g *GenerativeEngine) applyRhythm(sentences []string) []string {
-	if len(sentences) < 3 {
-		return sentences
-	}
-	var result []string
-	longRun := 0
-	for _, s := range sentences {
-		result = append(result, s)
-		wc := len(strings.Fields(s))
-		if wc >= 12 {
-			longRun++
-		} else {
-			longRun = 0
-		}
-		// After 2+ long sentences, 40% chance to insert a punchline
-		if longRun >= 2 && g.rng.Float64() < 0.4 {
-			result = append(result, g.composePunchline())
-			longRun = 0
-		}
-	}
-	return result
+	return sentences
 }
 
 // -----------------------------------------------------------------------
@@ -1522,47 +1261,24 @@ func (g *GenerativeEngine) applyRhythm(sentences []string) []string {
 // -----------------------------------------------------------------------
 
 // synthesizeOriginPurpose merges a created_by and used_for fact.
-// "Created by Google and designed for cloud computing, Go was purpose-built for the modern era."
 func (g *GenerativeEngine) synthesizeOriginPurpose(topic, creator, purpose string) string {
-	verb := g.pick([]string{"created", "built", "conceived", "developed"})
-	adj := g.pick([]string{"purpose-built", "specifically crafted", "intentionally shaped", "tailor-made"})
-	era := g.pick([]string{"modern era", "contemporary landscape", "demands of today", "real world"})
-	return capitalizeFirst(verb) + " by " + creator + " and " +
-		g.pick([]string{"designed", "engineered", "optimized"}) + " for " + purpose +
-		", " + topic + " was " + adj + " for the " + era + "."
+	return capitalizeFirst(topic) + " was created by " + creator + " and is used for " + purpose + "."
 }
 
-// synthesizeFeatureInsight merges 2 has facts into "With X and Y, topic achieves Z."
+// synthesizeFeatureInsight merges 2 has facts into a compound sentence.
 func (g *GenerativeEngine) synthesizeFeatureInsight(topic, feat1, feat2 string) string {
-	verb := g.pick([]string{"achieves", "delivers", "enables", "unlocks"})
-	outcome := g.pick([]string{
-		"what few others can", "a rare combination",
-		"something truly distinctive", "results that speak for themselves",
-	})
-	return "With " + feat1 + " and " + feat2 + ", " + topic +
-		" " + verb + " " + outcome + "."
+	return capitalizeFirst(topic) + " features both " + feat1 + " and " + feat2 + "."
 }
 
 // synthesizeIdentityQuality merges an is_a and described_as fact.
-// "As a fast and efficient programming language, Go bridges the gap between simplicity and power."
 func (g *GenerativeEngine) synthesizeIdentityQuality(topic, category, quality string) string {
-	action := g.pick([]string{
-		"bridges the gap between simplicity and power",
-		"stands where precision meets productivity",
-		"occupies a space few others can claim",
-		"strikes a balance that matters",
-	})
 	return "As " + articleForWord(quality) + " " + quality + " " + category +
-		", " + topic + " " + action + "."
+		", " + topic + " is widely recognized."
 }
 
 // synthesizeFeaturePurpose merges a has and used_for fact.
-// "Its ownership model makes Rust particularly suited for memory-safe systems programming."
 func (g *GenerativeEngine) synthesizeFeaturePurpose(topic, feature, purpose string) string {
-	verb := g.pick([]string{"makes", "renders", "positions"})
-	adj := g.pick([]string{"particularly", "especially", "uniquely", "remarkably"})
-	fit := g.pick([]string{"suited for", "effective at", "capable of", "built for"})
-	return "Its " + feature + " " + verb + " " + topic + " " + adj + " " + fit + " " + purpose + "."
+	return "Its " + feature + " makes " + topic + " well suited for " + purpose + "."
 }
 
 // synthesizeFacts scans the fact list for combinable pairs and generates
@@ -1624,286 +1340,80 @@ func (g *GenerativeEngine) synthesizeFacts(topic string, facts []edgeFact) []str
 
 // --- Compositional phrase builders ---
 
-// composeRelContinuation generates "is/stands as a [adj] [noun]." from parts.
+// composeRelContinuation generates a factual continuation for relative clauses.
 func (g *GenerativeEngine) composeRelContinuation() string {
-	pattern := g.rng.Intn(4)
-	switch pattern {
-	case 0:
-		adj := g.pickUnique(adjSlots)
-		return g.conjugate("stand", TensePresent, Singular) + " as " +
-			g.articleFor(adj) + " " + adj + " " + g.pickUnique(qualityNouns) + "."
-	case 1:
-		return g.conjugate("be", TensePresent, Singular) + " " +
-			g.pick(valueAdjs) + " " + g.pick(attentionNouns) + "."
-	case 2:
-		return g.conjugate("shape", TensePresent, Singular) + " " + g.topicPossessive() + " " + g.pickUnique(impactNouns) + "."
-	default:
-		return g.conjugate("reveal", TensePresent, Singular) + " something " +
-			g.pickUnique(adjSlots) + " about " + g.topicPossessive() + " " + g.pickUnique(impactNouns) + "."
-	}
+	return g.pick([]string{
+		"is widely recognized.",
+		"remains notable.",
+		"is well established.",
+	})
 }
 
-// composeConditionalEnding generates a manner phrase from parts.
-func (g *GenerativeEngine) composeConditionalEnding() string {
-	return g.pick(mannerAdvs) + "."
-}
 
-// composeAppositiveTail generates "has [verb]ed his/its own [noun]." from parts.
+// composeAppositiveTail generates a factual tail for appositive clauses.
 func (g *GenerativeEngine) composeAppositiveTail() string {
-	pattern := g.rng.Intn(3)
-	switch pattern {
-	case 0:
-		return g.conjugate("have", TensePresent, Singular) + " " +
-			g.pastParticiple(g.pick([]string{"carve", "forge", "chart", "find", "build"})) +
-			" " + g.topicPossessive() + " own " + g.pickUnique(impactNouns) + "."
-	case 1:
-		return g.conjugate("stand", TensePresent, Singular) + " on " + g.topicPossessive() + " own " +
-			g.pick([]string{"merits", "strengths", "terms", "foundations"}) + "."
-	default:
-		return g.conjugate("be", TensePresent, Singular) + " " +
-			g.pick(valueAdjs) + " " + g.pick(attentionNouns) + "."
-	}
+	return g.pick([]string{
+		"is widely recognized.",
+		"remains significant.",
+		"continues to be relevant.",
+	})
 }
 
-// composeConnector generates a discourse connector from parts.
+// composeConnector generates a neutral discourse connector.
 func (g *GenerativeEngine) composeConnector() string {
-	pattern := g.rng.Intn(3)
-	switch pattern {
-	case 0:
-		return capitalizeFirst(g.pick(connVerbs)) + ","
-	case 1:
-		return capitalizeFirst(g.pick([]string{"looking", "digging", "going"})) + " " +
-			g.pick([]string{"deeper", "further", "beyond that"}) + ","
-	default:
-		return g.pick([]string{
-			"What's more,", "And here's the thing:", "Consider this:",
-			"There's another angle:", "Add to that:",
-		})
-	}
+	return g.pick([]string{
+		"Additionally,", "Also,", "Moreover,",
+		"Furthermore,", "In addition,",
+	})
 }
 
-// composeOpener generates a topic introduction from grammar parts.
+// composeOpener generates a neutral topic introduction.
 func (g *GenerativeEngine) composeOpener(topic string) string {
-	pattern := g.rng.Intn(8)
-	switch pattern {
-	case 0:
-		noun := g.pick([]string{"story", "case", "subject", "topic", "account"})
-		adj := g.pick([]string{"worth telling", "worth exploring", "worth examining", "that rewards attention", "that holds up under scrutiny"})
-		return "The " + noun + " of " + topic + " " + g.conjugate("be", TensePresent, Singular) + " one " + adj + "."
-	case 1:
-		verb := g.pick([]string{"understand", "appreciate", "grasp", "see"})
-		return "To " + verb + " " + topic + ", you have" +
-			" to look at the " + g.pick([]string{"details", "full picture", "facts", "fundamentals", "evidence"}) + "."
-	case 2:
-		return "There " + g.conjugate("be", TensePresent, Singular) + " more to " + topic +
-			" than " + g.pick([]string{"meets the eye", "first impressions suggest", "most people realize", "surface-level knowledge reveals", "a passing glance would show"}) + "."
-	case 3:
-		return capitalizeFirst(topic) + " " + g.conjugate("have", TensePresent, Singular) + " " +
-			g.anAdj() + " " +
-			g.pickUnique(impactNouns) + " that " + g.conjugate(g.pick([]string{
-			"deserve", "reward", "invite", "warrant"}), TensePresent, Singular) + " " +
-			g.pick(attentionNouns) + "."
-	case 4:
-		return "Here " + g.conjugate("be", TensePresent, Singular) + " what " +
-			g.conjugate("be", TensePresent, Singular) + " " +
-			g.pick(valueAdjs) + " " + g.pick([]string{"knowing", "understanding", "exploring"}) +
-			" about " + topic + "."
-	case 5:
-		return "When you " + g.pick([]string{"look at", "examine", "consider", "explore"}) +
-			" " + topic + " " + g.pick([]string{"closely", "carefully", "in depth"}) +
-			", " + g.pick([]string{"patterns emerge", "a picture forms", "things come together", "the depth becomes clear"}) + "."
-	case 6:
-		return "Few " + g.pick([]string{"subjects", "topics", "things"}) + " " +
-			g.pick([]string{"repay careful study", "reward patience", "hold up to scrutiny"}) +
-			" the way " + topic + " " + g.conjugate("do", TensePresent, Singular) + "."
-	default:
-		return capitalizeFirst(topic) + " " + g.conjugate("be", TensePresent, Singular) +
-			" one of those " + g.pick([]string{"subjects", "topics", "areas"}) +
-			" where the " + g.pick([]string{"more you learn", "deeper you go", "closer you look"}) +
-			", the " + g.pick([]string{"more there is to find", "richer it gets", "more interesting it becomes"}) + "."
-	}
+	// Simple factual introduction — no editorial hooks.
+	return capitalizeFirst(topic) + " is a topic with several notable aspects."
 }
 
-// composeCloser generates a topic conclusion from grammar parts.
+// composeCloser generates a neutral topic conclusion.
 func (g *GenerativeEngine) composeCloser(topic string) string {
-	pattern := g.rng.Intn(5)
-	switch pattern {
-	case 0:
-		return "That " + g.conjugate("be", TensePresent, Singular) + " the " +
-			g.pick([]string{"picture", "view", "understanding", "portrait"}) + " of " + topic +
-			" as " + g.pick([]string{"the facts present it", "the evidence shows", "I understand it"}) + "."
-	case 1:
-		return "Together, these " + g.pick([]string{"details", "facts", "elements", "pieces"}) +
-			" " + g.pick([]string{"paint", "form", "create", "build"}) + " " +
-			g.articleFor("clear") + " " + g.pickUnique(adjSlots) + " " +
-			g.pick([]string{"picture", "portrait", "view"}) + " of " + topic + "."
-	case 2:
-		noun := g.pick([]string{"nutshell", "summary", "snapshot"})
-		return "That " + g.conjugate("be", TensePresent, Singular) + " " + topic +
-			" in " + g.articleFor(noun) + " " + noun +
-			" — but there " + g.conjugate("be", TensePresent, Singular) + " always more to " +
-			g.pick([]string{"learn", "discover", "explore", "uncover"}) + "."
-	case 3:
-		return "And that " + g.conjugate("be", TensePresent, Singular) + " what " +
-			g.conjugate("make", TensePresent, Singular) + " " + topic + " " +
-			g.pick(valueAdjs) + " " + g.pick(attentionNouns) + "."
-	default:
-		adj := g.pickUnique(adjSlots)
-		return "The more you " + g.pick([]string{"learn about", "explore", "dig into", "study"}) +
-			" " + topic + ", the " + g.comparative(adj) + " " + g.topicPronoun() + " " +
-			g.conjugate("get", TensePresent, Singular) + "."
-	}
+	return "Together, these facts form a comprehensive picture of " + topic + "."
 }
 
-var rhetoricalAdjs = adjSlots // reuse adjective slots for the rhetorical clause pattern
 
-// composeHook generates an article hook sentence from grammar parts.
+// composeHook generates a factual article introduction.
 func (g *GenerativeEngine) composeHook(topic string) string {
-	pattern := g.rng.Intn(8)
-	switch pattern {
-	case 0:
-		hookAdj := g.pick([]string{"fast-moving", "crowded", "complex", "evolving", "noisy"})
-		return "In " + g.articleFor(hookAdj) + " " + hookAdj + " " +
-			g.pick([]string{"world", "landscape", "field"}) + ", " + topic +
-			" " + g.conjugate("stand", TensePresent, Singular) + " out by " +
-			g.pick([]string{"standing " + g.topicPossessive() + " ground", "earning " + g.topicPossessive() + " place", "making " + g.topicPossessive() + " mark"}) + "."
-	case 1:
-		return "Not everything " + g.conjugate("earn", TensePresent, Singular) +
-			" your " + g.pick(attentionNouns) + ". " + capitalizeFirst(topic) + " " +
-			g.conjugate("do", TensePresent, Singular) + "."
-	case 2:
-		return "The name " + topic + " " + g.conjugate("come", TensePresent, Singular) +
-			" up " + g.pick([]string{"often", "a lot", "frequently", "regularly"}) +
-			" — but what " + g.conjugate("be", TensePresent, Singular) +
-			" " + g.pick([]string{"really behind " + g.topicObject(), "the full story", "beneath the surface"}) + "?"
-	case 3:
-		return capitalizeFirst(topic) + " " + g.conjugate("be", TensePresent, Singular) + " one of those " +
-			g.pick([]string{"subjects", "topics", "things"}) + " that " +
-			g.conjugate("reward", TensePresent, Singular) + " " +
-			g.articleFor("closer") + " closer " + g.pick([]string{"look", "examination", "study"}) + "."
-	case 4:
-		return "There " + g.conjugate("be", TensePresent, Singular) + " " +
-			g.anAdj() + " reason people " +
-			g.pick([]string{"keep talking about", "pay attention to", "keep coming back to"}) + " " + topic + "."
-	case 5:
-		return "To " + g.pick([]string{"truly", "really", "fully"}) + " " +
-			g.pick([]string{"understand", "appreciate", "grasp"}) + " " + topic +
-			", you " + g.pick([]string{"need to go", "want to look", "have to go"}) + " " +
-			g.pick([]string{"beyond the surface", "deeper than the basics", "past first impressions"}) + "."
-	case 6:
-		return "Ask anyone who " + g.conjugate("know", TensePresent, Singular) + " " + topic +
-			" well, and " + g.pick([]string{"the same themes emerge", "you'll hear the same thing", "a clear picture forms"}) + "."
-	default:
-		return "Some " + g.pick([]string{"things", "subjects", "ideas"}) + " " +
-			g.pick([]string{"earn their place", "demand a second look", "hold your attention"}) +
-			" — " + topic + " " + g.conjugate("be", TensePresent, Singular) + " one of them."
-	}
+	return capitalizeFirst(topic) + " is a subject with several notable characteristics."
 }
 
-// composeElaboration generates a bridge/transition sentence after the intro.
+// composeElaboration generates a neutral bridge sentence.
 func (g *GenerativeEngine) composeElaboration(topic string) string {
-	pattern := g.rng.Intn(5)
-	switch pattern {
-	case 0:
-		return "But that " + g.conjugate("be", TensePresent, Singular) + " just the " +
-			g.pick([]string{"beginning", "start", "surface", "opening chapter"}) +
-			" " + topicInContext(topic+" "+g.pickUnique(impactNouns), "of the") + "."
-	case 1:
-		return "The " + g.pick([]string{"details", "specifics", "deeper layers"}) +
-			" of " + topic + " " + g.conjugate("be", TensePresent, Plural) +
-			" where " + g.topicPronoun() + " " + g.conjugate("get", TensePresent, Singular) + " " +
-			g.pick([]string{"interesting", "compelling", "surprising", "substantial", "impressive"}) + "."
-	case 2:
-		return "What " + g.conjugate("follow", TensePresent, Singular) + " " +
-			g.conjugate("be", TensePresent, Singular) + " " +
-			g.articleFor("closer") + " closer look at what " +
-			g.conjugate("make", TensePresent, Singular) + " " + topic + " " +
-			g.pick([]string{"tick", "work", "stand out", "matter"}) + "."
-	case 3:
-		return "And once you " + g.pick([]string{"start digging", "look closer", "go deeper"}) +
-			" into " + topic + ", the " + g.pick([]string{"depth", "richness", "complexity"}) +
-			" " + g.conjugate("become", TensePresent, Singular) + " " +
-			g.pick([]string{"apparent", "unmistakable", "clear", "hard to ignore", "evident"}) + "."
-	default:
-		return "Let's " + g.pick([]string{"unpack", "explore", "examine", "break down"}) +
-			" what " + topic + " " + g.pick([]string{"really means", "is all about", "brings to the table"}) + "."
-	}
+	return "The following details provide a closer look at " + topic + "."
 }
 
-// composeTransition generates a section transition from grammar parts.
+// composeTransition generates a neutral section transition.
 func (g *GenerativeEngine) composeTransition(topic string) string {
-	pattern := g.rng.Intn(6)
-	switch pattern {
-	case 0:
-		return "Beyond what " + topic + " " + g.conjugate("be", TensePresent, Singular) +
-			", there " + g.conjugate("be", TensePresent, Singular) + " the question of what " + g.topicPronoun() + " " +
-			g.conjugate("do", TensePresent, Singular) + "."
-	case 1:
-		return g.pick([]string{"Identity", "Classification", "Definition"}) +
-			" " + g.conjugate("be", TensePresent, Singular) + " only part of the " +
-			g.pickUnique(impactNouns) + " of " + topic + "."
-	case 2:
-		return "There " + g.conjugate("be", TensePresent, Singular) + " another " +
-			g.pick([]string{"angle", "dimension", "layer", "facet"}) + " to " + topic +
-			" " + g.pick(valueAdjs) + " " + g.pick([]string{"exploring", "examining", "considering"}) + "."
-	case 3:
-		verb := g.pick([]string{"shift", "turn", "move"})
-		return capitalizeFirst(g.gerund(verb)) + " " + g.pick([]string{"focus", "attention", "perspective"}) +
-			" " + g.conjugate("reveal", TensePresent, Singular) + " another " +
-			g.pick([]string{"dimension", "side", "layer"}) + " of " + topic + "."
-	case 4:
-		return "That " + g.conjugate("bring", TensePresent, Singular) + " us to the next " +
-			g.pick([]string{"part", "chapter", "piece"}) + " " +
-			topicInContext(topic+" "+g.pickUnique(impactNouns), "of the") + "."
-	default:
-		return "Now, " + g.pick([]string{"consider", "examine", "look at"}) +
-			" another " + g.pick([]string{"side", "aspect", "facet"}) + " of " + topic + "."
-	}
+	return g.pick([]string{
+		"Additionally, " + topic + " has other notable aspects.",
+		"There is more to " + topic + " worth noting.",
+		"Another aspect of " + topic + " is also significant.",
+	})
 }
 
-// composeInsight generates a section-closing synthesis sentence.
+// composeInsight generates a neutral section-closing sentence.
 func (g *GenerativeEngine) composeInsight(topic string, theme string) string {
-	// Build the insight from the theme description + grammar parts
-	themeNoun := g.pick([]string{"qualities", "details", "elements", "facts"})
+	themeNoun := "details"
 	switch theme {
 	case "What It Is":
-		themeNoun = g.pick([]string{"qualities", "characteristics", "attributes"})
+		themeNoun = "characteristics"
 	case "Where It Came From":
-		themeNoun = g.pick([]string{"origins", "roots", "beginnings"})
+		themeNoun = "origins"
 	case "What It's Used For":
-		themeNoun = g.pick([]string{"use cases", "applications", "purposes"})
+		themeNoun = "applications"
 	case "Key Features":
-		themeNoun = g.pick([]string{"features", "capabilities", "tools"})
+		themeNoun = "features"
 	case "The Bigger Picture":
-		themeNoun = g.pick([]string{"connections", "relationships", "links"})
+		themeNoun = "connections"
 	}
-
-	pattern := g.rng.Intn(5)
-	switch pattern {
-	case 0:
-		return capitalizeFirst(g.pastParticiple("take")) + " together, these " + themeNoun +
-			" " + g.pick([]string{"define", "shape", "reveal", "illuminate"}) +
-			" what " + topic + " " + g.conjugate("be", TensePresent, Singular) + " at " + g.topicPossessive() + " " +
-			g.pick([]string{"core", "heart", "foundation"}) + "."
-	case 1:
-		return "These " + themeNoun + " " + g.pick([]string{"give", "offer", "provide"}) +
-			" " + topic + " " + g.anAdj() +
-			" " + g.pickUnique(impactNouns) + "."
-	case 2:
-		return g.pick([]string{"Knowing", "Understanding", "Seeing"}) +
-			" these " + themeNoun + " " + g.conjugate("help", TensePresent, Singular) +
-			" you " + g.pick([]string{"understand", "appreciate", "grasp"}) +
-			" " + topic + " more " + g.pick([]string{"fully", "deeply", "clearly"}) + "."
-	case 3:
-		return "Each of these " + themeNoun + " " +
-			g.conjugate("add", TensePresent, Singular) + " a " +
-			g.pick([]string{"layer", "dimension", "thread"}) + " to the " +
-			g.pick([]string{"story", "picture", "identity"}) + " of " + topic + "."
-	default:
-		return "Without these " + themeNoun + ", the " +
-			g.pick([]string{"picture", "portrait", "understanding"}) + " of " + topic +
-			" " + g.pick([]string{"would be incomplete", "falls short", "remains partial"}) + "."
-	}
+	return "These " + themeNoun + " are central to understanding " + topic + "."
 }
 
 // -----------------------------------------------------------------------
@@ -1926,6 +1436,7 @@ func (g *GenerativeEngine) ComposeArticle(topic string, facts []edgeFact) string
 	}
 	g.resetTracker()
 	g.topicCategory = inferCategory(facts)
+	g.topicLabel = topic
 
 	var paragraphs []string
 
@@ -2140,250 +1651,13 @@ func (g *GenerativeEngine) articleSectionWith(topic string, section themeSection
 // Instead of picking from pre-written pools, it assembles from relation-aware
 // building blocks: subject, object, verbs, and structural patterns.
 func (g *GenerativeEngine) elaborateFact(f edgeFact) string {
-	pattern := g.rng.Intn(4)
-
-	switch f.Relation {
-	case RelIsA:
-		switch pattern {
-		case 0:
-			return "That " + g.pick([]string{"classification", "categorization", "label", "designation"}) +
-				" " + g.conjugate("say", TensePresent, Singular) + " " +
-				g.pick([]string{"a lot", "something important", "a great deal"}) +
-				" about how " + f.Subject + " " + g.conjugate("fit", TensePresent, Singular) +
-				" into the " + g.pick([]string{"broader landscape", "bigger picture", "wider field"}) + "."
-		case 1:
-			return capitalizeFirst(g.gerund("be")) + " " + stripArticle(f.Object) + " " +
-				g.conjugate("mean", TensePresent, Singular) + " " + f.Subject +
-				" " + g.conjugate("carry", TensePresent, Singular) + " certain " +
-				g.pick([]string{"expectations", "standards", "implications", "responsibilities"}) + "."
-		case 2:
-			return "As " + g.articleFor(stripArticle(f.Object)) + " " + stripArticle(f.Object) + ", " +
-				f.Subject + " " + g.conjugate("have", TensePresent, Singular) + " " +
-				g.pastParticiple(g.pick([]string{"carve", "find", "build", "establish"})) +
-				" " + g.anAdj() + " " +
-				g.pickUnique(impactNouns) + "."
-		default:
-			return "This " + g.conjugate("be", TensePresent, Singular) + " not just " +
-				g.articleFor("label") + " " + g.pick([]string{"label", "tag", "classification"}) +
-				" — it " + g.conjugate("shape", TensePresent, Singular) + " how people " +
-				g.pick([]string{"think about", "approach", "understand", "work with"}) + " " + f.Subject + "."
-		}
-
-	case RelCreatedBy, RelFoundedBy:
-		switch pattern {
-		case 0:
-			return "Every " + g.pick([]string{"creation", "project", "endeavor"}) +
-				" " + g.conjugate("reflect", TensePresent, Singular) + " the " +
-				g.pick([]string{"vision", "intent", "goals", "ambition"}) + " of its " +
-				g.pick([]string{"creator", "builder", "founder"}) + "."
-		case 1:
-			return "The " + g.pick([]string{"decision", "choice", "move"}) + " to " +
-				g.pick([]string{"build", "create", "launch"}) + " " + f.Subject +
-				" " + g.conjugate("be", TensePast, Singular) + " not " +
-				g.pick([]string{"accidental", "arbitrary", "random"}) + " — it " +
-				g.conjugate("come", TensePast, Singular) + " from " +
-				g.anAdj() + " " +
-				g.pick([]string{"need", "purpose", "vision"}) + "."
-		default:
-			return "That " + g.pick([]string{"origin story", "beginning", "founding moment"}) +
-				" " + g.conjugate("continue", TensePresent, Singular) + " to " +
-				g.pick([]string{"shape", "influence", "define", "guide"}) + " " + f.Subject +
-				" to this " + g.pick([]string{"day", "moment"}) + "."
-		}
-
-	case RelUsedFor:
-		switch pattern {
-		case 0:
-			return "This " + g.conjugate("be", TensePresent, Singular) + " one of the " +
-				g.pickUnique(adjSlots) + " reasons people " +
-				g.pick([]string{"reach for", "choose", "turn to", "rely on"}) + " " + f.Subject + "."
-		case 1:
-			return "The fact that " + f.Subject + " " +
-				g.conjugate(g.pick([]string{"excel", "thrive", "perform well"}), TensePresent, Singular) +
-				" at " + f.Object + " " + g.conjugate("speak", TensePresent, Singular) +
-				" to its " + g.pick([]string{"core design", "fundamental architecture", "underlying philosophy"}) + "."
-		default:
-			return "In practice, this " +
-				g.conjugate(g.pick([]string{"translate", "lead", "convert"}), TensePresent, Singular) +
-				" to " + g.pick([]string{"real-world", "tangible", "measurable", "concrete"}) + " " +
-				g.pick([]string{"impact", "results", "value", "benefits"}) + "."
-		}
-
-	case RelHas:
-		switch pattern {
-		case 0:
-			return "This " + g.conjugate("be", TensePresent, Singular) + " one of the " +
-				g.pick([]string{"things", "factors", "elements"}) + " that " +
-				g.conjugate("set", TensePresent, Singular) + " " + f.Subject +
-				" apart from " + g.pick([]string{"alternatives", "the competition", "the rest"}) + "."
-		case 1:
-			return "For many " + g.pick([]string{"users", "people", "developers", "practitioners"}) +
-				", " + f.Object + " " + g.conjugate("be", TensePresent, Singular) +
-				" one of the " + g.pickUnique(adjSlots) + " " +
-				g.pick([]string{"draws", "attractions", "reasons to choose"}) + " " + f.Subject + "."
-		default:
-			return "This kind of " + g.pick([]string{"built-in", "native", "integrated"}) +
-				" " + g.pick([]string{"capability", "functionality", "support"}) +
-				" " + g.pick([]string{"matters in practice", "makes a real difference", "adds real value", "pays dividends"}) + "."
-		}
-
-	case RelDescribedAs:
-		switch pattern {
-		case 0:
-			return "That " + g.pick([]string{"reputation", "description", "characterization"}) +
-				" " + g.conjugate("be", TensePresent, Singular) + " " +
-				g.pick([]string{"well-earned", "well-deserved", "hard-won"}) + " and " +
-				g.pastParticiple("back") + " by " +
-				g.pick([]string{"real", "solid", "concrete", "consistent"}) + " " + g.pick([]string{"results", "evidence", "experience"}) + "."
-		case 1:
-			return "The fact that " + f.Subject + " " +
-				g.conjugate("be", TensePresent, Singular) + " " + f.Object +
-				" " + g.conjugate("shape", TensePresent, Singular) + " how people " +
-				g.pick([]string{"engage with", "approach", "experience", "think about"}) + " " +
-				g.topicObject() + "."
-		default:
-			return capitalizeFirst(g.gerund("be")) + " " + f.Object + " " +
-				g.conjugate("be", TensePresent, Singular) + " not just a " +
-				g.pick([]string{"label", "description", "tag"}) + " — it " +
-				g.pick([]string{"reflects", "captures", "defines"}) + " something " +
-				g.pick([]string{"essential", "core", "fundamental"}) + " about " + f.Subject + "."
-		}
-
-	case RelFoundedIn:
-		switch pattern {
-		case 0:
-			return "Since " + f.Object + ", " + f.Subject + " " +
-				g.conjugate("have", TensePresent, Singular) + " " +
-				g.pastParticiple(g.pick([]string{"evolve", "grow", "mature", "develop"})) +
-				" " + g.pick([]string{"considerably", "significantly", "substantially"}) + "."
-		default:
-			return "The " + g.pick([]string{"year", "era", "time"}) + " something " +
-				g.conjugate("be", TensePresent, Singular) + " " +
-				g.pastParticiple("create") + " " +
-				g.conjugate("shape", TensePresent, Singular) + " its " +
-				g.pick([]string{"DNA", "character", "trajectory", "evolution"}) + "."
-		}
-
-	case RelRelatedTo:
-		switch pattern {
-		case 0:
-			return "This " + g.pick([]string{"connection", "relationship", "link"}) +
-				" " + g.conjugate("run", TensePresent, Singular) + " " +
-				g.pick([]string{"deeper", "further", "broader"}) +
-				" than it might " + g.pick([]string{"first appear", "seem", "look"}) + "."
-		default:
-			return g.pick([]string{"Understanding", "Seeing", "Recognizing"}) +
-				" the " + g.pick([]string{"relationship", "connection", "link"}) +
-				" between " + f.Subject + " and " + f.Object +
-				" " + g.conjugate("give", TensePresent, Singular) + " you " +
-				g.anAdj() + " " +
-				g.pick([]string{"picture", "perspective", "understanding"}) + "."
-		}
-
-	case RelCauses:
-		return "The " + g.pick([]string{"link", "connection", "chain"}) + " between " +
-			f.Subject + " and " + f.Object + " " +
-			g.conjugate("have", TensePresent, Singular) + " " +
-			g.pickUnique(adjSlots) + " " + g.pick([]string{"consequences", "implications", "effects"}) + "."
-
-	case RelLocatedIn:
-		return capitalizeFirst(g.gerund("be")) + " in " + f.Object + " " +
-			g.conjugate("give", TensePresent, Singular) + " " + f.Subject +
-			" access to " + g.anAdj() + " " +
-			g.pick([]string{"ecosystem", "environment", "community", "network"}) + "."
-
-	default:
-		return ""
-	}
+	// No elaboration — let the facts speak for themselves.
+	return ""
 }
-
-// sectionInsight is replaced by composeInsight() — fully generative.
 
 // articleConclusion generates the closing paragraph from grammar parts.
 func (g *GenerativeEngine) articleConclusion(topic string, facts []edgeFact) string {
-	var sentences []string
-
-	// Summary opener — generated
-	pattern := g.rng.Intn(4)
-	switch pattern {
-	case 0:
-		sentences = append(sentences, g.pick([]string{"Looking at", "Considering", "Viewing"})+" "+
-			topic+" as "+g.articleFor("whole")+" whole, "+
-			g.anAdj()+" "+
-			g.pick([]string{"picture", "narrative", "portrait"})+" "+
-			g.conjugate("emerge", TensePresent, Singular)+".")
-	case 1:
-		sentences = append(sentences, g.pick([]string{"Step back", "Zoom out"})+" and "+
-			g.pick([]string{"consider", "take in"})+" everything about "+topic+
-			", and the "+g.pick([]string{"picture", "result", "conclusion"})+" "+
-			g.conjugate("be", TensePresent, Singular)+" "+
-			g.pick([]string{"compelling", "coherent", "clear", "striking"})+".")
-	case 2:
-		sentences = append(sentences, "When you "+g.pick([]string{"put", "bring", "pull"})+" all the "+
-			g.pick([]string{"pieces", "elements", "facts"})+" together, "+topic+" "+
-			g.conjugate("tell", TensePresent, Singular)+" "+
-			g.anAdj()+" "+
-			g.pickUnique(impactNouns)+".")
-	default:
-		sentences = append(sentences, "In the end, "+topic+" "+
-			g.conjugate("be", TensePresent, Singular)+" more than the sum of "+g.topicPossessive()+" "+
-			g.pick([]string{"parts", "components", "individual facts"})+".")
-	}
-
-	// Synthesize key themes — generated noun phrases from relation types
-	var keyPoints []string
-	for _, f := range facts {
-		switch f.Relation {
-		case RelIsA:
-			keyPoints = append(keyPoints, g.anAdj()+" "+g.pickUnique(impactNouns))
-		case RelCreatedBy, RelFoundedBy:
-			originAdj := g.pick([]string{"purposeful", "deliberate", "intentional"})
-			keyPoints = append(keyPoints, g.articleFor(originAdj)+" "+originAdj+" origin")
-		case RelUsedFor:
-			keyPoints = append(keyPoints, g.pick([]string{"practical", "real-world", "concrete"})+" "+g.pick([]string{"applications", "uses", "purpose"}))
-		case RelHas:
-			keyPoints = append(keyPoints, g.pickUnique(adjSlots)+" "+g.pick([]string{"capabilities", "features", "tools"}))
-		}
-	}
-	keyPoints = uniqueStringsSlice(keyPoints)
-	if len(keyPoints) >= 2 {
-		if len(keyPoints) > 3 {
-			keyPoints = keyPoints[:3]
-		}
-		sentences = append(sentences, "With "+joinNatural(keyPoints)+", "+topic+
-			" "+g.conjugate("occupy", TensePresent, Singular)+" "+
-			g.anAdj()+" "+
-			g.pickUnique(impactNouns)+" in "+g.topicPossessive()+" "+g.pick([]string{"domain", "field", "space"})+".")
-	}
-
-	// Forward-looking statement — generated
-	fwdPattern := g.rng.Intn(4)
-	switch fwdPattern {
-	case 0:
-		sentences = append(sentences, "Whether you are just "+g.gerund("discover")+" "+topic+
-			" or have "+g.pastParticiple("know")+
-			" about "+g.topicPronoun()+" for years, there "+g.conjugate("be", TensePresent, Singular)+
-			" always more "+g.pick([]string{"depth", "nuance", "detail"})+" to "+
-			g.pick([]string{"uncover", "explore", "discover"})+".")
-	case 1:
-		sentences = append(sentences, "The "+g.pickUnique(impactNouns)+" of "+topic+" "+
-			g.conjugate("be", TensePresent, Singular)+" still "+
-			g.pick([]string{"being written", "unfolding", "evolving"})+".")
-	case 2:
-		sentences = append(sentences, "What "+g.conjugate("matter", TensePresent, Singular)+
-			" most about "+topic+" "+g.conjugate("be", TensePresent, Singular)+
-			" not any single fact, but how all these "+
-			g.pick([]string{"elements", "pieces", "dimensions"})+" "+
-			g.pick([]string{"work together", "connect", "reinforce each other"})+".")
-	default:
-		sentences = append(sentences, g.pick([]string{"Understanding", "Exploring", "Studying"})+
-			" "+topic+" "+g.conjugate("be", TensePresent, Singular)+" "+
-			g.articleFor("ongoing")+" ongoing "+g.pick([]string{"process", "journey", "endeavor"})+
-			" — and one that "+g.conjugate("reward", TensePresent, Singular)+" "+
-			g.pick([]string{"curiosity", "persistence", "attention"})+".")
-	}
-
-	return strings.Join(sentences, " ")
+	return "Together, these facts provide a comprehensive overview of " + topic + "."
 }
 
 // -----------------------------------------------------------------------
@@ -2444,6 +1718,7 @@ func (g *GenerativeEngine) ComposeWithPlan(plan *DiscoursePlan) string {
 		allFacts = append(allFacts, s.Facts...)
 	}
 	g.topicCategory = inferCategory(allFacts)
+	g.topicLabel = plan.Topic
 
 	var paragraphs []string
 
@@ -2474,6 +1749,7 @@ func (g *GenerativeEngine) ComposeArticleWithPlan(plan *DiscoursePlan) string {
 		allFacts = append(allFacts, s.Facts...)
 	}
 	g.topicCategory = inferCategory(allFacts)
+	g.topicLabel = plan.Topic
 
 	var paragraphs []string
 
@@ -2543,13 +1819,6 @@ func (g *GenerativeEngine) realizeSection(topic string, section *DiscourseSectio
 		}
 
 	case SectionFeatures:
-		// Features use parallelism when possible
-		if len(section.Facts) >= 3 {
-			para := g.composeParallelism(topic, section.Facts)
-			if para != "" {
-				sentences = append(sentences, para)
-			}
-		}
 		for i, f := range section.Facts {
 			if i >= maxSents {
 				break
@@ -2581,18 +1850,6 @@ func (g *GenerativeEngine) realizeSection(topic string, section *DiscourseSectio
 		}
 
 	case SectionImpact:
-		// Impact section synthesizes across facts
-		if len(section.Facts) >= 2 {
-			// Try a metaphor or antithesis for rhetorical effect
-			if g.rng.Float64() < 0.5 {
-				rhet := g.composeMetaphor(topic, section.Facts)
-				if rhet != "" {
-					sentences = append(sentences, rhet)
-				}
-			} else {
-				sentences = append(sentences, g.composeAntithesis(topic, section.Facts))
-			}
-		}
 		for i, f := range section.Facts {
 			if i >= maxSents {
 				break

@@ -237,6 +237,13 @@ func (pl *PackageLoader) LookupWiki(topic string) int {
 	return result.FactsLoaded
 }
 
+// HasWikiEntry returns true if the wiki index contains an exact match for the topic.
+func (pl *PackageLoader) HasWikiEntry(topic string) bool {
+	topic = strings.ToLower(strings.TrimSpace(topic))
+	_, ok := pl.wikiIndex[topic]
+	return ok
+}
+
 // WikiIndexSize returns the number of indexed wiki topics.
 func (pl *PackageLoader) WikiIndexSize() int {
 	return len(pl.wikiIndex)
@@ -310,17 +317,8 @@ func (pl *PackageLoader) expandVocab(v *VocabExpansion) int {
 	count += appendUnique(&impactNouns, v.ImpactNouns)
 	count += appendUnique(&attentionNouns, v.AttentionNouns)
 	count += appendUnique(&mannerAdvs, v.MannerAdverbs)
-	count += appendUnique(&connVerbs, v.Connectors)
-	count += appendUnique(&metaphorVehicles, v.Metaphors)
-	count += appendUnique(&punchlines, v.Punchlines)
 	count += appendUnique(&valueAdjs, v.ValueAdjs)
-
-	for _, pair := range v.ContrastPairs {
-		if !containsPair(contrastPairs, pair) {
-			contrastPairs = append(contrastPairs, pair)
-			count += 2
-		}
-	}
+	// connVerbs, metaphorVehicles, punchlines, contrastPairs removed — skip those fields.
 
 	// Learned vocabulary (dynamic)
 	if pl.engine != nil {
@@ -352,15 +350,6 @@ func appendUnique(target *[]string, additions []string) int {
 		}
 	}
 	return added
-}
-
-func containsPair(pairs [][2]string, pair [2]string) bool {
-	for _, p := range pairs {
-		if p[0] == pair[0] && p[1] == pair[1] {
-			return true
-		}
-	}
-	return false
 }
 
 // parseRelString converts a string to RelType.

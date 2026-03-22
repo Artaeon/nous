@@ -323,9 +323,6 @@ func TestFullPipelineConversation(t *testing.T) {
 	t.Logf("  Adjective pool: %d words", len(adjSlots))
 	t.Logf("  Quality noun pool: %d words", len(qualityNouns))
 	t.Logf("  Impact noun pool: %d words", len(impactNouns))
-	t.Logf("  Metaphor pool: %d words", len(metaphorVehicles))
-	t.Logf("  Punchline pool: %d phrases", len(punchlines))
-	t.Logf("  Contrast pair pool: %d pairs", len(contrastPairs))
 
 	// ---------------------------------------------------------------
 	// Summary
