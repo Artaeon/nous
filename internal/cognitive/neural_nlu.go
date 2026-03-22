@@ -556,6 +556,9 @@ func GenerateTrainingData(nlu *NLU) []TrainingExample {
 		"how fast is the speed of light",
 		"what's the deepest ocean",
 		"how does wifi work",
+		"how do I learn guitar", "how to learn piano",
+		"how do I start programming", "how can I learn French",
+		"teach me about photography", "how to master cooking",
 	)
 
 	// ---- Remember / store ----
@@ -704,6 +707,24 @@ func GenerateTrainingData(nlu *NLU) []TrainingExample {
 		"explain further", "and then what",
 	)
 
+	// ---- Conversation / personal statements ----
+	add("conversation",
+		"I will run tomorrow", "tomorrow I will run for 10 miles",
+		"I'm going to the gym later", "I had a great day today",
+		"I just finished my homework", "we should try that sometime",
+		"I think I need a break", "I was thinking about moving",
+		"my day was good", "my friend told me something",
+		"I can't believe what happened", "I don't know what to do",
+		"we went to the park yesterday", "I need to buy groceries",
+		"I'm planning a trip next month", "today was exhausting",
+		"I should probably sleep more",
+		"I've been working on this all day", "I'm really tired",
+		"we had dinner at a nice place", "I'm looking forward to the weekend",
+		"I just got home", "I was late to work today",
+		"are you alright", "are you okay", "you alright",
+		"how's it going nous", "how are you doing nous",
+	)
+
 	// ---- Hard negatives (boundary cases) ----
 	// These are ambiguous inputs that pattern matching gets wrong.
 	add("creative", "what is the meaning of life") // NOT dict
@@ -714,9 +735,14 @@ func GenerateTrainingData(nlu *NLU) []TrainingExample {
 	add("creative", "can you help me write a letter")
 	add("creative", "help me create a to-do list")
 
-	add("greeting", "i feel happy today")  // NOT news
-	add("greeting", "i'm feeling sad")     // NOT news
-	add("greeting", "having a great day")  // NOT news
+	add("conversation", "i feel happy today")       // personal statement, NOT greeting
+	add("conversation", "i'm feeling sad")          // personal statement, NOT greeting
+	add("conversation", "i'm feeling a bit tired")  // personal statement, NOT greeting
+	add("conversation", "i feel exhausted")         // personal statement, NOT greeting
+	add("conversation", "i'm feeling great")        // personal statement, NOT greeting
+	add("conversation", "i feel stressed out")      // personal statement, NOT greeting
+	add("conversation", "having a great day")       // personal statement, NOT greeting
+	add("conversation", "having a rough day")       // personal statement, NOT greeting
 
 	add("explain", "tell me about dogs")       // NOT creative
 	add("explain", "what is a black hole")     // NOT dict

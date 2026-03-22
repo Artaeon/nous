@@ -238,6 +238,8 @@ func NewNLU() *NLU {
 			"my ip", "ip address", "what is my ip",
 			"system info", "system information", "cpu info",
 			"uptime", "how long has",
+			"what time is it", "what's the time", "whats the time",
+			"current time", "time right now", "what time",
 		},
 		clipboardWords: []string{
 			"clipboard", "what did i copy", "paste", "what's in my clipboard",
@@ -414,6 +416,8 @@ func NewNLU() *NLU {
 			regexp.MustCompile(`(?i)^(?:make (?:this |it )?simpler|dumb (?:this |it )?down)\s*:?\s*(.+)`),
 		},
 		creativeRe: []*regexp.Regexp{
+			// "write about X" / "write me about X" (bare creative request → essay)
+			regexp.MustCompile(`(?i)(?:write|compose|create)\s+(?:me\s+)?(?:something\s+)?about\s+(.*)`),
 			// "help me write/create/make X" patterns
 			regexp.MustCompile(`(?i)(?:can you |could you |would you |please )?help\s+me\s+(?:write|create|make|draft|compose)\s+(?:a\s+|an\s+|the\s+|my\s+)?(.*)`),
 			// Poem patterns
@@ -512,6 +516,10 @@ func (n *NLU) extractEntitiesForIntent(lower string, r *NLUResult) {
 			strings.Contains(lower, "think about") || strings.Contains(lower, "thoughts on") ||
 			strings.Contains(lower, "philosophize") || strings.Contains(lower, "reflect on"):
 			r.Entities["creative_type"] = "reflect"
+		case strings.Contains(lower, "essay") || strings.Contains(lower, "article") ||
+			strings.Contains(lower, "paragraph") || strings.Contains(lower, "words about") ||
+			strings.Contains(lower, "write about"):
+			r.Entities["creative_type"] = "essay"
 		case strings.Contains(lower, "help me") || strings.Contains(lower, "help create") || strings.Contains(lower, "help write"):
 			r.Entities["creative_type"] = "" // general assistance
 		default:
@@ -520,9 +528,14 @@ func (n *NLU) extractEntitiesForIntent(lower string, r *NLUResult) {
 		// Extract topic by stripping creative verbs/phrases
 		creativePrefixes := []string{
 			"write me a poem about ", "write a poem about ",
+			"write me a haiku about ", "write a haiku about ",
+			"write me a limerick about ", "write a limerick about ",
 			"write me a story about ", "write a story about ",
+			"write me a joke about ", "write a joke about ",
 			"compose a haiku about ", "compose a poem about ",
-			"create a limerick about ", "write a limerick about ",
+			"compose a limerick about ", "compose a story about ",
+			"create a limerick about ", "create a poem about ",
+			"create a haiku about ", "create a story about ",
 			"tell me a joke about ", "tell a joke about ",
 			"write me a ", "write a ", "write me ", "write ",
 			"compose a ", "compose ", "create a ", "create ",
@@ -540,7 +553,17 @@ func (n *NLU) extractEntitiesForIntent(lower string, r *NLUResult) {
 		// Also try stripping "about" if it's at the start
 		topic = strings.TrimPrefix(topic, "about ")
 		topic = strings.TrimRight(topic, "?!.")
-		r.Entities["topic"] = strings.TrimSpace(topic)
+		topic = strings.TrimSpace(topic)
+		// If the "topic" is just the creative type itself (e.g., "tell me a joke" → topic="joke"),
+		// treat it as no topic rather than making jokes about "joke".
+		creativeTypeWords := []string{"joke", "poem", "haiku", "limerick", "story", "tale", "essay", "article"}
+		for _, ctw := range creativeTypeWords {
+			if topic == ctw {
+				topic = ""
+				break
+			}
+		}
+		r.Entities["topic"] = topic
 
 	case "recommendation":
 		// Strip recommendation verbs: "suggest a good book" → "book"
@@ -1433,6 +1456,10 @@ func (n *NLU) mapAction(lower string, r *NLUResult) {
 		return
 	}
 
+	// Safety overrides: pattern-based corrections that catch neural misclassifications.
+	// These run before the intent switch and fix common misroutes.
+	n.applyActionOverrides(lower, r)
+
 	// Check for multi-step chain patterns before single-action mapping.
 	if chainType := n.detectChain(lower); chainType != "" {
 		r.Action = "chain"
@@ -1552,10 +1579,16 @@ func (n *NLU) mapAction(lower string, r *NLUResult) {
 	case "creative":
 		r.Action = "creative"
 
+	case "follow_up":
+		r.Action = "respond"
+
+	case "conversation":
+		r.Action = "respond"
+
 	case "recommendation":
 		r.Action = "lookup_knowledge"
 	case "compare":
-		r.Action = "lookup_knowledge"
+		r.Action = "compare"
 
 	case "remember":
 		r.Action = "lookup_memory" // store to memory
@@ -1598,6 +1631,68 @@ func (n *NLU) mapAction(lower string, r *NLUResult) {
 
 	default:
 		r.Action = "llm_chat"
+	}
+}
+
+// applyActionOverrides corrects neural misclassifications using pattern matching.
+// The neural classifier sometimes routes queries to the wrong intent (e.g.,
+// "sqrt of 144" → "conversation", "thanks!" → "conversation"). These overrides
+// catch the most common misroutes and fix the intent before mapAction's switch.
+func (n *NLU) applyActionOverrides(lower string, r *NLUResult) {
+	clean := strings.TrimRight(strings.TrimSpace(lower), "!?.\\ ")
+
+	// Thank you patterns → affirmation
+	thankPatterns := []string{
+		"thanks", "thank you", "thx", "ty", "cheers",
+		"thanks a lot", "thank you so much", "thanks so much",
+		"much appreciated", "appreciate it",
+	}
+	for _, t := range thankPatterns {
+		if clean == t {
+			r.Intent = "affirmation"
+			return
+		}
+	}
+
+	// Math expressions with function calls: "sqrt of 144", "log of 100"
+	mathFuncs := []string{"sqrt", "abs", "sin", "cos", "tan", "log", "ln", "ceil", "floor", "round"}
+	for _, fn := range mathFuncs {
+		if strings.HasPrefix(clean, fn+" ") {
+			r.Intent = "calculate"
+			r.Entities["expression"] = clean
+			return
+		}
+	}
+
+	// Natural language math: "15 times 23", "100 divided by 5", "3 plus 4"
+	mathWordRe := regexp.MustCompile(`(?i)\d+\s+(?:times|multiplied by|plus|minus|divided by)\s+\d+`)
+	if mathWordRe.MatchString(lower) {
+		r.Intent = "calculate"
+		r.Entities["expression"] = lower
+		return
+	}
+
+	// Comparison patterns: "compare X and Y", "X vs Y", "difference between X and Y"
+	// Neural sometimes misclassifies these when items are code-related.
+	compareRe := regexp.MustCompile(`(?i)^(?:compare|contrast|difference between|differences between)\b`)
+	vsRe := regexp.MustCompile(`(?i)\b\w+\s+vs\.?\s+\w+`)
+	if compareRe.MatchString(clean) || vsRe.MatchString(clean) || strings.Contains(clean, "better than") {
+		r.Intent = "compare"
+		return
+	}
+
+	// Emotional/personal statements: "I feel tired", "I'm sad", etc.
+	// Neural sometimes misclassifies these as greetings.
+	if isEmotionalInput(lower) {
+		r.Intent = "conversation"
+		return
+	}
+
+	// Planning/learning questions: "how do I learn X", "teach me X"
+	if IsPlanningQuestion(lower) {
+		r.Intent = "question"
+		r.Entities["topic"] = ExtractGoal(lower)
+		return
 	}
 }
 

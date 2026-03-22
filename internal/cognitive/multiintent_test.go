@@ -132,7 +132,7 @@ func TestMultiIntent_UnderstandMulti(t *testing.T) {
 			name:       "single intent not split",
 			input:      "what time is it",
 			wantN:      1,
-			wantIntent: []string{"question"},
+			wantIntent: []string{"sysinfo"},
 		},
 		{
 			name:  "check email then remind",
