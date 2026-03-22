@@ -1,0 +1,144 @@
+{
+  "version": "1.0",
+  "source": "simplewiki",
+  "templates": {
+    "causes": [
+      {
+        "pattern": "%s causes %s.",
+        "freq": 81
+      }
+    ],
+    "created_by": [
+      {
+        "pattern": "%s was made by %s.",
+        "freq": 39
+      },
+      {
+        "pattern": "%s was created by %s.",
+        "freq": 23
+      },
+      {
+        "pattern": "%s was developed by %s.",
+        "freq": 42
+      },
+      {
+        "pattern": "%s was directed by %s.",
+        "freq": 37
+      },
+      {
+        "pattern": "%s was produced by %s.",
+        "freq": 38
+      },
+      {
+        "pattern": "%s was written by %s.",
+        "freq": 41
+      },
+      {
+        "pattern": "%s was built by %s.",
+        "freq": 5
+      }
+    ],
+    "founded_by": [
+      {
+        "pattern": "%s was started by %s.",
+        "freq": 9
+      },
+      {
+        "pattern": "%s was founded by %s.",
+        "freq": 9
+      }
+    ],
+    "founded_in": [
+      {
+        "pattern": "%s was founded in %s.",
+        "freq": 44
+      },
+      {
+        "pattern": "%s was started in %s.",
+        "freq": 15
+      },
+      {
+        "pattern": "%s was established in %s.",
+        "freq": 14
+      },
+      {
+        "pattern": "%s was formed in %s.",
+        "freq": 17
+      }
+    ],
+    "has": [
+      {
+        "pattern": "%s has %s.",
+        "freq": 1344
+      }
+    ],
+    "is_a": [
+      {
+        "pattern": "%s is the %s.",
+        "freq": 6599
+      },
+      {
+        "pattern": "%s are %s.",
+        "freq": 2330
+      },
+      {
+        "pattern": "%s is an %s.",
+        "freq": 13228
+      },
+      {
+        "pattern": "%s was the %s.",
+        "freq": 1368
+      },
+      {
+        "pattern": "%s were %s.",
+        "freq": 297
+      },
+      {
+        "pattern": "%s is a %s.",
+        "freq": 68232
+      },
+      {
+        "pattern": "%s was a %s.",
+        "freq": 13830
+      },
+      {
+        "pattern": "%s is one of the %s.",
+        "freq": 821
+      },
+      {
+        "pattern": "%s was an %s.",
+        "freq": 7887
+      }
+    ],
+    "located_in": [
+      {
+        "pattern": "%s is located in %s.",
+        "freq": 126
+      },
+      {
+        "pattern": "%s lies in %s.",
+        "freq": 5
+      }
+    ],
+    "part_of": [
+      {
+        "pattern": "%s is part of %s.",
+        "freq": 230
+      },
+      {
+        "pattern": "%s belongs to %s.",
+        "freq": 44
+      }
+    ],
+    "used_for": [
+      {
+        "pattern": "%s is used for %s.",
+        "freq": 102
+      },
+      {
+        "pattern": "%s is designed for %s.",
+        "freq": 4
+      }
+    ]
+  }
+}
