@@ -541,14 +541,33 @@ func (te *ThinkingEngine) Think(query string, ctx *ThinkContext) *ThoughtResult 
 		}
 	}
 
-	// 5. Assemble the final response
+	// 5. Assemble the baseline response
 	text := te.assemble(sections, frame)
+
+	// 6. Non-LLM semantic reranking for knowledge-heavy tasks.
+	if te.shouldUsePlanRerank(task) {
+		plan := te.BuildContentPlan(query, task, params)
+		candidates := te.BuildPlanCandidates(plan, frame, text)
+		if len(candidates) > 0 {
+			text = te.SelectBestCandidate(plan, candidates)
+			trace.WriteString(fmt.Sprintf("Plan rerank: %d candidates selected\n", len(candidates)))
+		}
+	}
 
 	return &ThoughtResult{
 		Text:  text,
 		Task:  task,
 		Frame: frame.Name,
 		Trace: trace.String(),
+	}
+}
+
+func (te *ThinkingEngine) shouldUsePlanRerank(task ThinkTask) bool {
+	switch task {
+	case TaskTeach, TaskAnalyze, TaskSummarize, TaskDebate, TaskCompare, TaskConverse:
+		return true
+	default:
+		return false
 	}
 }
 
