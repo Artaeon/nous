@@ -1378,6 +1378,56 @@ func (te *ThinkingEngine) gatherTopicFacts(topic string) []edgeFact {
 		return nil
 	}
 	facts, _ := te.composer.gatherFacts(topic)
+	if len(facts) > 0 {
+		return facts
+	}
+
+	// Fallback for short labels (e.g. "go", "ai") that may be filtered by
+	// keyword extraction in gatherFacts.
+	lower := strings.ToLower(strings.TrimSpace(topic))
+	if lower == "" {
+		return nil
+	}
+
+	te.graph.mu.RLock()
+	defer te.graph.mu.RUnlock()
+
+	ids := te.graph.byLabel[lower]
+	if len(ids) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]bool)
+	for _, id := range ids {
+		node := te.graph.nodes[id]
+		if node == nil {
+			continue
+		}
+		for _, edge := range te.graph.outEdges[id] {
+			if edge.Relation == RelDescribedAs {
+				continue
+			}
+			to := te.graph.nodes[edge.To]
+			if to == nil {
+				continue
+			}
+			key := node.Label + "|" + string(edge.Relation) + "|" + to.Label
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			facts = append(facts, edgeFact{
+				Subject:  node.Label,
+				Relation: edge.Relation,
+				Object:   to.Label,
+				Inferred: edge.Inferred,
+			})
+		}
+		if len(facts) > 0 {
+			break
+		}
+	}
+
 	return facts
 }
 
