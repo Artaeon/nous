@@ -175,6 +175,9 @@ func TestNLUExplain(t *testing.T) {
 		{"what is photosynthesis", "lookup_knowledge", "photosynthesis"},
 		{"how does a CPU work", "lookup_knowledge", "a cpu work"},
 		{"tell me about machine learning", "lookup_knowledge", "machine learning"},
+		{"tell me everything about stoicism", "lookup_knowledge", "stoicism"},
+		{"give me an overview of operating systems", "lookup_knowledge", "operating systems"},
+		{"walk me through compilers", "lookup_knowledge", "compilers"},
 	}
 	for _, c := range cases {
 		r := nlu.Understand(c.input)

@@ -8,6 +8,8 @@ type NLGScore struct {
 	Coherence  float64
 	NonRepeat  float64
 	Readability float64
+	EntityFocus float64
+	Consistency float64
 	Total      float64
 }
 
@@ -22,15 +24,26 @@ func (te *ThinkingEngine) ScoreCandidate(plan *ContentPlan, text string) NLGScor
 	coherence := scoreCoherence(text)
 	nonRepeat := scoreNonRepeat(text)
 	readability := scoreReadability(text)
+	entityFocus := scoreEntityFocus(plan, text)
+	consistency := scoreConsistency(plan, text)
 
 	// Weighted aggregate tuned for factual assistant quality.
-	total := coverage*0.45 + coherence*0.25 + nonRepeat*0.20 + readability*0.10
+	total := coverage*0.36 + coherence*0.16 + nonRepeat*0.14 + readability*0.10 + entityFocus*0.12 + consistency*0.12
+	// Hard contradiction penalty: if consistency is low, sharply reduce final score.
+	if consistency < 0.90 {
+		total *= consistency
+	}
+	if total > 1.0 {
+		total = 1.0
+	}
 
 	return NLGScore{
 		Coverage:   coverage,
 		Coherence:  coherence,
 		NonRepeat:  nonRepeat,
 		Readability: readability,
+		EntityFocus: entityFocus,
+		Consistency: consistency,
 		Total:      total,
 	}
 }
@@ -145,6 +158,69 @@ func scoreReadability(text string) float64 {
 	return 0.4
 }
 
+func scoreEntityFocus(plan *ContentPlan, text string) float64 {
+	if plan == nil || strings.TrimSpace(plan.Topic) == "" {
+		return 0.7
+	}
+
+	topic := strings.ToLower(strings.TrimSpace(plan.Topic))
+	parts := strings.FieldsFunc(text, func(r rune) bool {
+		return r == '.' || r == '!' || r == '?'
+	})
+	if len(parts) == 0 {
+		if strings.Contains(strings.ToLower(text), topic) {
+			return 1.0
+		}
+		return 0.4
+	}
+
+	hits := 0
+	for _, p := range parts {
+		pl := strings.ToLower(strings.TrimSpace(p))
+		if pl == "" {
+			continue
+		}
+		if strings.Contains(pl, topic) || containsAnySlice(pl, []string{" it ", " this ", " they ", " these "}) {
+			hits++
+		}
+	}
+
+	score := float64(hits) / float64(len(parts))
+	if score < 0.35 {
+		return 0.35
+	}
+	return score
+}
+
+func scoreConsistency(plan *ContentPlan, text string) float64 {
+	if strings.TrimSpace(text) == "" {
+		return 0
+	}
+	lower := " " + strings.ToLower(text) + " "
+	if plan == nil || len(plan.Claims) == 0 {
+		return 0.85
+	}
+
+	penalty := 0.0
+	for _, c := range plan.Claims {
+		k := strings.ToLower(strings.TrimSpace(keySpan(c.Text)))
+		if k == "" || len(k) < 4 {
+			continue
+		}
+		hasPositive := strings.Contains(lower, " "+k+" ")
+		hasNegative := strings.Contains(lower, " not "+k+" ") || strings.Contains(lower, " no "+k+" ")
+		if hasPositive && hasNegative {
+			penalty += 0.35
+		}
+	}
+
+	score := 1.0 - penalty
+	if score < 0 {
+		return 0
+	}
+	return score
+}
+
 func containsLoose(text, probe string) bool {
 	text = strings.ToLower(strings.TrimSpace(text))
 	probe = strings.ToLower(strings.TrimSpace(probe))
@@ -152,6 +228,15 @@ func containsLoose(text, probe string) bool {
 		return false
 	}
 	return strings.Contains(text, probe)
+}
+
+func containsAnySlice(text string, probes []string) bool {
+	for _, p := range probes {
+		if strings.Contains(text, p) {
+			return true
+		}
+	}
+	return false
 }
 
 func keySpan(claim string) string {

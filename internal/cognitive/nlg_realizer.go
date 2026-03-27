@@ -39,7 +39,59 @@ func (te *ThinkingEngine) BuildPlanCandidates(plan *ContentPlan, frame *Frame, b
 		out = append(out, c)
 	}
 
+	// Candidate D: corpus-backed realization from human-written exemplars.
+	d := te.realizeCorpusBackedPlan(plan, frame)
+	if d != "" {
+		out = append(out, d)
+	}
+
 	return dedupeCandidates(out)
+}
+
+func (te *ThinkingEngine) realizeCorpusBackedPlan(plan *ContentPlan, frame *Frame) string {
+	if plan == nil || te.composer == nil || te.composer.SentenceCorpus == nil {
+		return ""
+	}
+
+	var parts []string
+	if plan.Thesis != "" {
+		parts = append(parts, strings.TrimSpace(plan.Thesis))
+	}
+
+	for _, c := range plan.Claims {
+		if len(c.Evidence) == 0 {
+			if c.Text != "" {
+				parts = append(parts, c.Text)
+			}
+			continue
+		}
+
+		ev := c.Evidence[0]
+		s := te.composer.SentenceCorpus.RetrieveVaried(ev.Subject, ev.Relation, ev.Object)
+		if s == "" {
+			s = c.Text
+		}
+		if s != "" {
+			parts = append(parts, strings.TrimSpace(s))
+		}
+	}
+
+	if plan.Counterpoint != "" {
+		parts = append(parts, plan.Counterpoint)
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+
+	if frame != nil && (frame.Name == "summary" || frame.Name == "brainstorm" || frame.Name == "plan") {
+		if len(parts) == 1 {
+			return parts[0]
+		}
+		return parts[0] + "\n\n" + strings.Join(parts[1:], "\n")
+	}
+
+	return strings.Join(parts, " ")
 }
 
 // SelectBestCandidate reranks deterministic candidates with quality signals.

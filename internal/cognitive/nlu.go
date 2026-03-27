@@ -186,6 +186,9 @@ func NewNLU() *NLU {
 			"what is", "what are", "what does",
 			"how does", "how do", "how is",
 			"tell me about", "teach me",
+			"tell me everything about", "tell me all about",
+			"give me an overview of", "give me a full overview of",
+			"walk me through", "deep dive into",
 			"define", "definition of",
 		},
 		computeVerbs: []string{
@@ -732,7 +735,10 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 		"who is ", "who are ", "who was ",
 		"where is ", "where are ",
 		"when is ", "when was ", "when did ",
-		"tell me about ", "explain ",
+		"tell me about ", "tell me everything about ", "tell me all about ",
+		"give me an overview of ", "give me a full overview of ",
+		"walk me through ", "deep dive into ",
+		"explain ",
 		"define ", "describe ",
 	} {
 		if strings.HasPrefix(lower, prefix) {
@@ -1701,6 +1707,28 @@ func (n *NLU) mapAction(lower string, r *NLUResult) {
 // catch the most common misroutes and fix the intent before mapAction's switch.
 func (n *NLU) applyActionOverrides(lower string, r *NLUResult) {
 	clean := strings.TrimRight(strings.TrimSpace(lower), "!?.\\ ")
+
+	// Deep explanation phrases should always route to knowledge explanation,
+	// even when the neural classifier misroutes them to conversation/affirmation.
+	deepExplainPrefixes := []string{
+		"tell me everything about ",
+		"tell me all about ",
+		"give me an overview of ",
+		"give me a full overview of ",
+		"walk me through ",
+		"deep dive into ",
+	}
+	for _, p := range deepExplainPrefixes {
+		if strings.HasPrefix(clean, p) {
+			r.Intent = "explain"
+			if r.Confidence < 0.88 {
+				r.Confidence = 0.88
+			}
+			topic := strings.TrimSpace(clean[len(p):])
+			r.Entities["topic"] = topic
+			return
+		}
+	}
 
 	// Thank you patterns → affirmation
 	thankPatterns := []string{

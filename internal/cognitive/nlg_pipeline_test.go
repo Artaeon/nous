@@ -77,3 +77,26 @@ func TestBuildPlanCandidatesIncludesBaselineAndVariants(t *testing.T) {
 		t.Fatalf("expected baseline candidate first, got %q", candidates[0])
 	}
 }
+
+func TestScoreCandidatePenalizesContradiction(t *testing.T) {
+	te := makeThinkingEngineForNLGTests()
+
+	plan := &ContentPlan{
+		Topic:  "go",
+		Thesis: "Go is a programming language.",
+		Claims: []PlanClaim{{Text: "Go is a programming language."}},
+	}
+
+	consistent := "Go is a programming language. It is used for systems software."
+	contradictory := "Go is a programming language. It is not go is a programming language."
+
+	sConsistent := te.ScoreCandidate(plan, consistent)
+	sContradictory := te.ScoreCandidate(plan, contradictory)
+
+	if sContradictory.Consistency >= sConsistent.Consistency {
+		t.Fatalf("expected contradictory candidate to score lower consistency: contradictory=%.2f consistent=%.2f", sContradictory.Consistency, sConsistent.Consistency)
+	}
+	if sContradictory.Total >= sConsistent.Total {
+		t.Fatalf("expected contradictory candidate total score to be lower: contradictory=%.2f consistent=%.2f", sContradictory.Total, sConsistent.Total)
+	}
+}
