@@ -109,6 +109,20 @@ type Composer struct {
 	// TextGen — GRU-based neural text generation model.
 	// When loaded, used as an alternative to template-based sentence generation.
 	TextGen *TextGenModel
+
+	// SentenceCorpus — Layer 2: retrieval-based sentence generation.
+	// Retrieves real human-written sentences from Wikipedia and adapts them
+	// by swapping entities. The corpus IS the model.
+	SentenceCorpus *SentenceCorpus
+
+	// DiscourseCorpus — Layer 2b: sentences indexed by discourse function.
+	// Retrieves sentences by HOW they communicate (defines, explains_why,
+	// compares, evaluates) for assembling multi-sentence responses.
+	DiscourseCorpus *DiscourseCorpus
+
+	// Absorption — learns expression patterns from text.
+	// When set, provides an additional realization strategy.
+	Absorption *AbsorptionEngine
 }
 
 // NewComposer creates a response composer wired to the cognitive systems.
@@ -228,6 +242,11 @@ func (c *Composer) IngestContent(text string) {
 		}
 		c.Semantic.mu.RUnlock()
 	}
+
+	// Absorb expression patterns — learn HOW things are said, not just facts.
+	if c.Absorption != nil {
+		c.Absorption.Absorb(text)
+	}
 }
 
 // sentimentToFloat converts a Sentiment enum to a float for emotional memory.
@@ -301,7 +320,7 @@ func (c *Composer) Compose(query string, respType ResponseType, context *Compose
 	case RespThankYou:
 		resp = c.composeThankYou(context)
 	case RespExplain:
-		resp = c.composeExplain(query)
+		resp = c.composeExplainWithContext(query, context)
 	default:
 		resp = c.composeConversational(query, context)
 	}
@@ -328,6 +347,13 @@ type ComposeContext struct {
 	AvgWeeklySpend float64
 	JournalDays    int // days since last journal entry
 	ConvTurns      int // how many turns in current conversation
+
+	// Cognitive context — populated by the new cognitive engines.
+	Subtext          *SubtextAnalysis  // what the user really means (Phase 1)
+	TriggeredMemories []MemoryTrigger  // involuntary episodic recall (Phase 2)
+	Sparks           []AssociativeSpark // unexpected knowledge connections (Phase 4)
+	CouncilResult    *CouncilDeliberation // inner council deliberation (Phase 5)
+	Opinion          *Opinion            // formed opinion on topic (Phase 6)
 }
 
 // edgeFact holds a typed fact extracted from the graph for composition.
@@ -1847,6 +1873,10 @@ func (c *Composer) composeBriefing(ctx *ComposeContext) *ComposedResponse {
 // -----------------------------------------------------------------------
 
 func (c *Composer) composeExplain(query string) *ComposedResponse {
+	return c.composeExplainWithContext(query, nil)
+}
+
+func (c *Composer) composeExplainWithContext(query string, ctx *ComposeContext) *ComposedResponse {
 	if c.Graph == nil {
 		return nil
 	}
@@ -1861,6 +1891,13 @@ func (c *Composer) composeExplain(query string) *ComposedResponse {
 
 	// Build a clean explanation from description + structured facts.
 	var parts []string
+
+	// If the inner council produced a synthesis, use it as a framing statement.
+	if ctx != nil && ctx.CouncilResult != nil && ctx.CouncilResult.Synthesis != "" {
+		parts = append(parts, ctx.CouncilResult.Synthesis)
+		sources = append(sources, "inner_council")
+	}
+
 	if desc := c.Graph.LookupDescription(topic); len(desc) >= 40 {
 		parts = append(parts, desc)
 	}
@@ -1870,6 +1907,16 @@ func (c *Composer) composeExplain(query string) *ComposedResponse {
 			parts = append(parts, factText)
 		}
 	}
+
+	// If knowledge graph data is thin (0-1 facts), try the discourse corpus.
+	if len(facts) <= 1 && c.DiscourseCorpus != nil && topic != "" {
+		composed := c.DiscourseCorpus.ComposeResponse(topic, "explain")
+		if composed != "" {
+			parts = append(parts, composed)
+			sources = append(sources, "discourse_corpus")
+		}
+	}
+
 	if len(parts) == 0 {
 		return nil
 	}
@@ -1878,6 +1925,210 @@ func (c *Composer) composeExplain(query string) *ComposedResponse {
 		Sources: uniqueStrings(sources),
 		Type:    RespExplain,
 	}
+}
+
+// -----------------------------------------------------------------------
+// Follow-Up Composer — expands on a previous topic based on follow-up type.
+// Called when the user says "tell me more", "why?", "examples?", etc.
+// -----------------------------------------------------------------------
+
+// ComposeFollowUp generates a response that expands on a previously discussed
+// topic. The followUpType controls what kind of expansion:
+//   - "more":    additional facts beyond what was already shown
+//   - "why":     causal explanations (uses DFExplainsWhy, DFConsequence)
+//   - "example": concrete examples (uses DFGivesExample)
+//   - "compare": comparative information (uses DFCompares, DFEvaluates)
+//   - "deeper":  in-depth explanation (uses thinking engine path)
+func (c *Composer) ComposeFollowUp(originalTopic string, followUpType string) *ComposedResponse {
+	if originalTopic == "" {
+		return nil
+	}
+
+	var parts []string
+	var sources []string
+
+	// Lead phrase based on follow-up type
+	leadPhrases := map[string][]string{
+		"more": {
+			"Here's more about " + originalTopic + ".",
+			"There's more to " + originalTopic + ".",
+			"Expanding on " + originalTopic + ":",
+			"Additionally, regarding " + originalTopic + ":",
+		},
+		"why": {
+			"Here's why:",
+			"The reason behind this:",
+			"To understand why:",
+		},
+		"example": {
+			"Here's an example:",
+			"For instance:",
+			"To illustrate:",
+		},
+		"compare": {
+			"For comparison:",
+			"Looking at how it compares:",
+		},
+		"deeper": {
+			"Let me explain " + originalTopic + " in more depth.",
+			"Going deeper into " + originalTopic + ":",
+			"To elaborate on " + originalTopic + ":",
+		},
+	}
+
+	phrases, ok := leadPhrases[followUpType]
+	if !ok {
+		phrases = leadPhrases["more"]
+	}
+	lead := c.pick(phrases)
+
+	// Strategy 1: Discourse corpus — retrieve sentences by discourse function
+	if c.DiscourseCorpus != nil {
+		var queryType string
+		switch followUpType {
+		case "why":
+			queryType = "why"
+		case "example":
+			queryType = "example"
+		case "compare":
+			queryType = "compare"
+		case "deeper":
+			queryType = "explain"
+		default:
+			queryType = "explain"
+		}
+		composed := c.DiscourseCorpus.ComposeResponse(originalTopic, queryType)
+		if composed != "" {
+			parts = append(parts, composed)
+			sources = append(sources, "discourse_corpus")
+		}
+	}
+
+	// Strategy 2: Knowledge graph — gather more facts with a broader search.
+	// For "more" follow-ups, look for facts we haven't surfaced yet.
+	if c.Graph != nil {
+		facts, graphSources := c.gatherFollowUpFacts(originalTopic)
+		if len(facts) > 0 {
+			factText := c.structuredRealization(facts)
+			if factText != "" {
+				parts = append(parts, factText)
+				sources = append(sources, graphSources...)
+			}
+		}
+
+		// For "why" follow-ups, also try causal reasoning
+		if followUpType == "why" && c.Causal != nil {
+			if answer := c.Causal.AnswerWhy("why " + originalTopic); answer != "" {
+				parts = append(parts, answer)
+				sources = append(sources, "causal_engine")
+			}
+		}
+
+		// Description as a fallback for "deeper" if we haven't found much
+		if followUpType == "deeper" && len(parts) == 0 {
+			if desc := c.Graph.LookupDescription(originalTopic); len(desc) >= 40 {
+				parts = append(parts, desc)
+				sources = append(sources, "knowledge_graph")
+			}
+		}
+	}
+
+	if len(parts) == 0 {
+		return nil
+	}
+
+	text := lead + " " + strings.Join(parts, "\n\n")
+	return &ComposedResponse{
+		Text:    strings.TrimSpace(text),
+		Sources: uniqueStrings(sources),
+		Type:    RespConversational,
+	}
+}
+
+// gatherFollowUpFacts retrieves facts about a topic with a higher limit
+// than the normal gatherFacts, and tries to surface facts that weren't
+// shown in the initial response.
+func (c *Composer) gatherFollowUpFacts(topic string) ([]edgeFact, []string) {
+	if c.Graph == nil {
+		return nil, nil
+	}
+
+	var facts []edgeFact
+	var sources []string
+	seen := make(map[string]bool)
+
+	c.Graph.mu.RLock()
+	defer c.Graph.mu.RUnlock()
+
+	// Look up the topic node
+	id := nodeID(strings.ToLower(topic))
+	node := c.Graph.nodes[id]
+	if node == nil {
+		if ids, ok := c.Graph.byLabel[strings.ToLower(topic)]; ok && len(ids) > 0 {
+			id = ids[0]
+			node = c.Graph.nodes[id]
+		}
+	}
+	if node == nil {
+		return nil, nil
+	}
+
+	// Gather outgoing edges — higher limit (10 instead of typical 4-5)
+	for _, edge := range c.Graph.outEdges[id] {
+		if edge.Relation == RelDescribedAs {
+			continue
+		}
+		to := c.Graph.nodes[edge.To]
+		if to == nil {
+			continue
+		}
+		key := node.Label + "|" + string(edge.Relation) + "|" + to.Label
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		facts = append(facts, edgeFact{
+			Subject:  node.Label,
+			Relation: edge.Relation,
+			Object:   to.Label,
+			Inferred: edge.Inferred,
+		})
+		if edge.Inferred {
+			sources = append(sources, "inference")
+		} else {
+			sources = append(sources, "knowledge_graph")
+		}
+	}
+
+	// Also gather incoming edges for richer follow-up context
+	for _, edge := range c.Graph.inEdges[id] {
+		if edge.Relation == RelDescribedAs {
+			continue
+		}
+		from := c.Graph.nodes[edge.From]
+		if from == nil {
+			continue
+		}
+		key := from.Label + "|" + string(edge.Relation) + "|" + node.Label
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		facts = append(facts, edgeFact{
+			Subject:  from.Label,
+			Relation: edge.Relation,
+			Object:   node.Label,
+			Inferred: edge.Inferred,
+		})
+		sources = append(sources, "knowledge_graph")
+	}
+
+	// Cap at 10 facts for a follow-up (generous but not overwhelming)
+	if len(facts) > 10 {
+		facts = facts[:10]
+	}
+
+	return facts, sources
 }
 
 // -----------------------------------------------------------------------
@@ -1909,10 +2160,30 @@ func (c *Composer) composeUncertain(query string) *ComposedResponse {
 // -----------------------------------------------------------------------
 
 func (c *Composer) composeConversational(query string, ctx *ComposeContext) *ComposedResponse {
-	// Personal statements ("I will run tomorrow", "we should try that") and
-	// follow-ups ("tell me more", "go on") should NEVER do a knowledge lookup.
-	// They need a conversational response, not a fact dump about "run" or "tell".
-	skipKnowledge := isPersonalStatement(strings.ToLower(query)) || isContinuationRequest(strings.ToLower(query))
+	lowerQuery := strings.ToLower(query)
+	isContinuation := isContinuationRequest(lowerQuery)
+
+	// Continuation requests: instead of skipping knowledge, expand on the
+	// previous topic using conversation history.
+	if isContinuation && len(c.history) > 0 {
+		last := c.history[len(c.history)-1]
+		prevTopic := ""
+		if len(last.Topics) > 0 {
+			prevTopic = last.Topics[0]
+		}
+		if prevTopic != "" {
+			followUpType := classifyFollowUpType(lowerQuery)
+			resp := c.ComposeFollowUp(prevTopic, followUpType)
+			if resp != nil && resp.Text != "" {
+				return resp
+			}
+		}
+	}
+
+	// Personal statements ("I will run tomorrow", "we should try that")
+	// should NEVER do a knowledge lookup — they need a conversational
+	// response, not a fact dump about "run" or "tell".
+	skipKnowledge := isPersonalStatement(lowerQuery) || isContinuation
 
 	// If we have substantial knowledge about the query topic, USE it.
 	// Use clean fact sentences — no decorative prose, no hooks/closers.
@@ -1952,9 +2223,26 @@ func (c *Composer) composeConversational(query string, ctx *ComposeContext) *Com
 		}
 	}
 
-	// Personal statements / follow-ups / no knowledge → 4-stage conversational pipeline
-	tone := c.randomTone()
+	// Detect sentiment for appropriate response framing.
+	// If the inner council recommended a tone, use it instead of random.
+	var tone Tone
+	if ctx != nil && ctx.CouncilResult != nil && ctx.CouncilResult.ResponseTone != "" {
+		tone = councilToneToComposerTone(ctx.CouncilResult.ResponseTone)
+	} else {
+		tone = c.randomTone()
+	}
 	sentiment := c.detectSentiment(query)
+
+	// Positive news ("I got promoted!", "I just finished!") → celebrate.
+	// Don't deflect with "what got you thinking about promoted?"
+	if sentiment == SentimentPositive || sentiment == SentimentExcited {
+		resp := c.composeEmpathetic(query, ctx)
+		if resp != nil && resp.Text != "" {
+			return resp
+		}
+	}
+
+	// Personal statements / follow-ups / no knowledge → conversational pipeline
 	var parts []string
 	var sources []string
 
@@ -1966,7 +2254,6 @@ func (c *Composer) composeConversational(query string, ctx *ComposeContext) *Com
 
 	// Stage 2: BRIDGE — connect to something relevant
 	// Skip for personal statements — knowledge bridges produce garbage
-	// ("I will run" → "I is the ninth letter...")
 	if !skipKnowledge {
 		bridge := c.bridgeToKnowledge(query, ctx)
 		if bridge != "" {
@@ -1982,13 +2269,49 @@ func (c *Composer) composeConversational(query string, ctx *ComposeContext) *Com
 		sources = append(sources, "insight")
 	}
 
-	// Stage 4: ENGAGE — only add a follow-up question if the response
-	// is otherwise thin (no bridge/insight content). Avoids the robotic
-	// "What's your take on X?" that fires on every input.
-	if len(parts) <= 1 {
-		engage := c.engageFollowUp(query, sentiment, ctx)
-		if engage != "" {
-			parts = append(parts, engage)
+	// Stage 3b: If the council produced a synthesis, use it as substantive content.
+	if ctx != nil && ctx.CouncilResult != nil && ctx.CouncilResult.Synthesis != "" {
+		parts = append(parts, ctx.CouncilResult.Synthesis)
+		sources = append(sources, "inner_council")
+	}
+
+	// Stage 4: If response is still thin (just an acknowledgment with no
+	// substance), try the council's clarifying question, then discourse
+	// corpus, then knowledge graph — instead of deflecting.
+	if len(parts) <= 1 && !skipKnowledge {
+		// If the council thinks we should ask a clarifying question, do that.
+		if ctx != nil && ctx.CouncilResult != nil && ctx.CouncilResult.ShouldAsk && ctx.CouncilResult.AskWhat != "" {
+			parts = append(parts, ctx.CouncilResult.AskWhat)
+			sources = append(sources, "inner_council")
+			return &ComposedResponse{
+				Text:    strings.Join(parts, " "),
+				Sources: sources,
+				Type:    RespConversational,
+			}
+		}
+	}
+	if len(parts) <= 1 && !skipKnowledge {
+		topic := c.extractTopic(query)
+		if topic != "" && len(topic) > 2 {
+			// Try discourse corpus first — retrieves real sentences about the topic.
+			if c.DiscourseCorpus != nil {
+				queryType := classifyQueryType(query)
+				composed := c.DiscourseCorpus.ComposeResponse(topic, queryType)
+				if composed != "" {
+					parts = append(parts, composed)
+					sources = append(sources, "discourse_corpus")
+				}
+			}
+			// If discourse corpus didn't help, try knowledge graph.
+			if len(parts) <= 1 {
+				if desc := c.Graph.LookupDescription(topic); len(desc) >= 40 {
+					parts = append(parts, desc)
+					sources = append(sources, "knowledge")
+				} else if facts := c.Graph.LookupFacts(topic, 2); len(facts) > 0 {
+					parts = append(parts, strings.Join(facts, " "))
+					sources = append(sources, "knowledge")
+				}
+			}
 		}
 	}
 
@@ -2150,28 +2473,101 @@ func (c *Composer) composeEmpathetic(query string, ctx *ComposeContext) *Compose
 	tone := ToneWarm // Always warm for empathy
 	var parts []string
 
-	switch sentiment {
-	case SentimentSad, SentimentNegative:
-		parts = append(parts, c.pickToned(empatheticSadNeutral, empatheticSadCasual, empatheticSadWarm, empatheticSadDirect, tone))
-		if ctx != nil && ctx.RecentMood > 0 && ctx.RecentMood < 3.0 {
-			parts = append(parts, c.pick(moodAwareSadPhrases))
+	// Try to construct a specific response from the user's actual words
+	// before falling back to generic phrase pools.
+	specifics := extractSpecifics(query)
+	if len(specifics) > 0 {
+		specific := c.composeSpecificEmpathy(specifics, sentiment)
+		if specific != "" {
+			parts = append(parts, specific)
 		}
-	case SentimentAngry:
-		parts = append(parts, c.pick(empatheticAngryPhrases))
-	case SentimentExcited, SentimentPositive:
-		parts = append(parts, c.pick(empatheticHappyPhrases))
-	default:
-		parts = append(parts, c.pick(empatheticNeutralPhrases))
 	}
 
-	// Offer something actionable
-	parts = append(parts, c.pick(empatheticActions))
+	// Use subtext for richer empathy when available
+	if len(parts) == 0 && ctx != nil && ctx.Subtext != nil {
+		sub := ctx.Subtext
+		switch sub.ImpliedNeed {
+		case NeedCelebration:
+			parts = append(parts, c.pick(empatheticHappyPhrases))
+		case NeedVenting:
+			parts = append(parts, c.pick([]string{
+				"I hear you. That sounds genuinely frustrating.",
+				"That's rough. You don't have to have it figured out right now.",
+				"I can tell this is weighing on you.",
+				"That would frustrate anyone. Give yourself some credit for sticking with it.",
+			}))
+		case NeedReassurance:
+			parts = append(parts, c.pick([]string{
+				"You're doing better than you think.",
+				"The fact that you care enough to worry about this says something good.",
+				"It's okay to not have all the answers yet.",
+				"You've handled harder things than this before.",
+			}))
+		case NeedValidation:
+			parts = append(parts, c.pick([]string{
+				"That makes sense to me.",
+				"I think your instinct is right here.",
+				"Trust yourself on this one.",
+			}))
+		default:
+			// Fall through to sentiment-based
+		}
+	}
+
+	// Sentiment-based fallback (or if subtext didn't produce anything)
+	if len(parts) == 0 {
+		switch sentiment {
+		case SentimentSad, SentimentNegative:
+			parts = append(parts, c.pickToned(empatheticSadNeutral, empatheticSadCasual, empatheticSadWarm, empatheticSadDirect, tone))
+			if ctx != nil && ctx.RecentMood > 0 && ctx.RecentMood < 3.0 {
+				parts = append(parts, c.pick(moodAwareSadPhrases))
+			}
+		case SentimentAngry:
+			parts = append(parts, c.pick(empatheticAngryPhrases))
+		case SentimentExcited, SentimentPositive:
+			parts = append(parts, c.pick(empatheticHappyPhrases))
+		default:
+			parts = append(parts, c.pick(empatheticNeutralPhrases))
+		}
+	}
+
+	// Offer something actionable — but avoid near-duplicate of what we just said
+	action := c.pick(empatheticActions)
+	if !phraseTooSimilar(parts[0], action) {
+		parts = append(parts, action)
+	}
 
 	return &ComposedResponse{
 		Text:    strings.Join(parts, " "),
 		Sources: []string{"empathy"},
 		Type:    RespEmpathetic,
 	}
+}
+
+// phraseTooSimilar checks if two phrases share too many words (prevents
+// "I'm here for you. Whatever you need — I'm here." duplication).
+func phraseTooSimilar(a, b string) bool {
+	wordsA := strings.Fields(strings.ToLower(a))
+	wordsB := strings.Fields(strings.ToLower(b))
+	if len(wordsA) == 0 || len(wordsB) == 0 {
+		return false
+	}
+	setA := make(map[string]bool, len(wordsA))
+	for _, w := range wordsA {
+		setA[w] = true
+	}
+	overlap := 0
+	for _, w := range wordsB {
+		if setA[w] {
+			overlap++
+		}
+	}
+	// If more than 40% of words overlap, it's too similar
+	shorter := len(wordsA)
+	if len(wordsB) < shorter {
+		shorter = len(wordsB)
+	}
+	return float64(overlap)/float64(shorter) > 0.4
 }
 
 // -----------------------------------------------------------------------
@@ -2182,21 +2578,76 @@ func (c *Composer) composeOpinion(query string, ctx *ComposeContext) *ComposedRe
 	var parts []string
 	var sources []string
 
-	// Start with a thinking phrase
-	parts = append(parts, c.pick(opinionOpeners))
+	// If the council thinks we should ask a clarifying question, do that instead.
+	if ctx != nil && ctx.CouncilResult != nil && ctx.CouncilResult.ShouldAsk && ctx.CouncilResult.AskWhat != "" {
+		return &ComposedResponse{
+			Text:    ctx.CouncilResult.AskWhat,
+			Sources: []string{"inner_council"},
+			Type:    RespOpinion,
+		}
+	}
 
-	// Try to find graph facts to base the opinion on
-	if c.Graph != nil && c.Graph.NodeCount() > 0 {
+	// Choose opener based on council's recommended tone.
+	if ctx != nil && ctx.CouncilResult != nil && ctx.CouncilResult.ResponseTone != "" {
+		switch ctx.CouncilResult.ResponseTone {
+		case "cautious":
+			parts = append(parts, c.pick([]string{
+				"I'm not entirely sure, but...",
+				"I've been going back and forth on this, but...",
+				"This is tricky, but here's where I land —",
+			}))
+		case "enthusiastic":
+			parts = append(parts, c.pick([]string{
+				"I actually have a strong take on this —",
+				"Oh, I've thought about this a lot —",
+				"This is one I feel strongly about —",
+			}))
+		case "direct":
+			parts = append(parts, c.pick([]string{
+				"Here's how I see it.",
+				"Straightforwardly —",
+				"My take is simple.",
+			}))
+		case "empathetic":
+			parts = append(parts, c.pick([]string{
+				"I can see why this matters to you.",
+				"This is one of those questions where the answer depends on who you are.",
+				"There's no wrong way to feel about this, but here's my read —",
+			}))
+		default:
+			parts = append(parts, c.pick(opinionOpeners))
+		}
+	} else {
+		// Default: start with a generic thinking phrase
+		parts = append(parts, c.pick(opinionOpeners))
+	}
+
+	// If the opinion engine has formed a confident opinion, use its summary
+	// as the core statement rather than synthesizing from raw facts.
+	opinionUsed := false
+	if ctx != nil && ctx.Opinion != nil && ctx.Opinion.Confidence >= 0.3 && ctx.Opinion.Summary != "" {
+		parts = append(parts, ctx.Opinion.Summary)
+		sources = append(sources, "opinion_engine")
+		opinionUsed = true
+	}
+
+	// If we didn't get an opinion summary, try graph facts.
+	if !opinionUsed && c.Graph != nil && c.Graph.NodeCount() > 0 {
 		facts, factSources := c.gatherFacts(query)
 		if len(facts) > 0 {
-			// Synthesize an opinion from facts
 			parts = append(parts, c.synthesizeOpinion(facts))
 			sources = append(sources, factSources...)
 		}
 	}
 
+	// Add the council's synthesis as additional perspective.
+	if ctx != nil && ctx.CouncilResult != nil && ctx.CouncilResult.Synthesis != "" {
+		parts = append(parts, ctx.CouncilResult.Synthesis)
+		sources = append(sources, "inner_council")
+	}
+
 	if len(parts) <= 1 {
-		// No facts to base opinion on — give a thoughtful generic response
+		// No facts or opinion to draw on — give a thoughtful generic response
 		topic := c.extractTopic(query)
 		if topic != "" {
 			parts = append(parts, fmt.Sprintf(c.pick(genericOpinions), topic))
@@ -2405,7 +2856,19 @@ func (c *Composer) edgeToSentence(subject string, rel RelType, object string, in
 		return ""
 	}
 
-	// Try GRU neural generation first (if model is loaded)
+	// Try sentence corpus retrieval first (Layer 2) — real human-written
+	// sentences adapted by entity swapping. Highest quality output.
+	if c.SentenceCorpus != nil {
+		retrieved := c.SentenceCorpus.RetrieveVaried(subject, rel, object)
+		if retrieved != "" && isAcceptableSentence(retrieved, subject, object) {
+			if inferred {
+				retrieved = c.pick(inferredPrefixes) + retrieved
+			}
+			return retrieved
+		}
+	}
+
+	// Try GRU neural generation (if model is loaded)
 	if c.TextGen != nil {
 		neural := c.TextGen.Generate(subject, rel, object, 0.5)
 		if isAcceptableSentence(neural, subject, object) {
@@ -2413,6 +2876,28 @@ func (c *Composer) edgeToSentence(subject string, rel RelType, object string, in
 				neural = c.pick(inferredPrefixes) + neural
 			}
 			return neural
+		}
+	}
+
+	// Try absorbed expression patterns (Layer 3) — patterns learned from
+	// reading real text, adapted with slot filling. Produces varied,
+	// natural sentences without templates.
+	if c.Absorption != nil {
+		fn := relationToDiscourseFunc(rel)
+		pattern := c.Absorption.Retrieve(fn, "", "")
+		if pattern != nil {
+			slots := map[string]string{
+				"SUBJECT":  subject,
+				"OBJECT":   object,
+				"CATEGORY": object,
+			}
+			realized := c.Absorption.Realize(pattern, slots)
+			if realized != "" && isAcceptableSentence(realized, subject, object) {
+				if inferred {
+					realized = c.pick(inferredPrefixes) + realized
+				}
+				return realized
+			}
 		}
 	}
 
@@ -2446,6 +2931,31 @@ func (c *Composer) edgeToSentence(subject string, rel RelType, object string, in
 	}
 
 	return sentence
+}
+
+// relationToDiscourseFunc maps knowledge graph relation types to discourse
+// functions for absorption pattern retrieval.
+func relationToDiscourseFunc(rel RelType) DiscourseFunc {
+	switch rel {
+	case RelIsA:
+		return DFDefines
+	case RelFoundedIn, RelLocatedIn:
+		return DFContext
+	case RelCreatedBy, RelFoundedBy:
+		return DFContext
+	case RelDescribedAs:
+		return DFEvaluates
+	case RelHas, RelPartOf:
+		return DFDescribes
+	case RelUsedFor:
+		return DFDescribes
+	case RelCauses:
+		return DFConsequence
+	case RelSimilarTo, RelContradicts:
+		return DFCompares
+	default:
+		return DFDescribes
+	}
 }
 
 // isAcceptableSentence checks if a neural-generated sentence meets minimum
@@ -2715,8 +3225,9 @@ func isFragmentObject(obj string) bool {
 	if strings.Contains(obj, "]]") || strings.Contains(obj, "[[") {
 		return true
 	}
-	// Extremely long objects are likely raw wiki paragraph extracts, not facts
-	if len(obj) > 300 {
+	// Extremely long objects are likely raw wiki paragraph extracts, not facts.
+	// Allow up to 600 chars for Layer 1 lead paragraphs (capped at ~500).
+	if len(obj) > 600 {
 		return true
 	}
 	return false
@@ -3232,6 +3743,8 @@ var positiveWords = []string{
 	"good", "great", "awesome", "love", "happy", "nice", "wonderful",
 	"fantastic", "excellent", "amazing", "perfect", "beautiful",
 	"glad", "pleased", "enjoy", "fun", "excited", "grateful",
+	"promoted", "graduated", "achieved", "succeeded", "won", "hired",
+	"accepted", "finished", "completed", "proud",
 }
 var negativeWords = []string{
 	"bad", "terrible", "hate", "awful", "horrible", "worst",
@@ -3689,11 +4202,78 @@ func simplePlural(word string) string {
 
 func looksLikePersonName(s string) bool {
 	words := strings.Fields(s)
-	if len(words) < 2 || len(words) > 4 {
+	if len(words) == 0 || len(words) > 4 {
+		return false
+	}
+	// Single capitalised word: check if it's a known surname or person entity.
+	// Names like "Shakespeare", "Beethoven", "Napoleon" are single-word person refs.
+	if len(words) == 1 {
+		if len(s) >= 3 && s[0] >= 'A' && s[0] <= 'Z' && !strings.Contains(s, " ") {
+			// Known single-word person names (famous surnames used alone)
+			knownPersons := map[string]bool{
+				"shakespeare": true, "beethoven": true, "napoleon": true,
+				"aristotle": true, "plato": true, "socrates": true,
+				"darwin": true, "newton": true, "galileo": true,
+				"copernicus": true, "hippocrates": true, "archimedes": true,
+				"confucius": true, "cleopatra": true, "michelangelo": true,
+				"rembrandt": true, "voltaire": true, "mozart": true,
+				"bach": true, "chopin": true, "picasso": true,
+				"tesla": true, "edison": true, "gandhi": true,
+				"caesar": true, "homer": true, "virgil": true,
+			}
+			if knownPersons[strings.ToLower(s)] {
+				return true
+			}
+		}
+		return false
+	}
+	if len(words) < 2 {
 		return false
 	}
 	for _, w := range words {
 		if len(w) == 0 || w[0] < 'A' || w[0] > 'Z' {
+			return false
+		}
+	}
+	// Reject known non-person patterns: events, places, concepts
+	lower := strings.ToLower(s)
+	nonPersonWords := map[string]bool{
+		"war": true, "battle": true, "revolution": true,
+		"empire": true, "kingdom": true, "republic": true,
+		"ocean": true, "sea": true, "river": true, "lake": true,
+		"mountain": true, "island": true, "desert": true,
+		"north": true, "south": true, "east": true, "west": true,
+		"central": true, "new": true, "old": true,
+		"world": true, "united": true, "great": true, "holy": true,
+		"black": true, "white": true, "red": true, "blue": true,
+		"age": true, "era": true, "period": true, "century": true,
+		"mount": true, "cape": true, "fort": true, "port": true,
+		"city": true, "state": true, "park": true, "tower": true,
+	}
+	for _, w := range strings.Fields(lower) {
+		if nonPersonWords[w] {
+			return false
+		}
+	}
+	// Reject Roman numerals without a known person first name
+	// ("World War II" → not a person, but "Henry VIII" → person)
+	last := words[len(words)-1]
+	if isRomanNumeral(last) {
+		first := strings.ToLower(words[0])
+		if !maleFirstNames[first] && !femaleFirstNames[first] {
+			return false
+		}
+	}
+	return true
+}
+
+// isRomanNumeral returns true for strings like "I", "II", "III", "IV", "V", etc.
+func isRomanNumeral(s string) bool {
+	if len(s) == 0 || len(s) > 5 {
+		return false
+	}
+	for _, c := range s {
+		if c != 'I' && c != 'V' && c != 'X' && c != 'L' && c != 'C' && c != 'D' && c != 'M' {
 			return false
 		}
 	}
@@ -3777,3 +4357,148 @@ func genderPronoun(g Gender) string {
 		return "They"
 	}
 }
+
+// -----------------------------------------------------------------------
+// Council & Opinion Integration Helpers
+// -----------------------------------------------------------------------
+
+// councilToneToComposerTone maps CouncilDeliberation.ResponseTone strings
+// to the Composer's Tone enum values.
+func councilToneToComposerTone(councilTone string) Tone {
+	switch councilTone {
+	case "direct":
+		return ToneDirect
+	case "empathetic":
+		return ToneWarm
+	case "cautious":
+		return ToneNeutral
+	case "enthusiastic":
+		return ToneCasual
+	case "analytical":
+		return ToneNeutral
+	default:
+		return ToneNeutral
+	}
+}
+
+// extractSpecifics pulls concrete details from user input that can be
+// referenced in empathetic responses instead of using generic phrases.
+// Returns a map with keys: "duration", "subject", "action".
+func extractSpecifics(input string) map[string]string {
+	result := make(map[string]string)
+	lower := strings.ToLower(input)
+
+	// Duration mentions: "3 days", "a week", "two months", etc.
+	durationRe := regexp.MustCompile(`(?i)(\d+\s+(?:day|days|week|weeks|month|months|hour|hours|year|years|minute|minutes))|(?:a|an|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:day|days|week|weeks|month|months|hour|hours|year|years)`)
+	if m := durationRe.FindString(lower); m != "" {
+		result["duration"] = strings.TrimSpace(m)
+	}
+
+	// Subject nouns: first significant noun after "about", "on", "with", "my"
+	subjectRe := regexp.MustCompile(`(?:about|on|with|my)\s+(?:the\s+)?(\w{3,})`)
+	if m := subjectRe.FindStringSubmatch(lower); len(m) > 1 {
+		word := m[1]
+		// Filter out function words
+		skipWords := map[string]bool{
+			"this": true, "that": true, "the": true, "some": true,
+			"what": true, "how": true, "very": true, "really": true,
+			"just": true, "it": true, "them": true, "things": true,
+		}
+		if !skipWords[word] {
+			result["subject"] = word
+		}
+	}
+
+	// Action verbs: gerunds that indicate ongoing effort
+	actionRe := regexp.MustCompile(`(?:been|keep|always|still)\s+(\w+ing)`)
+	if m := actionRe.FindStringSubmatch(lower); len(m) > 1 {
+		result["action"] = m[1]
+	}
+
+	return result
+}
+
+// composeSpecificEmpathy builds a response that references concrete details
+// the user mentioned, making empathy feel personal rather than generic.
+func (c *Composer) composeSpecificEmpathy(specifics map[string]string, sentiment Sentiment) string {
+	duration := specifics["duration"]
+	subject := specifics["subject"]
+	action := specifics["action"]
+
+	// Duration + subject: "Three days on a bug is genuinely draining."
+	if duration != "" && subject != "" {
+		templates := []string{
+			"%s on %s is genuinely draining.",
+			"%s dealing with %s — that takes real patience.",
+			"After %s of %s, anyone would feel that way.",
+		}
+		if sentiment == SentimentPositive || sentiment == SentimentExcited {
+			templates = []string{
+				"%s on %s and still going strong — that's real dedication.",
+				"%s with %s — you've clearly put in the work.",
+			}
+		}
+		d := capitalizeFirst(duration)
+		return fmt.Sprintf(c.pick(templates), d, subject)
+	}
+
+	// Duration alone: "Three days is a long time to sit with that."
+	if duration != "" {
+		templates := []string{
+			"%s is a long time to sit with that.",
+			"After %s, it's natural to feel worn down.",
+			"%s — that's not nothing.",
+		}
+		if sentiment == SentimentPositive || sentiment == SentimentExcited {
+			templates = []string{
+				"%s of effort — and it paid off.",
+				"%s well spent, by the sound of it.",
+			}
+		}
+		return fmt.Sprintf(c.pick(templates), capitalizeFirst(duration))
+	}
+
+	// Subject + action: "Working on a project that matters is hard."
+	if subject != "" && action != "" {
+		templates := []string{
+			"%s on %s — that takes more out of you than people realize.",
+			"Still %s on %s says something about your commitment.",
+			"The fact that you're still %s on %s matters.",
+		}
+		if sentiment == SentimentPositive || sentiment == SentimentExcited {
+			templates = []string{
+				"%s on %s and it's paying off — that's great to hear.",
+				"All that %s on %s is clearly worth it.",
+			}
+		}
+		return fmt.Sprintf(c.pick(templates), capitalizeFirst(action), subject)
+	}
+
+	// Subject alone: "Project stress is real — especially when it matters to you."
+	if subject != "" {
+		templates := []string{
+			"%s stress is real — especially when it matters to you.",
+			"Dealing with %s is harder than it sounds.",
+			"The %s situation sounds genuinely tough.",
+		}
+		if sentiment == SentimentPositive || sentiment == SentimentExcited {
+			templates = []string{
+				"Sounds like %s is going well — you should feel good about that.",
+				"Good things happening with %s — that's worth celebrating.",
+			}
+		}
+		return fmt.Sprintf(c.pick(templates), capitalizeFirst(subject))
+	}
+
+	// Action alone: "Working through that takes real stamina."
+	if action != "" {
+		templates := []string{
+			"%s through that takes real stamina.",
+			"The fact that you keep %s says a lot.",
+		}
+		return fmt.Sprintf(c.pick(templates), capitalizeFirst(action))
+	}
+
+	return ""
+}
+
