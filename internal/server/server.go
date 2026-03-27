@@ -244,12 +244,18 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 		// NLU → Action → Compose pipeline (0 LLM calls)
 		if s.nlu != nil && s.actions != nil && s.conv != nil {
 			nluResult := s.nlu.UnderstandWithContext(message, s.conv)
-			if nluResult.Confidence >= 0.5 {
+			applyForcedExplainRoute(message, nluResult)
+			shouldExecute := nluResult.Confidence >= 0.5 ||
+				nluResult.Intent == "explain" || nluResult.Intent == "compare" ||
+				nluResult.Action == "lookup_knowledge" || nluResult.Action == "compare"
+			if shouldExecute {
 				actionResult := s.actions.Execute(nluResult, s.conv)
 				if actionResult.DirectResponse != "" {
-					s.conv.User(message)
-					s.conv.Assistant(actionResult.DirectResponse)
-					return actionResult.DirectResponse, time.Since(start).Milliseconds()
+					if !(looksExplanatoryMessage(message) && isLowInformationServerReply(actionResult.DirectResponse)) {
+						s.conv.User(message)
+						s.conv.Assistant(actionResult.DirectResponse)
+						return actionResult.DirectResponse, time.Since(start).Milliseconds()
+					}
 				}
 			}
 		}
@@ -260,14 +266,16 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 			ctx := s.actions.BuildComposeContext()
 			resp := s.composer.Compose(message, respType, ctx)
 			if resp != nil && resp.Text != "" {
-				s.conv.User(message)
-				s.conv.Assistant(resp.Text)
-				return resp.Text, time.Since(start).Milliseconds()
+				if !(looksExplanatoryMessage(message) && isLowInformationServerReply(resp.Text)) {
+					s.conv.User(message)
+					s.conv.Assistant(resp.Text)
+					return resp.Text, time.Since(start).Milliseconds()
+				}
 			}
 		}
 
 		// LEGACY: Fast/medium path
-		if s.fastPath != nil && s.conv != nil {
+		if s.fastPath != nil && s.fastPath.LLM != nil && s.conv != nil {
 			path := s.classifier.ClassifyQuery(message)
 			if path == cognitive.PathFast || path == cognitive.PathMedium {
 				answer, err := s.fastPath.RespondWithPath(s.conv, message, path)
@@ -275,6 +283,13 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 					return answer, time.Since(start).Milliseconds()
 				}
 			}
+		}
+		if looksExplanatoryMessage(message) {
+			topic := extractExplanatoryTopic(message)
+			if topic == "" {
+				topic = "that topic"
+			}
+			return "I don't have detailed knowledge about " + topic + " yet. Try asking me to look it up, or point me to a source I can learn from.", time.Since(start).Milliseconds()
 		}
 
 		// Full pipeline fallback
@@ -359,22 +374,28 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 		// === NLU → Action → Compose (0 LLM calls) ===
 		if s.nlu != nil && s.actions != nil && s.conv != nil {
 			nluResult := s.nlu.UnderstandWithContext(message, s.conv)
+			applyForcedExplainRoute(message, nluResult)
 
 			// High-confidence NLU result → deterministic action
-			if nluResult.Confidence >= 0.5 {
+			shouldExecute := nluResult.Confidence >= 0.5 ||
+				nluResult.Intent == "explain" || nluResult.Intent == "compare" ||
+				nluResult.Action == "lookup_knowledge" || nluResult.Action == "compare"
+			if shouldExecute {
 				actionResult := s.actions.Execute(nluResult, s.conv)
 
 				// Direct response (greetings, math, dates) → 0 LLM calls
 				if actionResult.DirectResponse != "" {
-					s.conv.User(message)
-					s.conv.Assistant(actionResult.DirectResponse)
-					tokenJSON, _ := json.Marshal(actionResult.DirectResponse)
-					fmt.Fprintf(w, "data: {\"t\":%s,\"d\":false}\n\n", tokenJSON)
-					flusher.Flush()
-					ms := time.Since(start).Milliseconds()
-					fmt.Fprintf(w, "data: {\"t\":\"\",\"d\":true,\"ms\":%d}\n\n", ms)
-					flusher.Flush()
-					return
+					if !(looksExplanatoryMessage(message) && isLowInformationServerReply(actionResult.DirectResponse)) {
+						s.conv.User(message)
+						s.conv.Assistant(actionResult.DirectResponse)
+						tokenJSON, _ := json.Marshal(actionResult.DirectResponse)
+						fmt.Fprintf(w, "data: {\"t\":%s,\"d\":false}\n\n", tokenJSON)
+						flusher.Flush()
+						ms := time.Since(start).Milliseconds()
+						fmt.Fprintf(w, "data: {\"t\":\"\",\"d\":true,\"ms\":%d}\n\n", ms)
+						flusher.Flush()
+						return
+					}
 				}
 			}
 		}
@@ -385,20 +406,22 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 			ctx := s.actions.BuildComposeContext()
 			resp := s.composer.Compose(message, respType, ctx)
 			if resp != nil && resp.Text != "" {
-				s.conv.User(message)
-				s.conv.Assistant(resp.Text)
-				tokenJSON, _ := json.Marshal(resp.Text)
-				fmt.Fprintf(w, "data: {\"t\":%s,\"d\":false}\n\n", tokenJSON)
-				flusher.Flush()
-				ms := time.Since(start).Milliseconds()
-				fmt.Fprintf(w, "data: {\"t\":\"\",\"d\":true,\"ms\":%d}\n\n", ms)
-				flusher.Flush()
-				return
+				if !(looksExplanatoryMessage(message) && isLowInformationServerReply(resp.Text)) {
+					s.conv.User(message)
+					s.conv.Assistant(resp.Text)
+					tokenJSON, _ := json.Marshal(resp.Text)
+					fmt.Fprintf(w, "data: {\"t\":%s,\"d\":false}\n\n", tokenJSON)
+					flusher.Flush()
+					ms := time.Since(start).Milliseconds()
+					fmt.Fprintf(w, "data: {\"t\":\"\",\"d\":true,\"ms\":%d}\n\n", ms)
+					flusher.Flush()
+					return
+				}
 			}
 		}
 
 		// === LEGACY FALLBACK: Crystal cache + fast/medium path ===
-		if s.fastPath != nil && s.conv != nil {
+		if s.fastPath != nil && s.fastPath.LLM != nil && s.conv != nil {
 			path := s.classifier.ClassifyQuery(message)
 			if path == cognitive.PathFast || path == cognitive.PathMedium {
 				_, err := s.fastPath.RespondStreamWithPathFull(s.conv, message, path, func(token string, done bool) {
@@ -420,6 +443,20 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 					return
 				}
 			}
+		}
+		if looksExplanatoryMessage(message) {
+			topic := extractExplanatoryTopic(message)
+			if topic == "" {
+				topic = "that topic"
+			}
+			fallback := "I don't have detailed knowledge about " + topic + " yet. Try asking me to look it up, or point me to a source I can learn from."
+			tokenJSON, _ := json.Marshal(fallback)
+			fmt.Fprintf(w, "data: {\"t\":%s,\"d\":false}\n\n", tokenJSON)
+			flusher.Flush()
+			ms := time.Since(start).Milliseconds()
+			fmt.Fprintf(w, "data: {\"t\":\"\",\"d\":true,\"ms\":%d}\n\n", ms)
+			flusher.Flush()
+			return
 		}
 
 		// Full pipeline fallback — non-streaming
@@ -792,6 +829,126 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 	}))
 
 	return mux
+}
+
+func applyForcedExplainRoute(message string, nluResult *cognitive.NLUResult) {
+	if nluResult == nil {
+		return
+	}
+	lower := strings.ToLower(strings.TrimSpace(message))
+
+	for _, prefix := range []string{"compare ", "difference between ", "differences between "} {
+		if strings.HasPrefix(lower, prefix) || strings.Contains(lower, " vs ") || strings.Contains(lower, " versus ") {
+			nluResult.Intent = "compare"
+			nluResult.Action = "compare"
+			if nluResult.Confidence < 0.9 {
+				nluResult.Confidence = 0.9
+			}
+			return
+		}
+	}
+
+	explainPrefixes := []string{
+		"tell me everything about ",
+		"tell me all about ",
+		"tell me about ",
+		"give me an overview of ",
+		"walk me through ",
+		"deep dive into ",
+		"what is ",
+		"what are ",
+		"how does ",
+		"how do ",
+		"explain ",
+		"define ",
+	}
+	for _, p := range explainPrefixes {
+		if strings.HasPrefix(lower, p) {
+			nluResult.Intent = "explain"
+			nluResult.Action = "lookup_knowledge"
+			topic := strings.TrimSpace(strings.TrimRight(strings.TrimPrefix(lower, p), "?!."))
+			if topic != "" {
+				if nluResult.Entities == nil {
+					nluResult.Entities = make(map[string]string)
+				}
+				nluResult.Entities["topic"] = topic
+			}
+			if nluResult.Confidence < 0.9 {
+				nluResult.Confidence = 0.9
+			}
+			return
+		}
+	}
+}
+
+func looksExplanatoryMessage(message string) bool {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	for _, prefix := range []string{
+		"what is ", "what are ", "what does ",
+		"how does ", "how do ", "why ",
+		"tell me about ", "tell me everything about ", "tell me all about ",
+		"give me an overview of ", "walk me through ", "deep dive into ",
+		"explain ", "describe ", "define ",
+		"compare ",
+	} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	if strings.Contains(lower, " vs ") || strings.Contains(lower, " versus ") {
+		return true
+	}
+	return false
+}
+
+func isLowInformationServerReply(text string) bool {
+	clean := strings.ToLower(strings.TrimRight(strings.TrimSpace(text), "!?."))
+	if clean == "" {
+		return true
+	}
+	lowInfo := map[string]bool{
+		"i see":                         true,
+		"okay":                          true,
+		"got it":                        true,
+		"right":                         true,
+		"makes sense":                   true,
+		"i hear you":                    true,
+		"gotcha":                        true,
+		"alright":                       true,
+		"cool":                          true,
+		"sure":                          true,
+		"understood":                    true,
+		"noted":                         true,
+		"clear":                         true,
+		"thank you for telling me":      true,
+		"i appreciate you sharing that": true,
+		"good question":                 true,
+	}
+	return lowInfo[clean]
+}
+
+func extractExplanatoryTopic(message string) string {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	for _, p := range []string{
+		"tell me everything about ",
+		"tell me all about ",
+		"tell me about ",
+		"give me an overview of ",
+		"walk me through ",
+		"deep dive into ",
+		"what is ",
+		"what are ",
+		"how does ",
+		"how do ",
+		"explain ",
+		"define ",
+		"compare ",
+	} {
+		if strings.HasPrefix(lower, p) {
+			return strings.TrimSpace(strings.TrimRight(strings.TrimPrefix(lower, p), "?!."))
+		}
+	}
+	return ""
 }
 
 func allowedOrigin(origin string) bool {
