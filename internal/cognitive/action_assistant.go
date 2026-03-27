@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // normalizeMathFunc converts natural-language math function calls to proper syntax.
@@ -621,11 +622,41 @@ func (ar *ActionRouter) handleGenericTool(nlu *NLUResult, toolName string) *Acti
 		ar.extractTranslateArgs(nlu.Raw, args)
 	}
 
-	result, err := tool.Execute(args)
+	timeout := genericToolTimeout(toolName)
+	result, err := executeToolWithTimeout(tool.Execute, args, timeout)
 	if err != nil {
 		return &ActionResult{DirectResponse: fmt.Sprintf("%s error: %v", toolName, err), Source: toolName}
 	}
 	return &ActionResult{DirectResponse: result, Source: toolName}
+}
+
+func genericToolTimeout(toolName string) time.Duration {
+	switch toolName {
+	case "translate", "netcheck", "news", "weather", "email", "fetch", "summarize":
+		return 4 * time.Second
+	default:
+		return 2 * time.Second
+	}
+}
+
+func executeToolWithTimeout(execFn func(args map[string]string) (string, error), args map[string]string, timeout time.Duration) (string, error) {
+	type toolResult struct {
+		out string
+		err error
+	}
+	ch := make(chan toolResult, 1)
+
+	go func() {
+		out, err := execFn(args)
+		ch <- toolResult{out: out, err: err}
+	}()
+
+	select {
+	case res := <-ch:
+		return res.out, res.err
+	case <-time.After(timeout):
+		return "", fmt.Errorf("timed out after %s", timeout)
+	}
 }
 
 // extractTranslateArgs parses "translate X to Y" or "X in Y" patterns.

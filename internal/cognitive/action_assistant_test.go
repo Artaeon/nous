@@ -1,8 +1,10 @@
 package cognitive
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/artaeon/nous/internal/tools"
 )
@@ -225,4 +227,37 @@ func TestGuessExpenseCategory(t *testing.T) {
 			t.Errorf("guessExpenseCategory(%q) = %q, want %q", tt.desc, got, tt.want)
 		}
 	}
+}
+
+func TestHandleGenericToolTimeout(t *testing.T) {
+	ar := NewActionRouter()
+	reg := tools.NewRegistry()
+	reg.Register(tools.Tool{
+		Name:        "translate",
+		Description: "slow tool for timeout test",
+		Execute: func(args map[string]string) (string, error) {
+			time.Sleep(6 * time.Second)
+			return "late", nil
+		},
+	})
+	ar.Tools = reg
+
+	start := time.Now()
+	res := ar.Execute(&NLUResult{
+		Action:   "translate",
+		Raw:      "translate hello to japanese",
+		Entities: map[string]string{"topic": "hello"},
+	}, NewConversation(10))
+	elapsed := time.Since(start)
+
+	if res == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if !strings.Contains(strings.ToLower(res.DirectResponse), "timed out") {
+		t.Fatalf("expected timeout error in response, got %q", res.DirectResponse)
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("expected fast timeout path, took too long: %s", elapsed)
+	}
+	fmt.Println("timeout path elapsed:", elapsed)
 }
