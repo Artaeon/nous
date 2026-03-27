@@ -10,6 +10,27 @@ import (
 	"time"
 )
 
+var offlinePhrasebook = map[string]map[string]string{
+	"hello": {
+		"ja": "こんにちは",
+		"es": "hola",
+		"fr": "bonjour",
+		"de": "hallo",
+		"it": "ciao",
+		"pt": "olá",
+		"ru": "привет",
+	},
+	"thank you": {
+		"ja": "ありがとう",
+		"es": "gracias",
+		"fr": "merci",
+		"de": "danke",
+		"it": "grazie",
+		"pt": "obrigado",
+		"ru": "спасибо",
+	},
+}
+
 // langNameToCode maps common language names to ISO 639-1 codes.
 var langNameToCode = map[string]string{
 	"spanish":    "es",
@@ -80,17 +101,28 @@ func TranslateText(text, from, to string) (string, error) {
 	to = ResolveLanguageCode(to)
 	from = ResolveLanguageCode(from)
 
+	// Offline-first for common phrases: instant and fully local.
+	if fallback, ok := offlineTranslate(text, to); ok {
+		return fallback + " (offline)", nil
+	}
+
 	encodedText := url.PathEscape(text)
 	apiURL := fmt.Sprintf("https://lingva.ml/api/v1/%s/%s/%s", from, to, encodedText)
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Get(apiURL)
 	if err != nil {
+		if fallback, ok := offlineTranslate(text, to); ok {
+			return fallback + " (offline)", nil
+		}
 		return "", fmt.Errorf("translate: request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
+		if fallback, ok := offlineTranslate(text, to); ok {
+			return fallback + " (offline)", nil
+		}
 		return "", fmt.Errorf("translate: HTTP %d from API", resp.StatusCode)
 	}
 
@@ -101,10 +133,23 @@ func TranslateText(text, from, to string) (string, error) {
 
 	translation, err := ParseTranslateResponse(body)
 	if err != nil {
+		if fallback, ok := offlineTranslate(text, to); ok {
+			return fallback + " (offline)", nil
+		}
 		return "", err
 	}
 
 	return FormatTranslation(text, translation, to), nil
+}
+
+func offlineTranslate(text, to string) (string, bool) {
+	key := strings.ToLower(strings.TrimSpace(text))
+	if byLang, ok := offlinePhrasebook[key]; ok {
+		if translated, ok := byLang[to]; ok {
+			return FormatTranslation(text, translated, to), true
+		}
+	}
+	return "", false
 }
 
 // ParseTranslateResponse extracts the translation string from a Lingva API JSON response.

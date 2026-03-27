@@ -125,3 +125,23 @@ func TestRegisterTranslateTools(t *testing.T) {
 		t.Error("expected error for missing to arg")
 	}
 }
+
+func TestOfflineTranslate(t *testing.T) {
+	got, ok := offlineTranslate("hello", "ja")
+	if !ok {
+		t.Fatal("expected offline translation to exist for hello->ja")
+	}
+	if !strings.Contains(got, "こんにちは") {
+		t.Fatalf("expected japanese greeting in offline translation, got %q", got)
+	}
+}
+
+func TestTranslateTextOfflineFirst(t *testing.T) {
+	got, err := TranslateText("hello", "auto", "japanese")
+	if err != nil {
+		t.Fatalf("TranslateText offline-first failed: %v", err)
+	}
+	if !strings.Contains(got, "こんにちは") || !strings.Contains(strings.ToLower(got), "offline") {
+		t.Fatalf("expected offline translated output, got %q", got)
+	}
+}
