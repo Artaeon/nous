@@ -954,15 +954,19 @@ func (te *ThinkingEngine) generateAdviceSection(params *TaskParams, sec FrameSec
 }
 
 func (te *ThinkingEngine) generateSuggestions(topic string, keywords []string) []string {
-	suggestions := []string{
-		fmt.Sprintf("Start by clarifying what matters most to you about %s.", topic),
-		fmt.Sprintf("Break %s into smaller, concrete steps you can tackle one at a time.", topic),
-		fmt.Sprintf("Talk to someone who has experience with %s — perspective helps.", topic),
-		fmt.Sprintf("Set a specific, achievable goal related to %s for this week.", topic),
-		fmt.Sprintf("Give yourself permission to experiment with %s without pressure.", topic),
+	// Clean the topic — don't insert raw queries like "i'm bored, what should i do"
+	// into templates. Extract the core subject.
+	clean := extractTopicFromQuery(topic)
+	if clean == "" || len(clean) > 40 {
+		clean = "this"
 	}
-	if len(suggestions) > 5 {
-		suggestions = suggestions[:5]
+
+	suggestions := []string{
+		fmt.Sprintf("Start by clarifying what matters most to you about %s.", clean),
+		fmt.Sprintf("Break %s into smaller, concrete steps you can tackle one at a time.", clean),
+		fmt.Sprintf("Talk to someone who has experience with %s — perspective helps.", clean),
+		fmt.Sprintf("Set a specific, achievable goal related to %s for this week.", clean),
+		fmt.Sprintf("Give yourself permission to experiment with %s without pressure.", clean),
 	}
 	return suggestions
 }

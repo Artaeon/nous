@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -171,6 +172,232 @@ func TestCreatePackage(t *testing.T) {
 		t.Errorf("expected 1 fact, got %d", len(pkg.Facts))
 	}
 	t.Logf("Package JSON: %s", string(data))
+}
+
+func TestFragmentSubjectFilter(t *testing.T) {
+	// These should be detected as fragments
+	fragments := []string{
+		"It", "He", "She", "They", "This", "That", "These", "Those",
+		"It is a compound", "The month", "His early work",
+		"A small village", "An important factor",
+		"Some people believe", "Many scientists have studied",
+		"lowercase start", "x",
+		"Pages can be edited by anyone",                       // has verb "can"
+		"Fungi are eukaryotes which may evolve",               // has verb "are"
+		"In Latin crimen could mean an accusation or charge",  // has verb "could"
+		"One two three four five six seven",                   // 7 words, >=6 spaces
+	}
+	for _, s := range fragments {
+		if !isFragmentSubject(s) {
+			t.Errorf("expected %q to be detected as fragment", s)
+		}
+	}
+
+	// These should NOT be detected as fragments
+	entities := []string{
+		"April", "Tokyo", "Albert Einstein", "Python",
+		"North America", "United States", "World War II",
+		"Photosynthesis", "DNA", "Jupiter", "Linux",
+		"Nikola Tesla", "Mount Everest",
+	}
+	for _, s := range entities {
+		if isFragmentSubject(s) {
+			t.Errorf("expected %q to NOT be detected as fragment", s)
+		}
+	}
+}
+
+func TestWikiLookupFiltersFragments(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a wiki batch with mixed clean/fragment subjects
+	pkg := KnowledgePackage{
+		Name:    "wiki-batch-test",
+		Version: "1.0.0",
+		Domain:  "wikipedia",
+		Facts: []PackageFact{
+			{Subject: "Tokyo", Relation: "is_a", Object: "city"},
+			{Subject: "Tokyo", Relation: "located_in", Object: "Japan"},
+			{Subject: "It", Relation: "has", Object: "many people"},
+			{Subject: "The city", Relation: "has", Object: "trains"},
+			{Subject: "Osaka", Relation: "is_a", Object: "city"},
+		},
+	}
+
+	data, _ := json.MarshalIndent(pkg, "", "  ")
+	path := filepath.Join(dir, "wiki-batch-0001.json")
+	os.WriteFile(path, data, 0644)
+
+	graph := NewCognitiveGraph(filepath.Join(dir, "graph.json"))
+	engine := NewGenerativeEngine()
+	loader := NewPackageLoader(graph, engine, nil, dir)
+
+	// Index the batch
+	loader.indexWikiPackage(path)
+
+	// Fragment subjects should not be in the index
+	if loader.HasWikiEntry("it") {
+		t.Error("'it' should not be indexed")
+	}
+	if loader.HasWikiEntry("the city") {
+		t.Error("'the city' should not be indexed")
+	}
+
+	// Real entities should be indexed
+	if !loader.HasWikiEntry("tokyo") {
+		t.Error("'tokyo' should be indexed")
+	}
+	if !loader.HasWikiEntry("osaka") {
+		t.Error("'osaka' should be indexed")
+	}
+
+	// Loading should filter out fragment facts
+	loaded := loader.LookupWiki("Tokyo")
+	if loaded != 3 { // Tokyo(2) + Osaka(1), fragments filtered
+		t.Errorf("expected 3 clean facts loaded, got %d", loaded)
+	}
+
+	// Verify no fragment subjects in graph
+	itEdges := graph.EdgesFrom("It")
+	if len(itEdges) > 0 {
+		t.Errorf("expected no edges from 'It', got %d", len(itEdges))
+	}
+
+	t.Logf("Wiki index size: %d, facts loaded: %d", loader.WikiIndexSize(), loaded)
+}
+
+func TestWikiEntityResolution(t *testing.T) {
+	packDir := filepath.Join("..", "..", "packages")
+	if _, err := os.Stat(packDir); err != nil {
+		t.Skip("packages directory not found")
+	}
+
+	graph := NewCognitiveGraph(filepath.Join(t.TempDir(), "graph.json"))
+	engine := NewGenerativeEngine()
+	loader := NewPackageLoader(graph, engine, nil, packDir)
+	loader.LoadAll()
+
+	tests := []struct {
+		query     string
+		wantFacts bool // should load at least some facts
+	}{
+		// Compound terms should match as units
+		{"black hole", true},
+		{"black holes", true},
+		{"world war ii", true},
+		{"world war 2", true}, // number → roman numeral
+
+		// Ambiguous names should find via partial match
+		{"gandhi", true},
+		{"einstein", true},
+
+		// Direct matches
+		{"photosynthesis", false}, // known: wiki batch has only fragment objects
+		{"tokyo", true},
+		{"dna", true},
+	}
+
+	for _, tt := range tests {
+		loaded := loader.LookupWiki(tt.query)
+		// Check graph for facts — try the query itself, capitalised form,
+		// and number-normalized forms (e.g. "world war 2" → "world war ii").
+		facts := graph.LookupFacts(tt.query, 20)
+		if len(facts) == 0 {
+			cap := strings.ToUpper(tt.query[:1]) + tt.query[1:]
+			facts = graph.LookupFacts(cap, 20)
+		}
+		if len(facts) == 0 {
+			for _, nf := range normalizeNumbers(tt.query) {
+				facts = graph.LookupFacts(nf, 20)
+				if len(facts) > 0 {
+					break
+				}
+			}
+		}
+		if tt.wantFacts && loaded == 0 && len(facts) == 0 {
+			t.Errorf("LookupWiki(%q): no facts loaded or found in graph", tt.query)
+			continue
+		}
+		t.Logf("  %-20s → %d new facts, %d graph facts", tt.query, loaded, len(facts))
+	}
+}
+
+func TestNormalizeNumbers(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string // at least one variant should match this
+	}{
+		{"world war 2", "world war ii"},
+		{"henry 8", "henry viii"},
+		{"world war ii", "world war 2"},
+		{"apollo 13", ""}, // 13 not in range, no variant
+	}
+	for _, tt := range tests {
+		variants := normalizeNumbers(tt.input)
+		if tt.want == "" {
+			if len(variants) > 0 {
+				t.Errorf("normalizeNumbers(%q): expected no variants, got %v", tt.input, variants)
+			}
+			continue
+		}
+		found := false
+		for _, v := range variants {
+			if v == tt.want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("normalizeNumbers(%q): want %q in %v", tt.input, tt.want, variants)
+		}
+	}
+}
+
+func TestContainsPhrase(t *testing.T) {
+	tests := []struct {
+		text, phrase string
+		want         bool
+	}{
+		{"mahatma gandhi", "gandhi", true},
+		{"gandhi smriti", "gandhi", true},
+		{"gandhism", "gandhi", false}, // not a word boundary
+		{"black hole", "black hole", true},
+		{"black hole thermodynamics", "black hole", true},
+		{"black", "black hole", false},
+		{"world war ii", "world war ii", true},
+		{"world war ii battles", "world war ii", true},
+	}
+	for _, tt := range tests {
+		got := containsPhrase(tt.text, tt.phrase)
+		if got != tt.want {
+			t.Errorf("containsPhrase(%q, %q) = %v, want %v", tt.text, tt.phrase, got, tt.want)
+		}
+	}
+}
+
+func TestPluralVariants(t *testing.T) {
+	tests := []struct {
+		input string
+		want  []string
+	}{
+		{"black holes", []string{"black hole", "black hol", "black holy"}},
+		{"black hole", []string{"black holes", "black holy"}},
+		{"cities", []string{"citie", "citi", "city"}},
+	}
+	for _, tt := range tests {
+		got := pluralVariants(tt.input)
+		// Just check the first variant is present
+		found := false
+		for _, g := range got {
+			if g == tt.want[0] {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("pluralVariants(%q): want %q in result, got %v", tt.input, tt.want[0], got)
+		}
+	}
 }
 
 func TestLoadRealPackages(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -23,35 +24,58 @@ func trainTextGen(args []string) {
 	lr := fs.Float64("lr", 0.003, "Initial learning rate")
 	large := fs.Bool("large", false, "Use large config (hiddenDim=512, embedDim=128)")
 	augment := fs.Int("augment", 3, "Data augmentation factor (1=no augmentation)")
+	maxCorpus := fs.Int("max-corpus", 50000, "Max examples from sentence/discourse corpus")
 	fs.Parse(args)
 
 	fmt.Println("═══ Nous Text Generation Model — GRU Training ═══")
 	start := time.Now()
 
-	// 1. Build cognitive graph from all packages
-	fmt.Print("Loading knowledge packages... ")
-	graph := cognitive.NewCognitiveGraph("")
-	engine := cognitive.NewGenerativeEngine()
-	composer := cognitive.NewComposer(graph, nil, nil, nil)
-	loader := cognitive.NewPackageLoader(graph, engine, composer, *packDir)
-	loader.MaxStartupFacts = 0 // load everything
+	// 1. Load sentence and discourse corpora (real Wikipedia sentences).
+	// These are the PRIMARY training data — human-written text, not templates.
+	var sc *cognitive.SentenceCorpus
+	var dc *cognitive.DiscourseCorpus
 
-	results, err := loader.LoadAll()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "\nFailed to load packages: %v\n", err)
-		os.Exit(1)
+	scPath := filepath.Join(*packDir, "wiki", "sentence_corpus.json")
+	sc = cognitive.NewSentenceCorpus()
+	if err := sc.Load(scPath); err == nil && sc.Size() > 0 {
+		fmt.Printf("Loaded sentence corpus: %d exemplars\n", sc.Size())
+	} else {
+		sc = nil
+		fmt.Println("No sentence corpus found — using graph-only training")
 	}
 
-	totalFacts := 0
-	for _, r := range results {
-		totalFacts += r.FactsLoaded
+	dcPath := filepath.Join(*packDir, "wiki", "discourse_corpus.json")
+	dc = cognitive.NewDiscourseCorpus()
+	if err := dc.Load(dcPath); err == nil && dc.Size() > 0 {
+		fmt.Printf("Loaded discourse corpus: %d sentences\n", dc.Size())
+	} else {
+		dc = nil
 	}
-	fmt.Printf("%d packages, %d facts\n", len(results), totalFacts)
 
-	// 2. Generate training examples
-	fmt.Print("Generating training examples... ")
-	examples := cognitive.GenerateTextGenTrainingData(graph)
-	fmt.Printf("%d examples\n", len(examples))
+	// 2. Generate training examples from corpus (real Wikipedia sentences)
+	var examples []cognitive.TextGenExample
+	if sc != nil || dc != nil {
+		fmt.Printf("Generating corpus examples (max %d)... ", *maxCorpus)
+		examples = cognitive.GenerateTextGenFromCorpus(sc, dc, *maxCorpus)
+		fmt.Printf("%d examples from real Wikipedia text\n", len(examples))
+	}
+
+	// 3. Supplement with graph-generated examples if corpus is small
+	if len(examples) < 1000 {
+		fmt.Print("Loading knowledge packages for supplemental data... ")
+		graph := cognitive.NewCognitiveGraph("")
+		engine := cognitive.NewGenerativeEngine()
+		composer := cognitive.NewComposer(graph, nil, nil, nil)
+		loader := cognitive.NewPackageLoader(graph, engine, composer, *packDir)
+		loader.MaxStartupFacts = 0
+		loader.LoadAll()
+
+		graphExamples := cognitive.GenerateTextGenTrainingData(graph)
+		fmt.Printf("%d graph examples\n", len(graphExamples))
+		examples = append(examples, graphExamples...)
+	}
+
+	fmt.Printf("Total training examples: %d\n", len(examples))
 
 	if len(examples) == 0 {
 		fmt.Fprintln(os.Stderr, "No training examples generated — check your packages directory")

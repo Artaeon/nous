@@ -777,6 +777,87 @@ func GenerateTextGenTrainingData(graph *CognitiveGraph) []TextGenExample {
 	return examples
 }
 
+// GenerateTextGenFromCorpus creates training examples from the sentence
+// corpus (Layer 2) and discourse corpus (Layer 2b). These are REAL
+// Wikipedia sentences paired with the triples they express — much higher
+// quality training data than template-generated sentences.
+//
+// This is the key to the GRU producing natural output: it learns from
+// human-written sentences, not "X is a Y" templates.
+func GenerateTextGenFromCorpus(sc *SentenceCorpus, dc *DiscourseCorpus, maxExamples int) []TextGenExample {
+	var examples []TextGenExample
+	seen := make(map[string]bool)
+
+	// Source 1: Sentence corpus — real sentences with known (subj, rel, obj).
+	if sc != nil {
+		sc.mu.RLock()
+		for rel, exs := range sc.exemplars {
+			for _, ex := range exs {
+				if len(examples) >= maxExamples {
+					break
+				}
+				sent := ex.Sentence
+				if len(sent) < 15 || len(sent) > 150 {
+					continue
+				}
+				if seen[sent] {
+					continue
+				}
+				seen[sent] = true
+				examples = append(examples, TextGenExample{
+					Subject:  ex.Subject,
+					Relation: rel,
+					Object:   ex.Object,
+					Target:   sent,
+				})
+			}
+		}
+		sc.mu.RUnlock()
+	}
+
+	// Source 2: Discourse corpus — real sentences with known discourse function.
+	// Map discourse functions to relation types for conditioning.
+	if dc != nil {
+		dfToRel := map[DiscourseFunc]RelType{
+			DFDefines:      RelIsA,
+			DFExplainsWhy:  RelCauses,
+			DFCompares:     RelSimilarTo,
+			DFEvaluates:    RelDescribedAs,
+			DFDescribes:    RelUsedFor,
+			DFConsequence:  RelCauses,
+			DFContext:      RelFoundedIn,
+			DFGivesExample: RelHas,
+			DFQuantifies:   RelHas,
+		}
+
+		dc.mu.RLock()
+		for _, ds := range dc.allSents {
+			if len(examples) >= maxExamples {
+				break
+			}
+			sent := ds.Sentence
+			if len(sent) < 15 || len(sent) > 150 {
+				continue
+			}
+			if seen[sent] {
+				continue
+			}
+			seen[sent] = true
+
+			rel := dfToRel[ds.Function]
+			examples = append(examples, TextGenExample{
+				Subject:  ds.Topic,
+				Relation: rel,
+				Object:   "", // discourse sentences don't have explicit objects
+				Target:   sent,
+			})
+		}
+		dc.mu.RUnlock()
+	}
+
+	return examples
+}
+
 // -----------------------------------------------------------------------
 // Model Persistence — binary format with vocabulary.
 // -----------------------------------------------------------------------

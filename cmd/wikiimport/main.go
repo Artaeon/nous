@@ -74,6 +74,11 @@ func main() {
 	batchNum := 1
 	articlesInBatch := 0
 
+	// Sentence corpus for Layer 2 retrieval-based generation.
+	corpus := cognitive.NewSentenceCorpus()
+	// Discourse corpus for Layer 2b — sentences indexed by discourse function.
+	discCorpus := cognitive.NewDiscourseCorpus()
+
 	fmt.Printf("Processing Wikipedia dump: %s\n", *dumpPath)
 	fmt.Printf("Output: %s | Batch size: %d", *outputDir, *batchSize)
 	if *limit > 0 {
@@ -93,6 +98,17 @@ func main() {
 		if len(facts) == 0 {
 			stats.ArticlesSkipped++
 			return nil
+		}
+
+		// Extract sentence exemplars for Layer 2 corpus.
+		exemplars := cognitive.ArticleToExemplars(article.Title, article.Text)
+		for _, ex := range exemplars {
+			corpus.Add(ex)
+		}
+		// Extract discourse-typed sentences for Layer 2b.
+		discSents := cognitive.ExtractDiscourseSentences(article.Title, article.Text)
+		for _, ds := range discSents {
+			discCorpus.Add(ds)
 		}
 
 		stats.ArticlesProcessed++
@@ -140,6 +156,36 @@ func main() {
 		fmt.Printf("  [batch %04d] %d facts (final)\n", batchNum, len(currentFacts))
 	}
 
+	// Save sentence corpus for Layer 2 retrieval.
+	corpusPath := filepath.Join(*outputDir, "sentence_corpus.json")
+	if corpus.Size() > 0 {
+		if err := corpus.Save(corpusPath); err != nil {
+			fmt.Fprintf(os.Stderr, "save sentence corpus: %v\n", err)
+		} else {
+			fmt.Printf("\n  Sentence corpus: %d exemplars → %s\n", corpus.Size(), corpusPath)
+			for rel, count := range corpus.RelationCounts() {
+				if count > 100 {
+					fmt.Printf("    %-14s %d sentences\n", rel, count)
+				}
+			}
+		}
+	}
+
+	// Save discourse corpus for Layer 2b.
+	discPath := filepath.Join(*outputDir, "discourse_corpus.json")
+	if discCorpus.Size() > 0 {
+		if err := discCorpus.Save(discPath); err != nil {
+			fmt.Fprintf(os.Stderr, "save discourse corpus: %v\n", err)
+		} else {
+			fmt.Printf("\n  Discourse corpus: %d sentences → %s\n", discCorpus.Size(), discPath)
+			for fn, count := range discCorpus.FunctionCounts() {
+				if count > 100 {
+					fmt.Printf("    %-14s %d sentences\n", fn, count)
+				}
+			}
+		}
+	}
+
 	// Summary
 	fmt.Println()
 	fmt.Println("=== Import Complete ===")
@@ -147,6 +193,7 @@ func main() {
 	fmt.Printf("  Articles skipped:   %d\n", stats.ArticlesSkipped)
 	fmt.Printf("  Facts extracted:    %d\n", stats.FactsExtracted)
 	fmt.Printf("  Packages written:   %d\n", stats.PackagesWritten)
+	fmt.Printf("  Sentence exemplars: %d\n", corpus.Size())
 	fmt.Printf("  Output directory:   %s\n", *outputDir)
 	fmt.Printf("  Elapsed:            %s\n", time.Since(stats.StartTime).Round(time.Millisecond))
 }

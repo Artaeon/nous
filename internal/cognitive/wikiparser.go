@@ -118,7 +118,7 @@ var (
 	wikiTableRe = regexp.MustCompile(`\{\|[\s\S]*?\|\}`)
 
 	// Category links: [[Category:...]]
-	wikiCategoryRe = regexp.MustCompile(`(?i)\[\[Category:[^\]]*\]\]`)
+	wikiCategoryStripRe = regexp.MustCompile(`(?i)\[\[Category:[^\]]*\]\]`)
 
 	// File/Image links: [[File:...]] or [[Image:...]]
 	wikiFileRe = regexp.MustCompile(`(?i)\[\[(?:File|Image):[^\]]*\]\]`)
@@ -178,7 +178,7 @@ func StripWikitext(wikitext string) string {
 	s = wikiTableRe.ReplaceAllString(s, "")
 
 	// 6. Category and File/Image links
-	s = wikiCategoryRe.ReplaceAllString(s, "")
+	s = wikiCategoryStripRe.ReplaceAllString(s, "")
 	s = wikiFileRe.ReplaceAllString(s, "")
 
 	// 7. Wikilinks: [[target|display]] → display, [[target]] → target
@@ -314,8 +314,9 @@ func stripWikilinks(s string) string {
 // -----------------------------------------------------------------------
 
 // ArticleToFacts extracts PackageFacts from a plain-text article.
-// Uses ExtractTriples patterns. Also creates a "described_as" fact
-// from the first sentence (the Wikipedia definition pattern).
+// Uses ExtractTriples patterns. Creates a "described_as" fact from the
+// lead paragraph (first 2-3 sentences) — preserving the original
+// human-written Wikipedia text for high-quality responses.
 func ArticleToFacts(title, plainText string) []PackageFact {
 	if plainText == "" {
 		return nil
@@ -332,18 +333,18 @@ func ArticleToFacts(title, plainText string) []PackageFact {
 		}
 	}
 
-	// First sentence extraction: Wikipedia articles typically begin with
-	// "Title is a ..." — extract as a described_as fact.
 	sentences := splitSentences(plainText)
-	if len(sentences) > 0 {
-		first := strings.TrimSpace(sentences[0])
-		if first != "" && len(first) > 10 {
-			// Use the first sentence as a description
-			addFact(title, "described_as", first)
-		}
+
+	// Lead paragraph: preserve the first 2-3 sentences as a described_as fact.
+	// These are human-written, encyclopedia-quality text that the composer
+	// can surface directly — no lossy triple round-trip needed.
+	lead := buildLeadParagraph(sentences, title)
+	if lead != "" {
+		addFact(title, "described_as", lead)
 	}
 
-	// Extract triples from all sentences
+	// Extract triples from all sentences (including the lead ones —
+	// triples provide structured facts for the knowledge graph).
 	for _, sent := range sentences {
 		sent = strings.TrimSpace(sent)
 		if sent == "" || len(sent) < 10 {
@@ -361,6 +362,201 @@ func ArticleToFacts(title, plainText string) []PackageFact {
 	}
 
 	return facts
+}
+
+// buildLeadParagraph assembles the first 2-3 sentences of a Wikipedia
+// article into a single lead paragraph. Skips sentences that are
+// boilerplate, fragment-like, or don't relate to the article title.
+// Returns "" if no usable lead text is found.
+func buildLeadParagraph(sentences []string, title string) string {
+	const maxSentences = 3
+	const maxLen = 500 // keep lead compact
+	const scanLimit = 15 // scan deeper for articles with image captions
+
+	titleLower := strings.ToLower(title)
+	var parts []string
+	totalLen := 0
+
+	for i, sent := range sentences {
+		if i >= scanLimit {
+			break
+		}
+		sent = strings.TrimSpace(sent)
+		// Clean wiki markup remnants (image captions, stray brackets).
+		sent = strings.ReplaceAll(sent, "]]", "")
+		sent = strings.ReplaceAll(sent, "[[", "")
+		// If a sentence contains a newline, take only the part after the
+		// last newline — the earlier parts are usually image captions.
+		if nlIdx := strings.LastIndex(sent, "\n"); nlIdx >= 0 {
+			sent = strings.TrimSpace(sent[nlIdx+1:])
+		}
+		if sent == "" || len(sent) < 15 {
+			continue
+		}
+		if isBoilerplate(sent) {
+			continue
+		}
+
+		// First sentence must start with or prominently feature the title.
+		// Wikipedia convention: title appears early in the first sentence.
+		if len(parts) == 0 {
+			if !leadSentenceMatchesTitle(sent, titleLower) {
+				continue
+			}
+			// Skip image captions that happen to contain the title.
+			// "This Renaissance painting shows..." is about a painting, not the Renaissance.
+			sentLower := strings.ToLower(sent)
+			if strings.HasPrefix(sentLower, "this ") {
+				// Only allow if the sentence IS "This <title> is/was/are..."
+				// (defining the topic), not "This <title> painting/photo/image shows..."
+				captionWords := []string{"painting", "photo", "image", "picture",
+					"map", "diagram", "chart", "statue", "drawing", "flag", "logo",
+					"portrait", "view", "scene", "stamp", "coin", "monument"}
+				isCaption := false
+				for _, cw := range captionWords {
+					if strings.Contains(sentLower, cw) {
+						isCaption = true
+						break
+					}
+				}
+				if isCaption {
+					continue
+				}
+			}
+		}
+
+		// Continuation sentences: must start with a capital letter or pronoun.
+		// Skip fragments like "is the Ancient Greek word" (starts lowercase)
+		// and image captions like "This painting shows..." that aren't about the topic.
+		if len(parts) > 0 {
+			if len(sent) > 0 && (sent[0] < 'A' || sent[0] > 'Z') {
+				continue // lowercase start — likely a fragment
+			}
+			// Skip obvious image captions
+			sentLower := strings.ToLower(sent)
+			if strings.HasPrefix(sentLower, "this ") && !strings.Contains(sentLower, titleLower) {
+				continue
+			}
+		}
+
+		// Ensure sentence ends with punctuation.
+		if !strings.HasSuffix(sent, ".") && !strings.HasSuffix(sent, "!") && !strings.HasSuffix(sent, "?") {
+			sent += "."
+		}
+
+		parts = append(parts, sent)
+		totalLen += len(sent)
+
+		if len(parts) >= maxSentences || totalLen >= maxLen {
+			break
+		}
+	}
+
+	// Fallback: if no sentence matched the title, use the first good sentence.
+	// This handles articles where the text starts with a variant of the title
+	// (e.g. "Einstein" instead of "Albert Einstein") or image captions precede it.
+	if len(parts) == 0 {
+		for i, sent := range sentences {
+			if i >= scanLimit {
+				break
+			}
+			sent = strings.TrimSpace(sent)
+			sent = strings.ReplaceAll(sent, "]]", "")
+			sent = strings.ReplaceAll(sent, "[[", "")
+			if nlIdx := strings.LastIndex(sent, "\n"); nlIdx >= 0 {
+				sent = strings.TrimSpace(sent[nlIdx+1:])
+			}
+			if sent == "" || len(sent) < 20 {
+				continue
+			}
+			if isBoilerplate(sent) {
+				continue
+			}
+			// Must start with a capital letter — ensures it's a proper sentence,
+			// not a fragment like "is the Ancient Greek word" or "from the atmosphere".
+			if len(sent) > 0 && (sent[0] < 'A' || sent[0] > 'Z') {
+				continue
+			}
+			if !strings.HasSuffix(sent, ".") && !strings.HasSuffix(sent, "!") && !strings.HasSuffix(sent, "?") {
+				sent += "."
+			}
+			return sent
+		}
+		return ""
+	}
+	result := strings.Join(parts, " ")
+	// Fix missing spaces after periods: "food.Photosynthesis" → "food. Photosynthesis"
+	var fixed strings.Builder
+	fixed.Grow(len(result) + 10)
+	for i := 0; i < len(result); i++ {
+		fixed.WriteByte(result[i])
+		if result[i] == '.' && i+1 < len(result) && result[i+1] >= 'A' && result[i+1] <= 'Z' {
+			fixed.WriteByte(' ')
+		}
+	}
+	return fixed.String()
+}
+
+// leadSentenceMatchesTitle checks whether a sentence is a valid Wikipedia
+// lead sentence for the given title. The title (or last word of multi-word
+// titles) must appear near the start of the sentence.
+func leadSentenceMatchesTitle(sent, titleLower string) bool {
+	sentLower := strings.ToLower(sent)
+
+	// Direct prefix match is always good.
+	if strings.HasPrefix(sentLower, titleLower) {
+		return true
+	}
+
+	// For multi-word titles, check if any significant word appears at the start.
+	// "Mahatma Gandhi" article starts with "Mohandas Karmchand Gandhi".
+	titleWords := strings.Fields(titleLower)
+	if len(titleWords) > 1 {
+		// Check last word (surname) — most distinctive.
+		lastName := titleWords[len(titleWords)-1]
+		if len(lastName) >= 4 && wordBoundaryContains(sentLower, lastName) {
+			// Must be in the first half of the sentence.
+			idx := strings.Index(sentLower, lastName)
+			if idx >= 0 && idx < len(sentLower)/2 {
+				return true
+			}
+		}
+		// Check first word prefix.
+		if strings.HasPrefix(sentLower, titleWords[0]) {
+			return true
+		}
+	}
+
+	// Full title must appear near the start — within first 50% of the sentence.
+	idx := strings.Index(sentLower, titleLower)
+	if idx < 0 {
+		return false
+	}
+	maxPos := len(sentLower) / 2
+	if maxPos > 80 {
+		maxPos = 80
+	}
+	if idx > maxPos {
+		return false
+	}
+
+	// Word-boundary check to avoid substring matches.
+	endIdx := idx + len(titleLower)
+	atWordStart := idx == 0 || sentLower[idx-1] == ' ' || sentLower[idx-1] == '('
+	atWordEnd := endIdx == len(sentLower) || sentLower[endIdx] == ' ' || sentLower[endIdx] == ',' || sentLower[endIdx] == '.' || sentLower[endIdx] == ')'
+	return atWordStart && atWordEnd
+}
+
+// wordBoundaryContains checks if text contains word at a word boundary.
+func wordBoundaryContains(text, word string) bool {
+	idx := strings.Index(text, word)
+	if idx < 0 {
+		return false
+	}
+	endIdx := idx + len(word)
+	atStart := idx == 0 || text[idx-1] == ' ' || text[idx-1] == '('
+	atEnd := endIdx == len(text) || text[endIdx] == ' ' || text[endIdx] == ',' || text[endIdx] == '.' || text[endIdx] == ')'
+	return atStart && atEnd
 }
 
 // relTypeToString converts a RelType back to its string representation.

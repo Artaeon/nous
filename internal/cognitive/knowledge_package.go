@@ -173,8 +173,67 @@ func (pl *PackageLoader) LoadAll() ([]*PackageLoadResult, error) {
 	return results, nil
 }
 
+// isFragmentSubject returns true if a fact subject is a sentence fragment
+// (pronoun, determiner phrase, or other non-entity text) that shouldn't be
+// indexed or loaded as a standalone topic.
+func isFragmentSubject(subj string) bool {
+	if len(subj) < 2 {
+		return true
+	}
+	// Reject subjects that start with a lowercase letter — real entities are capitalised
+	if subj[0] >= 'a' && subj[0] <= 'z' {
+		return true
+	}
+	// Reject pronoun and determiner-initial subjects
+	lower := strings.ToLower(subj)
+	fragmentPrefixes := []string{
+		"it ", "he ", "she ", "they ", "we ", "its ",
+		"the ", "this ", "that ", "these ", "those ",
+		"his ", "her ", "their ", "our ",
+		"a ", "an ",
+		"some ", "many ", "most ", "several ", "each ", "every ",
+	}
+	for _, pfx := range fragmentPrefixes {
+		if strings.HasPrefix(lower, pfx) {
+			return true
+		}
+	}
+	// Reject bare pronouns
+	bareFragments := map[string]bool{
+		"it": true, "he": true, "she": true, "they": true,
+		"we": true, "its": true, "them": true, "him": true,
+		"her": true, "this": true, "that": true, "there": true,
+		"these": true, "those": true,
+	}
+	if bareFragments[lower] {
+		return true
+	}
+	// Reject overly long subjects (likely sentence fragments)
+	if strings.Count(subj, " ") >= 6 {
+		return true
+	}
+	// Reject subjects containing verbs — likely sentence fragments, not entities.
+	// Only check for common finite verb forms after the first word.
+	words := strings.Fields(lower)
+	if len(words) >= 3 {
+		verbForms := map[string]bool{
+			"is": true, "are": true, "was": true, "were": true,
+			"has": true, "had": true, "have": true,
+			"can": true, "could": true, "would": true, "will": true,
+			"should": true, "may": true, "might": true, "must": true,
+		}
+		for _, w := range words[1:] {
+			if verbForms[w] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // indexWikiPackage scans a wiki package file and indexes its topics without
 // loading facts into memory. Only reads fact subjects to build the index.
+// Skips fragment subjects (pronouns, determiners, sentence fragments).
 func (pl *PackageLoader) indexWikiPackage(path string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -186,15 +245,30 @@ func (pl *PackageLoader) indexWikiPackage(path string) {
 		return
 	}
 
-	// Index each unique subject to this file.
-	// Don't overwrite existing entries — the first batch (alphabetically)
-	// typically has the primary article with the best described_as fact.
+	// Index each unique non-fragment subject to this file.
+	// Prefer batches that contain described_as facts — these are the
+	// primary article with the lead paragraph. Other batches may have
+	// stale triples from different articles that mention the same subject.
 	seen := make(map[string]bool)
+	describedSubjects := make(map[string]bool)
+
+	// First pass: find subjects that have described_as in this batch.
 	for _, f := range pkg.Facts {
+		if f.Relation == "described_as" && !isFragmentSubject(f.Subject) {
+			describedSubjects[strings.ToLower(f.Subject)] = true
+		}
+	}
+
+	// Second pass: index subjects. described_as batches always win.
+	for _, f := range pkg.Facts {
+		if isFragmentSubject(f.Subject) {
+			continue
+		}
 		subj := strings.ToLower(f.Subject)
 		if !seen[subj] {
 			seen[subj] = true
-			if _, exists := pl.wikiIndex[subj]; !exists {
+			_, exists := pl.wikiIndex[subj]
+			if !exists || describedSubjects[subj] {
 				pl.wikiIndex[subj] = path
 			}
 		}
@@ -203,38 +277,250 @@ func (pl *PackageLoader) indexWikiPackage(path string) {
 
 // LookupWiki loads wiki knowledge on demand for a given topic.
 // Returns the number of facts loaded (0 if topic not in index).
+//
+// Loads exactly ONE batch file — the single best match. Never mixes
+// facts from different entities. Resolution order:
+//
+//  1. Strip leading articles ("a black hole" → "black hole")
+//  2. Normalize numbers ("world war 2" → also try "world war ii")
+//  3. Exact match
+//  4. Plural/singular variants
+//  5. Disambiguation page (loads alongside the best match)
+//  6. Single best partial match (surname/word-boundary)
+//  7. Broader fallback (query contains an indexed topic)
 func (pl *PackageLoader) LookupWiki(topic string) int {
 	topic = strings.ToLower(strings.TrimSpace(topic))
 	if topic == "" {
 		return 0
 	}
 
-	path, ok := pl.wikiIndex[topic]
-	if !ok {
-		// Try partial match — check if any indexed topic contains the query
-		for indexed, p := range pl.wikiIndex {
-			if strings.Contains(indexed, topic) || strings.Contains(topic, indexed) {
-				path = p
-				ok = true
-				break
+	// 1. Strip leading articles
+	for _, art := range []string{"a ", "an ", "the "} {
+		if strings.HasPrefix(topic, art) {
+			stripped := topic[len(art):]
+			if len(stripped) > 0 {
+				if _, exact := pl.wikiIndex[topic]; !exact {
+					topic = stripped
+				}
 			}
+			break
 		}
 	}
-	if !ok {
-		return 0
+
+	// 2. Build candidate forms: exact, number variants, plural variants
+	candidates := []string{topic}
+	candidates = append(candidates, normalizeNumbers(topic)...)
+	candidates = append(candidates, pluralVariants(topic)...)
+
+	// 3. Try exact match on all candidate forms
+	for _, c := range candidates {
+		if path, ok := pl.wikiIndex[c]; ok {
+			loaded := pl.loadWikiIfNeeded(path)
+			// Also load the disambiguation page if one exists
+			pl.loadDisambiguation(topic)
+			return loaded
+		}
 	}
 
-	// Already loaded this package?
+	// 4. Single best partial match — find the ONE indexed topic that
+	//    best matches the query. Prefer disambiguation pages, then
+	//    surname matches, then shortest name.
+	var bestPath string
+	bestScore := 0
+	bestLen := 0
+	for indexed, p := range pl.wikiIndex {
+		if !containsPhrase(indexed, topic) {
+			continue
+		}
+		score := wikiMatchScore(indexed, topic)
+		// Prefer higher score, then shorter name (more focused article)
+		if score > bestScore || (score == bestScore && (bestLen == 0 || len(indexed) < bestLen)) {
+			bestPath = p
+			bestScore = score
+			bestLen = len(indexed)
+		}
+	}
+	if bestPath != "" {
+		loaded := pl.loadWikiIfNeeded(bestPath)
+		pl.loadDisambiguation(topic)
+		return loaded
+	}
+
+	// 5. Broader fallback — query contains an indexed topic
+	if strings.Contains(topic, " ") {
+		var fallbackPath string
+		fallbackLen := 0
+		for indexed, p := range pl.wikiIndex {
+			if len(indexed) >= 3 && containsPhrase(topic, indexed) && len(indexed) > fallbackLen {
+				fallbackPath = p
+				fallbackLen = len(indexed)
+			}
+		}
+		if fallbackPath != "" {
+			return pl.loadWikiIfNeeded(fallbackPath)
+		}
+	}
+
+	return 0
+}
+
+// loadDisambiguation loads the disambiguation page for a topic if one exists.
+// This allows LookupDescription to use the disambiguation page's lead
+// sentence to identify the most notable entity.
+func (pl *PackageLoader) loadDisambiguation(topic string) {
+	disambKey := topic + " (disambiguation)"
+	if path, ok := pl.wikiIndex[disambKey]; ok {
+		pl.loadWikiIfNeeded(path)
+	}
+}
+
+// normalizeNumbers returns alternate forms with number↔Roman numeral conversion.
+// "world war 2" → ["world war ii"], "henry viii" → ["henry 8"]
+func normalizeNumbers(topic string) []string {
+	arabicToRoman := map[string]string{
+		"1": "i", "2": "ii", "3": "iii", "4": "iv", "5": "v",
+		"6": "vi", "7": "vii", "8": "viii", "9": "ix", "10": "x",
+	}
+	romanToArabic := map[string]string{
+		"i": "1", "ii": "2", "iii": "3", "iv": "4", "v": "5",
+		"vi": "6", "vii": "7", "viii": "8", "ix": "9", "x": "10",
+	}
+
+	words := strings.Fields(topic)
+	var variants []string
+
+	for i, w := range words {
+		if roman, ok := arabicToRoman[w]; ok {
+			alt := make([]string, len(words))
+			copy(alt, words)
+			alt[i] = roman
+			variants = append(variants, strings.Join(alt, " "))
+		}
+		if arabic, ok := romanToArabic[w]; ok {
+			alt := make([]string, len(words))
+			copy(alt, words)
+			alt[i] = arabic
+			variants = append(variants, strings.Join(alt, " "))
+		}
+	}
+	return variants
+}
+
+// wikiMatchScore scores how well an indexed topic matches a query.
+// Higher scores indicate more notable/relevant matches.
+//
+// Scoring:
+//   - 10: disambiguation page ("gandhi (disambiguation)")
+//   - 8: query is the last word — likely a surname match ("mahatma gandhi" for "gandhi")
+//   - 6: exactly "FirstName Query" pattern (2 words, query last)
+//   - 4: query is the first word ("gandhi smriti" for "gandhi")
+//   - 2: query appears somewhere in the middle
+//   - 0: default
+func wikiMatchScore(indexed, query string) int {
+	// Disambiguation pages are authoritative
+	if strings.Contains(indexed, "(disambiguation)") {
+		return 10
+	}
+	words := strings.Fields(indexed)
+	if len(words) == 0 {
+		return 0
+	}
+	// Query matches the last word → surname match (most notable for people)
+	if words[len(words)-1] == query {
+		if len(words) == 2 {
+			return 8 // "Firstname Lastname" — strongest person match
+		}
+		return 6
+	}
+	// Query matches the first word
+	if words[0] == query {
+		return 4
+	}
+	return 2
+}
+
+// loadWikiIfNeeded loads a wiki package if not already loaded.
+func (pl *PackageLoader) loadWikiIfNeeded(path string) int {
 	if pl.wikiLoaded[path] {
 		return 0
 	}
-
-	result, err := pl.LoadFile(path)
+	result, err := pl.loadWikiFile(path)
 	if err != nil {
 		return 0
 	}
 	pl.wikiLoaded[path] = true
 	return result.FactsLoaded
+}
+
+// pluralVariants returns singular/plural variants of a topic.
+func pluralVariants(topic string) []string {
+	var variants []string
+	if strings.HasSuffix(topic, "s") {
+		// Try singular: "black holes" → "black hole"
+		variants = append(variants, strings.TrimSuffix(topic, "s"))
+		if strings.HasSuffix(topic, "es") {
+			variants = append(variants, strings.TrimSuffix(topic, "es"))
+		}
+		if strings.HasSuffix(topic, "ies") {
+			variants = append(variants, strings.TrimSuffix(topic, "ies")+"y")
+		}
+	} else {
+		// Try plural: "black hole" → "black holes"
+		variants = append(variants, topic+"s")
+		if strings.HasSuffix(topic, "y") {
+			variants = append(variants, strings.TrimSuffix(topic, "y")+"ies")
+		}
+	}
+	return variants
+}
+
+// containsPhrase checks if text contains phrase as a whole-word-boundary match
+// (bounded by spaces or string edges). Unlike containsWord in tracker.go,
+// this handles multi-word phrases like "world war ii".
+func containsPhrase(text, phrase string) bool {
+	word := phrase
+	idx := strings.Index(text, word)
+	for idx >= 0 {
+		// Check left boundary
+		leftOk := idx == 0 || text[idx-1] == ' '
+		// Check right boundary
+		end := idx + len(word)
+		rightOk := end == len(text) || text[end] == ' '
+		if leftOk && rightOk {
+			return true
+		}
+		// Search for next occurrence
+		next := strings.Index(text[idx+1:], word)
+		if next < 0 {
+			break
+		}
+		idx = idx + 1 + next
+	}
+	return false
+}
+
+// loadWikiFile loads a wiki package, filtering out fragment subjects.
+func (pl *PackageLoader) loadWikiFile(path string) (*PackageLoadResult, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read package %s: %w", path, err)
+	}
+
+	var pkg KnowledgePackage
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return nil, fmt.Errorf("parse package %s: %w", path, err)
+	}
+
+	// Filter out fragment subjects before installing
+	clean := make([]PackageFact, 0, len(pkg.Facts))
+	for _, f := range pkg.Facts {
+		if !isFragmentSubject(f.Subject) {
+			clean = append(clean, f)
+		}
+	}
+	pkg.Facts = clean
+
+	return pl.Install(&pkg), nil
 }
 
 // HasWikiEntry returns true if the wiki index contains an exact match for the topic.

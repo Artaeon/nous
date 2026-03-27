@@ -50,9 +50,10 @@ type CreativeRequest struct {
 
 // CreativeEngine generates creative text from templates and combinatorics.
 type CreativeEngine struct {
-	Graph    *CognitiveGraph
-	Composer *Composer
-	rng      *rand.Rand
+	Graph           *CognitiveGraph
+	Composer        *Composer
+	DiscourseCorpus *DiscourseCorpus
+	rng             *rand.Rand
 
 	// Vocabulary pools
 	rhymes     map[string][]string
@@ -449,50 +450,75 @@ func (ce *CreativeEngine) topicalJoke(topic string, facts []string) string {
 // Reflection / Opinion Generation
 // -----------------------------------------------------------------------
 
-// Reflect generates a multi-perspective analysis on a topic.
+// Reflect generates a response about a topic using the discourse corpus
+// and knowledge graph. Retrieves real human-written sentences organized
+// by discourse function — no generic templates.
 func (ce *CreativeEngine) Reflect(topic string, question string) string {
-	// Strip question framing from topic: "what is the meaning of life" → "the meaning of life"
+	// Strip question framing: "what is the meaning of life" → "the meaning of life"
 	topic = stripReflectPrefix(topic)
+
+	// Determine query type from the question for discourse planning.
+	queryType := classifyQueryType(question)
+
+	// Try discourse corpus first — retrieves real Wikipedia sentences
+	// organized by discourse function (defines, evaluates, compares).
+	if ce.DiscourseCorpus != nil {
+		response := ce.DiscourseCorpus.ComposeResponse(topic, queryType)
+		if response != "" {
+			return response
+		}
+	}
+
+	// Fallback: use description from knowledge graph.
+	if ce.Graph != nil {
+		desc := ce.Graph.LookupDescription(topic)
+		if len(desc) >= 40 {
+			facts := ce.getTopicFacts(topic)
+			var parts []string
+			parts = append(parts, desc)
+			if len(facts) > 0 {
+				parts = append(parts, strings.Join(ce.limitSlice(facts, 3), " "))
+			}
+			return strings.Join(parts, "\n\n")
+		}
+	}
+
+	// Last resort: use structured facts.
 	facts := ce.getTopicFacts(topic)
-	sections := make([]string, 0, 5)
-
-	// Opening frame
-	openers := []string{
-		fmt.Sprintf("%s is one of those topics that invites many perspectives.", capitalizeFirst(topic)),
-		fmt.Sprintf("When we consider %s, several dimensions come to mind.", topic),
-		fmt.Sprintf("The question of %s is more nuanced than it might first appear.", topic),
-		fmt.Sprintf("There are many ways to think about %s. Here are some perspectives worth considering.", topic),
+	if len(facts) >= 2 {
+		return strings.Join(ce.limitSlice(facts, 5), " ")
 	}
-	sections = append(sections, ce.pick(openers))
-
-	// If we have facts, weave them into the analysis
-	if len(facts) > 0 {
-		factSection := fmt.Sprintf("What we know: %s.", strings.Join(ce.limitSlice(facts, 3), ". Additionally, "))
-		sections = append(sections, factSection)
+	if len(facts) == 1 {
+		return facts[0]
 	}
+	return fmt.Sprintf("I don't have detailed information about %s yet.", topic)
+}
 
-	// Perspective 1: The practical view
-	practical := []string{
-		fmt.Sprintf("From a practical standpoint, %s has real implications for how we approach everyday challenges. It shapes decisions, influences priorities, and affects outcomes in ways both subtle and profound.", topic),
-		fmt.Sprintf("Practically speaking, %s matters because it touches the way we organize our lives, our work, and our interactions with others.", topic),
+// classifyQueryType determines the type of query for discourse planning.
+func classifyQueryType(question string) string {
+	lower := strings.ToLower(question)
+	if strings.Contains(lower, "why") {
+		return "why"
 	}
-	sections = append(sections, ce.pick(practical))
-
-	// Perspective 2: The philosophical view
-	philosophical := []string{
-		fmt.Sprintf("On a deeper level, %s raises questions about values, purpose, and what we consider meaningful. Thinkers throughout history have grappled with similar themes, arriving at different but equally thoughtful conclusions.", topic),
-		fmt.Sprintf("Philosophically, %s connects to fundamental questions about existence, knowledge, and the nature of understanding itself.", topic),
+	if strings.Contains(lower, "how") {
+		return "how"
 	}
-	sections = append(sections, ce.pick(philosophical))
-
-	// Perspective 3: The forward-looking view
-	forward := []string{
-		fmt.Sprintf("Looking ahead, our relationship with %s will likely continue to evolve. New understanding, new contexts, and new challenges will reshape how we think about it.", topic),
-		fmt.Sprintf("The future of %s is open. What matters is that we approach it with curiosity, humility, and a willingness to reconsider what we think we know.", topic),
+	if strings.Contains(lower, "opinion") || strings.Contains(lower, "think about") ||
+		strings.Contains(lower, "your take") || strings.Contains(lower, "thoughts on") {
+		return "opinion"
 	}
-	sections = append(sections, ce.pick(forward))
-
-	return strings.Join(sections, "\n\n")
+	if strings.Contains(lower, "compare") || strings.Contains(lower, " vs ") ||
+		strings.Contains(lower, "versus") || strings.Contains(lower, "difference between") {
+		return "compare"
+	}
+	if strings.Contains(lower, "example") {
+		return "example"
+	}
+	if strings.Contains(lower, "what is") || strings.Contains(lower, "define") ||
+		strings.Contains(lower, "explain") || strings.Contains(lower, "tell me about") {
+		return "what_is"
+	}
+	return "what_is"
 }
 
 // stripReflectPrefix removes question framing from a topic so it can be used

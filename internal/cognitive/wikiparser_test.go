@@ -168,6 +168,44 @@ func TestArticleToFacts(t *testing.T) {
 	}
 }
 
+func TestLeadParagraph(t *testing.T) {
+	text := `Photosynthesis is a process used by plants to convert light into energy. ` +
+		`It occurs mainly in the leaves. ` +
+		`The process involves absorbing carbon dioxide from the atmosphere. ` +
+		`Plants release oxygen as a byproduct.`
+
+	facts := ArticleToFacts("Photosynthesis", text)
+
+	// Find the described_as fact
+	var desc string
+	for _, f := range facts {
+		if f.Relation == "described_as" {
+			desc = f.Object
+			break
+		}
+	}
+
+	if desc == "" {
+		t.Fatal("no described_as fact found")
+	}
+
+	// Should contain multiple sentences (the lead paragraph)
+	sentCount := strings.Count(desc, ".") + strings.Count(desc, "!") + strings.Count(desc, "?")
+	if sentCount < 2 {
+		t.Errorf("lead paragraph should have 2-3 sentences, got %d: %q", sentCount, desc)
+	}
+	if sentCount > 3 {
+		t.Errorf("lead paragraph should have at most 3 sentences, got %d: %q", sentCount, desc)
+	}
+
+	// Must mention the title
+	if !strings.Contains(desc, "Photosynthesis") {
+		t.Errorf("lead should mention the title, got: %q", desc)
+	}
+
+	t.Logf("Lead paragraph: %s", desc)
+}
+
 func TestArticleToFactsEmpty(t *testing.T) {
 	facts := ArticleToFacts("Test", "")
 	if facts != nil {
