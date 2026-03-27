@@ -547,7 +547,7 @@ func (te *ThinkingEngine) Think(query string, ctx *ThinkContext) *ThoughtResult 
 	// 6. Non-LLM semantic reranking for knowledge-heavy tasks.
 	if te.shouldUsePlanRerank(task) {
 		plan := te.BuildContentPlan(query, task, params)
-		candidates := te.BuildPlanCandidates(plan, frame, text)
+		candidates := te.BuildPlanCandidates(query, task, plan, frame, text)
 		if len(candidates) > 0 {
 			text = te.SelectBestCandidate(plan, candidates)
 			trace.WriteString(fmt.Sprintf("Plan rerank: %d candidates selected\n", len(candidates)))

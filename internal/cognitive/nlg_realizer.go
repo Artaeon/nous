@@ -7,7 +7,7 @@ import (
 
 // BuildPlanCandidates produces multiple deterministic drafts from one plan.
 // The first candidate is the existing baseline text to preserve behavior.
-func (te *ThinkingEngine) BuildPlanCandidates(plan *ContentPlan, frame *Frame, baseline string) []string {
+func (te *ThinkingEngine) BuildPlanCandidates(query string, task ThinkTask, plan *ContentPlan, frame *Frame, baseline string) []string {
 	baseline = strings.TrimSpace(baseline)
 	if plan == nil {
 		if baseline == "" {
@@ -43,6 +43,14 @@ func (te *ThinkingEngine) BuildPlanCandidates(plan *ContentPlan, frame *Frame, b
 	d := te.realizeCorpusBackedPlan(plan, frame)
 	if d != "" {
 		out = append(out, d)
+	}
+
+	// Candidate E/F: discourse-function planning from semantic query type.
+	if e := te.realizeDiscoursePlan(plan, query, task, false); e != "" {
+		out = append(out, e)
+	}
+	if f := te.realizeDiscoursePlan(plan, query, task, true); f != "" {
+		out = append(out, f)
 	}
 
 	return dedupeCandidates(out)
@@ -92,6 +100,74 @@ func (te *ThinkingEngine) realizeCorpusBackedPlan(plan *ContentPlan, frame *Fram
 	}
 
 	return strings.Join(parts, " ")
+}
+
+func (te *ThinkingEngine) realizeDiscoursePlan(plan *ContentPlan, query string, task ThinkTask, reverse bool) string {
+	if plan == nil || te.composer == nil || te.composer.DiscourseCorpus == nil {
+		return ""
+	}
+	queryType := te.inferDiscourseQueryType(query, task)
+
+	functions := selectDiscoursePlan(queryType)
+	if reverse && len(functions) > 1 {
+		rev := make([]DiscourseFunc, len(functions))
+		for i := range functions {
+			rev[i] = functions[len(functions)-1-i]
+		}
+		functions = rev
+	}
+
+	sents := te.composer.DiscourseCorpus.RetrieveMulti(plan.Topic, functions)
+	if len(sents) == 0 {
+		return ""
+	}
+
+	if plan.Thesis != "" {
+		return strings.TrimSpace(plan.Thesis) + " " + strings.Join(sents, " ")
+	}
+	return strings.Join(sents, " ")
+}
+
+func (te *ThinkingEngine) inferDiscourseQueryType(query string, task ThinkTask) string {
+	lower := strings.ToLower(strings.TrimSpace(query))
+
+	switch task {
+	case TaskCompare:
+		return "compare"
+	case TaskDebate, TaskAdvise:
+		return "opinion"
+	case TaskTeach, TaskAnalyze:
+		if strings.Contains(lower, "why ") {
+			return "why"
+		}
+		if strings.Contains(lower, "how ") || strings.Contains(lower, "walk me through") {
+			return "how"
+		}
+		return "explain"
+	case TaskSummarize:
+		return "define"
+	case TaskConverse:
+		if strings.Contains(lower, "example") {
+			return "example"
+		}
+		if strings.Contains(lower, "why ") {
+			return "why"
+		}
+		if strings.Contains(lower, "what is") || strings.Contains(lower, "tell me") {
+			return "what_is"
+		}
+	}
+
+	if strings.Contains(lower, "compare") || strings.Contains(lower, " vs ") {
+		return "compare"
+	}
+	if strings.Contains(lower, "why") {
+		return "why"
+	}
+	if strings.Contains(lower, "how") {
+		return "how"
+	}
+	return "explain"
 }
 
 // SelectBestCandidate reranks deterministic candidates with quality signals.

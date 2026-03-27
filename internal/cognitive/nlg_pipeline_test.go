@@ -68,7 +68,7 @@ func TestBuildPlanCandidatesIncludesBaselineAndVariants(t *testing.T) {
 	}
 
 	baseline := "Stoicism is an old philosophy."
-	candidates := te.BuildPlanCandidates(plan, &summaryFrame, baseline)
+	candidates := te.BuildPlanCandidates("explain stoicism", TaskTeach, plan, &summaryFrame, baseline)
 
 	if len(candidates) < 2 {
 		t.Fatalf("expected multiple candidates, got %d", len(candidates))
