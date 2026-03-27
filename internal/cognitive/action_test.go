@@ -572,11 +572,56 @@ func TestActionRouter_CompareParsesVsItems(t *testing.T) {
 	if result == nil || result.DirectResponse == "" {
 		t.Fatal("expected non-empty compare response")
 	}
-	if strings.Contains(strings.ToLower(result.DirectResponse), "compare go and rust") {
+	lower := strings.ToLower(result.DirectResponse)
+	if strings.Contains(lower, "compare compare go and rust") || strings.Contains(lower, "about compare go and rust") {
 		t.Fatalf("compare parser should strip command prefix, got %q", result.DirectResponse)
 	}
-	if !strings.Contains(strings.ToLower(result.DirectResponse), "go") || !strings.Contains(strings.ToLower(result.DirectResponse), "rust") {
+	if !strings.Contains(lower, "go") || !strings.Contains(lower, "rust") {
 		t.Fatalf("expected response to reference both go and rust, got %q", result.DirectResponse)
+	}
+}
+
+func TestActionRouter_CompareSparseFallbackIsStructured(t *testing.T) {
+	ar := NewActionRouter()
+
+	nlu := &NLUResult{
+		Action: "compare",
+		Raw:    "compare go vs rust",
+	}
+	result := ar.Execute(nlu, NewConversation(10))
+
+	if result == nil || result.DirectResponse == "" {
+		t.Fatal("expected non-empty compare response")
+	}
+	lower := strings.ToLower(result.DirectResponse)
+	if !strings.Contains(lower, "comparison framework") {
+		t.Fatalf("expected structured sparse comparison fallback, got %q", result.DirectResponse)
+	}
+	if !strings.Contains(lower, "learning curve") {
+		t.Fatalf("expected criteria list in sparse fallback, got %q", result.DirectResponse)
+	}
+}
+
+func TestActionRouter_LookupKnowledgeSparseFallbackIsInformative(t *testing.T) {
+	ar := NewActionRouter()
+
+	nlu := &NLUResult{
+		Action:   "lookup_knowledge",
+		Intent:   "explain",
+		Raw:      "give me an overview of operating systems",
+		Entities: map[string]string{"topic": "operating systems"},
+	}
+	result := ar.Execute(nlu, NewConversation(10))
+
+	if result == nil || result.DirectResponse == "" {
+		t.Fatal("expected non-empty knowledge response")
+	}
+	if strings.TrimSpace(result.DirectResponse) == "operating systems" {
+		t.Fatalf("expected informative sparse fallback, got raw topic %q", result.DirectResponse)
+	}
+	lower := strings.ToLower(result.DirectResponse)
+	if !strings.Contains(lower, "don't have detailed knowledge") {
+		t.Fatalf("expected honest sparse fallback message, got %q", result.DirectResponse)
 	}
 }
 

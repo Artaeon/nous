@@ -1954,7 +1954,7 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 				return ar.handleWebSearch(nlu)
 			}
 		}
-		return &ActionResult{DirectResponse: query, Source: "knowledge"}
+		return &ActionResult{DirectResponse: ar.buildSparseKnowledgeFallback(query), Source: "knowledge"}
 	}
 
 	// Single high-confidence result — return directly without LLM.
@@ -2113,13 +2113,47 @@ func (ar *ActionRouter) handleCompare(nlu *NLUResult) *ActionResult {
 
 	if descA == "" && descB == "" && len(factsA) == 0 && len(factsB) == 0 {
 		sb.Reset()
-		sb.WriteString(fmt.Sprintf("I don't have enough knowledge about %s and %s to make a detailed comparison yet. Try asking me to look them up individually first.", displayA, displayB))
+		sb.WriteString(ar.buildSparseComparisonFallback(displayA, displayB, raw))
 	}
 
 	return &ActionResult{
 		DirectResponse: sb.String(),
 		Source:         "compare",
 	}
+}
+
+func (ar *ActionRouter) buildSparseKnowledgeFallback(topic string) string {
+	cleanTopic := strings.TrimSpace(topic)
+	if cleanTopic == "" {
+		cleanTopic = "that topic"
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("I don't have detailed knowledge about %s yet.", cleanTopic))
+	b.WriteString(" I can still help by structuring the topic into key dimensions and questions to investigate next.")
+	b.WriteString(" Ask me to break it down, compare options, or generate a learning plan.")
+	return b.String()
+}
+
+func (ar *ActionRouter) buildSparseComparisonFallback(itemA, itemB, raw string) string {
+	criteria := []string{"learning curve", "runtime performance", "tooling and ecosystem", "safety and reliability", "team productivity"}
+	lower := strings.ToLower(raw)
+	if strings.Contains(lower, "database") || strings.Contains(lower, "sql") {
+		criteria = []string{"query power", "operational complexity", "consistency model", "scalability", "cost"}
+	} else if strings.Contains(lower, "framework") || strings.Contains(lower, "library") {
+		criteria = []string{"developer experience", "ecosystem maturity", "performance", "community support", "long-term maintainability"}
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("I don't have enough grounded facts to compare %s and %s in depth yet.\n\n", itemA, itemB))
+	b.WriteString("A useful comparison framework is:\n")
+	for _, c := range criteria {
+		b.WriteString("- ")
+		b.WriteString(c)
+		b.WriteString("\n")
+	}
+	b.WriteString("\nIf you want, ask me to gather facts on each item first, then I can generate a structured tradeoff summary.")
+	return b.String()
 }
 
 // disambiguateComparisonPair checks if both items in a comparison have variants
