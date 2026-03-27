@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/artaeon/nous/internal/assistant"
@@ -228,16 +227,19 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 		}
 	}
 
-	// POST /api/chat — send a message, get a response
-	// Uses a mutex to serialize requests (one active conversation at a time)
-	// and per-request answer keys to avoid cross-request interference.
-	var chatMu sync.Mutex
+	// POST /api/chat — send a message, get a response.
+	// Uses a single-slot semaphore to serialize conversation updates, but
+	// fails fast when busy so callers never hang behind a stuck request.
+	chatSem := make(chan struct{}, 1)
 	var reqCounter uint64
 	submitPrompt := func(message string) (string, int64) {
-		chatMu.Lock()
-		defer chatMu.Unlock()
-
 		start := time.Now()
+		select {
+		case chatSem <- struct{}{}:
+			defer func() { <-chatSem }()
+		case <-time.After(1500 * time.Millisecond):
+			return "I'm currently handling another request. Please retry in a moment.", time.Since(start).Milliseconds()
+		}
 
 		// NLU → Action → Compose pipeline (0 LLM calls)
 		if s.nlu != nil && s.actions != nil && s.conv != nil {
@@ -339,10 +341,20 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 
-		chatMu.Lock()
-		defer chatMu.Unlock()
-
 		start := time.Now()
+		select {
+		case chatSem <- struct{}{}:
+			defer func() { <-chatSem }()
+		case <-time.After(1500 * time.Millisecond):
+			msg := "I'm currently handling another request. Please retry in a moment."
+			tokenJSON, _ := json.Marshal(msg)
+			fmt.Fprintf(w, "data: {\"t\":%s,\"d\":false}\n\n", tokenJSON)
+			flusher.Flush()
+			ms := time.Since(start).Milliseconds()
+			fmt.Fprintf(w, "data: {\"t\":\"\",\"d\":true,\"ms\":%d}\n\n", ms)
+			flusher.Flush()
+			return
+		}
 
 		// === NLU → Action → Compose (0 LLM calls) ===
 		if s.nlu != nil && s.actions != nil && s.conv != nil {
