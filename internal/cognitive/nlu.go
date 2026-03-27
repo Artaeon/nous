@@ -723,7 +723,24 @@ func (n *NLU) extractEntities(raw, lower string, r *NLUResult) {
 func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 	// Neural classifier: if trained and confident, use it directly.
 	// This short-circuits the hundreds of pattern checks below.
-	if n.Neural != nil && n.Neural.Classifier.IsTrained() {
+	// Exception: explicit factual question patterns ("what is X", "who is X",
+	// "tell me about X") always use pattern matching — the neural classifier
+	// sometimes misroutes these as "creative" or "conversation".
+	isExplicitFactual := false
+	for _, prefix := range []string{
+		"what is ", "what's ", "what are ", "what was ", "what were ",
+		"who is ", "who are ", "who was ",
+		"where is ", "where are ",
+		"when is ", "when was ", "when did ",
+		"tell me about ", "explain ",
+		"define ", "describe ",
+	} {
+		if strings.HasPrefix(lower, prefix) {
+			isExplicitFactual = true
+			break
+		}
+	}
+	if n.Neural != nil && n.Neural.Classifier.IsTrained() && !isExplicitFactual {
 		nr := n.Neural.Classify(raw)
 		if nr != nil && nr.Confidence > 0.70 {
 			r.Intent = nr.Intent
@@ -822,17 +839,43 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 	}
 
 	// 4c. Follow-up / continuation detection
-	// Only catch explicit continuations here. Context-aware follow-ups
-	// like "elaborate" and "more details" are handled by UnderstandWithContext.
-	for _, marker := range []string{
-		"tell me more", "go on", "continue",
-		"what else", "anything else", "dig deeper",
-	} {
-		if lower == marker || strings.HasPrefix(lower, marker+" ") {
-			r.Intent = "follow_up"
-			r.Action = "llm_chat" // will be intercepted by tracker
+	// Catches explicit continuations AND short implicit follow-ups
+	// ("why?", "really?", "and?") that reference the previous turn's topic.
+	followUpMarkers := []string{
+		// Explicit continuation
+		"tell me more", "more about that", "go on", "continue",
+		"keep going", "what else", "anything else",
+		"dig deeper", "more details", "more about",
+		// Explanation requests
+		"why is that", "why is this", "how come", "how so",
+		"can you explain", "explain that", "elaborate",
+		"what do you mean", "in what way",
+		// Example / comparison requests
+		"for example", "like what", "such as",
+		"compared to what", "how does that compare",
+	}
+	for _, marker := range followUpMarkers {
+		if lower == marker || strings.HasPrefix(lower, marker+" ") || strings.HasPrefix(lower, marker+"?") {
+			r.Intent = "followup"
+			r.Action = "respond"
 			r.Confidence = 0.85
 			return
+		}
+	}
+	// Short follow-up signals: 1-3 word inputs that aren't greetings/farewells
+	if wordCount := len(strings.Fields(lower)); wordCount >= 1 && wordCount <= 3 {
+		shortFollowUps := []string{
+			"why", "how", "really", "interesting", "huh",
+			"and", "so", "meaning", "seriously", "oh",
+			"wow", "more", "examples", "details",
+		}
+		for _, sf := range shortFollowUps {
+			if stripped == sf {
+				r.Intent = "followup"
+				r.Action = "respond"
+				r.Confidence = 0.85
+				return
+			}
 		}
 	}
 
@@ -1252,6 +1295,13 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 		r.Entities["topic"] = n.extractTopicGeneral(lower)
 		return
 	}
+	// "should I [verb] X or Y" → comparison/recommendation
+	if strings.Contains(lower, " or ") && (strings.HasPrefix(lower, "should i ") || strings.HasPrefix(lower, "which ") || strings.HasPrefix(lower, "what's better ")) {
+		r.Intent = "compare"
+		r.Confidence = 0.80
+		r.Entities["topic"] = n.extractTopicGeneral(lower)
+		return
+	}
 	for _, v := range n.compareVerbs {
 		if strings.Contains(lower, v) {
 			r.Intent = "compare"
@@ -1305,6 +1355,17 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 	}
 	for _, v := range n.computeVerbs {
 		if strings.Contains(lower, v) && containsDigit(lower) {
+			// Skip if the digit is part of a proper noun, not a math expression.
+			// "world war 2" has a digit but isn't math; "what is 2+2" is.
+			// Heuristic: strip the verb prefix and check if what remains looks
+			// like math (contains operators or is mostly digits).
+			remainder := lower
+			if idx := strings.Index(lower, v); idx >= 0 {
+				remainder = strings.TrimSpace(lower[idx+len(v):])
+			}
+			if !looksLikeMath(remainder) {
+				continue
+			}
 			// "convert" with units → conversion, not compute
 			if v == "convert" || v == "how much is" || v == "how many" {
 				for _, cw := range n.convertWords {
@@ -1789,6 +1850,9 @@ func (n *NLU) extractTopicGeneral(lower string) string {
 		}
 	}
 	topic = strings.TrimRight(topic, "?!.")
+	topic = strings.TrimSpace(topic)
+	// Strip leading articles/fillers: "a black hole" → "black hole"
+	topic = stripLeadingFillers(topic)
 	return strings.TrimSpace(topic)
 }
 
@@ -1965,9 +2029,11 @@ func (n *NLU) UnderstandWithContext(input string, conv *Conversation) *NLUResult
 		result.Confidence = 0.7
 	}
 
-	// If intent was vague, sharpen it to explain (most follow-ups want elaboration).
-	// "lookup_knowledge" from the freeform catch-all is also vague for follow-ups.
-	if result.Intent == "question" || result.Intent == "unknown" || result.Intent == "explain" || result.Intent == "lookup_knowledge" {
+	// If intent was vague or a bare follow-up, sharpen it to explain
+	// (most follow-ups want elaboration). "lookup_knowledge" from the
+	// freeform catch-all and "followup"/"follow_up" from the NLU are
+	// also vague for context-aware follow-ups.
+	if result.Intent == "question" || result.Intent == "unknown" || result.Intent == "explain" || result.Intent == "lookup_knowledge" || result.Intent == "followup" || result.Intent == "follow_up" {
 		result.Intent = "explain"
 		result.Action = "lookup_knowledge"
 	}
@@ -2045,6 +2111,42 @@ func containsDigit(s string) bool {
 		if r >= '0' && r <= '9' {
 			return true
 		}
+	}
+	return false
+}
+
+// looksLikeMath returns true if s looks like a math expression rather than
+// a proper noun that happens to contain digits.
+// "2+2", "15 * 3", "sqrt(16)" → true
+// "world war 2", "apollo 13", "henry viii" → false
+func looksLikeMath(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	// Contains math operators → definitely math
+	for _, op := range []string{"+", "-", "*", "/", "^", "=", "(", ")", "sqrt", "log", "sin", "cos"} {
+		if strings.Contains(s, op) {
+			return true
+		}
+	}
+	// Starts with a digit → likely math ("2 plus 3", "100 divided by 5")
+	if s[0] >= '0' && s[0] <= '9' {
+		return true
+	}
+	// If more than half the non-space chars are digits/operators, it's math
+	digits, total := 0, 0
+	for _, r := range s {
+		if r == ' ' {
+			continue
+		}
+		total++
+		if (r >= '0' && r <= '9') || r == '.' || r == ',' {
+			digits++
+		}
+	}
+	if total > 0 && float64(digits)/float64(total) > 0.5 {
+		return true
 	}
 	return false
 }
