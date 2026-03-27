@@ -560,6 +560,26 @@ func TestActionRouter_GenerateDoc(t *testing.T) {
 	}
 }
 
+func TestActionRouter_CompareParsesVsItems(t *testing.T) {
+	ar := NewActionRouter()
+
+	nlu := &NLUResult{
+		Action: "compare",
+		Raw:    "compare go vs rust",
+	}
+	result := ar.Execute(nlu, NewConversation(10))
+
+	if result == nil || result.DirectResponse == "" {
+		t.Fatal("expected non-empty compare response")
+	}
+	if strings.Contains(strings.ToLower(result.DirectResponse), "compare go and rust") {
+		t.Fatalf("compare parser should strip command prefix, got %q", result.DirectResponse)
+	}
+	if !strings.Contains(strings.ToLower(result.DirectResponse), "go") || !strings.Contains(strings.ToLower(result.DirectResponse), "rust") {
+		t.Fatalf("expected response to reference both go and rust, got %q", result.DirectResponse)
+	}
+}
+
 func TestParseRelativeTime(t *testing.T) {
 	tests := []struct {
 		input  string

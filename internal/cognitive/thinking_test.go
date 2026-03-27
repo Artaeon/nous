@@ -93,8 +93,9 @@ func TestTaskClassification(t *testing.T) {
 
 		// Converse (default)
 		{"Hello", TaskConverse},
-		{"Tell me about Stoicism", TaskConverse},
-		{"What is DNA?", TaskConverse},
+		{"Tell me about Stoicism", TaskTeach},
+		{"What is DNA?", TaskTeach},
+		{"Give me an overview of operating systems", TaskTeach},
 	}
 
 	passed := 0

@@ -377,6 +377,23 @@ func (ar *ActionRouter) handleRespond(nlu *NLUResult) *ActionResult {
 		}
 	}
 
+	// Explanatory/comparison prompts can be misclassified as short conversational
+	// intents by neural NLU. Route them through the thinking engine first.
+	if ar.Thinker != nil && looksExplanatoryQuery(nlu.Raw) && ar.Thinker.CanHandle(nlu.Raw) {
+		var ctx *ThinkContext
+		if ar.Tracker != nil {
+			ctx = &ThinkContext{RecentTopics: []string{ar.Tracker.CurrentTopic()}}
+		}
+		if result := ar.Thinker.Think(nlu.Raw, ctx); result != nil && result.Text != "" {
+			if !isLowInformationConversational(result.Text) {
+				return &ActionResult{
+					DirectResponse: result.Text,
+					Source:         "thinking:" + result.Frame,
+				}
+			}
+		}
+	}
+
 	// Use Composer for greetings — personal, contextual, unique every time.
 	// Trust the neural classifier's intent when available (no second-guessing).
 	if ar.Composer != nil && (nlu.Intent == "greeting" || isGreeting(nlu.Raw)) {
@@ -682,6 +699,60 @@ func isThankYou(lower string) bool {
 	clean := strings.TrimRight(strings.TrimSpace(lower), "!?.\\ ")
 	for _, t := range thanks {
 		if clean == t {
+			return true
+		}
+	}
+	return false
+}
+
+func isLowInformationConversational(text string) bool {
+	clean := strings.ToLower(strings.TrimRight(strings.TrimSpace(text), "!?."))
+	if clean == "" {
+		return true
+	}
+	lowInfo := map[string]bool{
+		"i see":                         true,
+		"okay":                          true,
+		"got it":                        true,
+		"right":                         true,
+		"makes sense":                   true,
+		"i hear you":                    true,
+		"gotcha":                        true,
+		"alright":                       true,
+		"cool":                          true,
+		"sure":                          true,
+		"understood":                    true,
+		"noted":                         true,
+		"clear":                         true,
+		"thank you for telling me":      true,
+		"i appreciate you sharing that": true,
+		"good question":                 true,
+	}
+	if lowInfo[clean] {
+		return true
+	}
+
+	if len(strings.Fields(clean)) <= 3 {
+		switch clean {
+		case "hmm", "oh", "wow", "interesting":
+			return true
+		}
+	}
+
+	return false
+}
+
+func looksExplanatoryQuery(query string) bool {
+	lower := strings.ToLower(strings.TrimSpace(query))
+	for _, prefix := range []string{
+		"what is ", "what are ", "what does ",
+		"how does ", "how do ", "why ",
+		"tell me about ", "tell me everything about ", "tell me all about ",
+		"give me an overview of ", "walk me through ",
+		"explain ", "describe ", "define ",
+		"compare ",
+	} {
+		if strings.HasPrefix(lower, prefix) {
 			return true
 		}
 	}
@@ -1790,15 +1861,40 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 		}
 	}
 
+	// For explanatory/question/comparison intents, prefer the thinking engine
+	// before conversational composition. This avoids short acknowledgments
+	// like "Gotcha." when knowledge lookup is sparse.
+	if ar.Thinker != nil && (nlu.Intent == "explain" || nlu.Intent == "question" || nlu.Intent == "compare") {
+		thinkQuery := nlu.Raw
+		if nlu.Intent == "explain" {
+			trimmed := strings.ToLower(strings.TrimSpace(thinkQuery))
+			if !strings.HasPrefix(trimmed, "explain") && query != "" {
+				thinkQuery = "explain " + query
+			}
+		}
+		if result := ar.Thinker.Think(thinkQuery, nil); result != nil && result.Text != "" {
+			if !isLowInformationConversational(result.Text) {
+				return &ActionResult{
+					DirectResponse: result.Text,
+					Source:         "thinking:" + result.Frame,
+				}
+			}
+		}
+	}
+
 	// Use Composer for knowledge responses
 	if ar.Composer != nil && ar.Composer.Graph != nil {
 		ctx := ar.BuildComposeContext()
 		respType := ar.ClassifyForComposer(nlu.Raw)
 		resp := ar.Composer.Compose(nlu.Raw, respType, ctx)
 		if resp != nil && resp.Text != "" {
-			return &ActionResult{
-				DirectResponse: resp.Text,
-				Source:         "composer",
+			if (nlu.Intent == "explain" || nlu.Intent == "question" || nlu.Intent == "compare") && isLowInformationConversational(resp.Text) {
+				// keep searching for grounded output paths
+			} else {
+				return &ActionResult{
+					DirectResponse: resp.Text,
+					Source:         "composer",
+				}
 			}
 		}
 	}
@@ -1883,22 +1979,23 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 // handleCompare generates a comparison between two items using knowledge graph data.
 func (ar *ActionRouter) handleCompare(nlu *NLUResult) *ActionResult {
 	raw := strings.ToLower(nlu.Raw)
+	normalized := strings.TrimSpace(raw)
+	for _, prefix := range []string{"compare ", "contrast ", "differences between ", "difference between "} {
+		normalized = strings.TrimPrefix(normalized, prefix)
+	}
 
 	// Extract the two items to compare
 	var itemA, itemB string
 	// Try "X vs Y", "X versus Y", "X or Y", "X and Y" patterns
 	for _, sep := range []string{" vs ", " versus ", " vs. "} {
-		if idx := strings.Index(raw, sep); idx > 0 {
-			itemA = strings.TrimSpace(raw[:idx])
-			itemB = strings.TrimSpace(raw[idx+len(sep):])
+		if idx := strings.Index(normalized, sep); idx > 0 {
+			itemA = strings.TrimSpace(normalized[:idx])
+			itemB = strings.TrimSpace(normalized[idx+len(sep):])
 		}
 	}
 	if itemA == "" {
 		// Try "compare X and Y", "compare X with Y"
-		stripped := raw
-		for _, prefix := range []string{"compare ", "contrast ", "difference between ", "differences between "} {
-			stripped = strings.TrimPrefix(stripped, prefix)
-		}
+		stripped := normalized
 		for _, sep := range []string{" and ", " with ", " to "} {
 			if idx := strings.Index(stripped, sep); idx > 0 {
 				itemA = strings.TrimSpace(stripped[:idx])
@@ -1909,9 +2006,9 @@ func (ar *ActionRouter) handleCompare(nlu *NLUResult) *ActionResult {
 	}
 	// "should I learn X or Y", "which is better X or Y"
 	if itemA == "" {
-		if idx := strings.Index(raw, " or "); idx > 0 {
-			before := raw[:idx]
-			after := strings.TrimSpace(raw[idx+4:])
+		if idx := strings.Index(normalized, " or "); idx > 0 {
+			before := normalized[:idx]
+			after := strings.TrimSpace(normalized[idx+4:])
 			// Extract last word(s) before "or" as item A
 			words := strings.Fields(before)
 			if len(words) > 0 {

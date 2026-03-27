@@ -159,7 +159,10 @@ var thinkTeachSignals = []string{
 	"explain like", "explain as if", "can you explain",
 	"how does", "how do", "walk me through",
 	"show me how", "help me learn", "introduction to",
-	"what is the concept of", "explain ",
+	"what is the concept of", "what is ", "what are ",
+	"tell me about", "tell me everything about", "tell me all about",
+	"give me an overview of", "overview of", "deep dive into",
+	"explain ",
 }
 
 var adviseSignals = []string{
