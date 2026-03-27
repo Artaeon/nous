@@ -264,6 +264,75 @@ func main() {
 		fmt.Println("  loaded GRU text generation model")
 	}
 
+	// Load sentence corpus for Layer 2 retrieval-based generation
+	corpusPath := filepath.Join(packDir, "wiki", "sentence_corpus.json")
+	sc := cognitive.NewSentenceCorpus()
+	if err := sc.Load(corpusPath); err == nil && sc.Size() > 0 {
+		actions.Composer.SentenceCorpus = sc
+		fmt.Printf("  loaded sentence corpus (%d exemplars)\n", sc.Size())
+	}
+
+	// Load discourse corpus for Layer 2b
+	discPath := filepath.Join(packDir, "wiki", "discourse_corpus.json")
+	dc := cognitive.NewDiscourseCorpus()
+	if err := dc.Load(discPath); err == nil && dc.Size() > 0 {
+		actions.Composer.DiscourseCorpus = dc
+		if actions.Creative != nil {
+			actions.Creative.DiscourseCorpus = dc
+		}
+		fmt.Printf("  loaded discourse corpus (%d sentences)\n", dc.Size())
+	}
+
+	// Common sense knowledge layer — everyday associations
+	csGraph := cognitive.NewCommonSenseGraph()
+	actions.CommonSense = csGraph
+	fmt.Printf("  loaded common sense graph (%d associations)\n", len(csGraph.Lookup("dinner"))+len(csGraph.Lookup("bored"))+len(csGraph.Lookup("book")))
+
+	// Conversation learner — improves from every interaction
+	convLearner := cognitive.NewConversationLearner(filepath.Join(nousDir, "conversation_patterns.json"))
+	convLearner.SeedDefaults()
+	if dc != nil && dc.Size() > 0 {
+		convLearner.SeedFromCorpus(dc)
+	}
+	actions.ConvLearner = convLearner
+	fmt.Printf("  loaded conversation learner (%d patterns)\n", convLearner.PatternCount())
+
+	// --- Phase 1-4 Cognitive Improvements ---
+
+	// Subtext Engine — reads between the lines (emotional context, implied needs)
+	subtextEngine := cognitive.NewSubtextEngine(episodic)
+	actions.Subtext = subtextEngine
+
+	// Memory Trigger Engine — involuntary episodic recall
+	memTrigger := cognitive.NewMemoryTriggerEngine(episodic, embedFn)
+	actions.MemTrigger = memTrigger
+
+	// Absorption Engine — learns expression patterns from text
+	absEngine := cognitive.NewAbsorptionEngine(filepath.Join(nousDir, "absorption_patterns.json"))
+	if err := absEngine.Load(); err == nil && len(absEngine.Stats().ByFunction) > 0 {
+		fmt.Printf("  loaded absorption engine (%d patterns)\n", absEngine.Stats().Total)
+	}
+	actions.Absorption = absEngine
+	actions.Composer.Absorption = absEngine
+
+	// Associative Spark Engine — surfaces unexpected knowledge connections
+	sparkEngine := cognitive.NewSparkEngine(actions.CogGraph)
+	actions.Sparks = sparkEngine
+
+	// Inner Council — multiple perspectives deliberate before responding
+	council := cognitive.NewInnerCouncil(actions.CogGraph, episodic)
+	actions.Council = council
+
+	// Opinion Engine — forms and accumulates opinions from evidence
+	opinionEngine := cognitive.NewOpinionEngine(filepath.Join(nousDir, "opinions.json"))
+	if err := opinionEngine.Load(); err == nil {
+		tops := opinionEngine.TopOpinions(3)
+		if len(tops) > 0 {
+			fmt.Printf("  loaded opinion engine (%d opinions formed)\n", len(tops))
+		}
+	}
+	actions.Opinions = opinionEngine
+
 	// Conversational Learning Engine — Nous learns from every interaction
 	learningEngine := cognitive.NewLearningEngine(actions.CogGraph, actions.Composer, nousDir)
 
@@ -705,6 +774,12 @@ func main() {
 		if actions.CogGraph != nil {
 			actions.CogGraph.Save()
 		}
+		if actions.Absorption != nil {
+			actions.Absorption.Save()
+		}
+		if actions.Opinions != nil {
+			actions.Opinions.Save()
+		}
 		if fileWatcher != nil {
 			fileWatcher.Stop()
 		}
@@ -782,6 +857,7 @@ func main() {
 			ResponseCrystals:  responseCrystals,
 		}, reasoner.Conv)
 		srv.SetNLU(nlu)
+		srv.SetActions(actions) // pass the fully-wired action router
 		srv.SetPersonalResp(personalResp)
 		srv.SetComposer(actions.Composer)
 		srv.SetDataSources(wm, ltm, episodic, toolReg, collector, sessionStore)
