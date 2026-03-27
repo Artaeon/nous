@@ -155,6 +155,13 @@ func (s *Server) SetComposer(c *cognitive.Composer) {
 	s.composer = c
 }
 
+// SetActions replaces the server's ActionRouter with a fully wired one.
+// This is the preferred way to set up the server — the caller wires
+// all cognitive engines into the ActionRouter, then passes it here.
+func (s *Server) SetActions(ar *cognitive.ActionRouter) {
+	s.actions = ar
+}
+
 // SetNLU replaces the server's NLU instance (e.g. with one that has a trained neural classifier).
 func (s *Server) SetNLU(nlu *cognitive.NLU) {
 	s.nlu = nlu
