@@ -736,7 +736,7 @@ func TestLLMComparisonMetrics(t *testing.T) {
 	comparisons := 0
 	for i := 0; i < len(responses); i++ {
 		for j := i + 1; j < len(responses); j++ {
-			overlap := wordOverlap(responses[i], responses[j])
+			overlap := testWordOverlap(responses[i], responses[j])
 			avgOverlap += overlap
 			comparisons++
 		}
@@ -944,8 +944,8 @@ func TestLearningEngineDetailed(t *testing.T) {
 // Helpers
 // -----------------------------------------------------------------------
 
-// wordOverlap computes the Jaccard similarity between two texts.
-func wordOverlap(a, b string) float64 {
+// testWordOverlap computes the Jaccard similarity between two texts.
+func testWordOverlap(a, b string) float64 {
 	wordsA := make(map[string]bool)
 	wordsB := make(map[string]bool)
 	for _, w := range strings.Fields(strings.ToLower(a)) {

@@ -66,6 +66,14 @@ type ActionRouter struct {
 	Dialogue       *DialogueManager
 	Transformer    *TextTransformer
 	Creative       *CreativeEngine
+	CommonSense    *CommonSenseGraph
+	ConvLearner    *ConversationLearner
+	Subtext        *SubtextEngine
+	MemTrigger     *MemoryTriggerEngine
+	Absorption     *AbsorptionEngine
+	Sparks         *SparkEngine
+	Council        *InnerCouncil
+	Opinions       *OpinionEngine
 }
 
 // NewActionRouter creates a router with nil subsystems.
@@ -91,12 +99,117 @@ type ChainStep struct {
 // Execute runs the appropriate action for an NLU result.
 // This is PURE CODE — no LLM calls. Returns raw data/facts.
 func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResult {
+	// Conversational context: resolve pronouns and references using the
+	// current conversation topic. "why are THEY dangerous?" → "they" = last topic.
+	// "can anything escape from ONE?" → "one" = last topic.
+	// This is the bridge between single-turn NLU and multi-turn conversation.
+	ar.resolveConversationalReferences(nlu)
+
+	// Emotional intelligence pre-check: personal emotional statements
+	// ("I got promoted!", "I'm feeling down", "I just had a great day!")
+	// should get an empathetic response, not a knowledge lookup.
+	// Enhanced by subtext analysis when available.
+	if ar.Composer != nil && isEmotionalStatement(nlu.Raw) {
+		ctx := ar.BuildComposeContextWithSubtext(nlu.Raw, nlu)
+		resp := ar.Composer.Compose(nlu.Raw, RespEmpathetic, ctx)
+		if resp != nil && resp.Text != "" {
+			return &ActionResult{DirectResponse: resp.Text, Source: "empathy"}
+		}
+	}
+
+	// Subtext-driven response type upgrade: if the subtext engine detects
+	// emotional needs that the NLU missed, respond empathetically.
+	if ar.Subtext != nil && ar.Composer != nil {
+		var history []ConvTurn
+		if ar.Composer != nil {
+			history = ar.Composer.history
+		}
+		analysis := ar.Subtext.Analyze(nlu.Raw, nlu, history)
+		needsEmpathy := false
+		switch analysis.ImpliedNeed {
+		case NeedVenting, NeedReassurance:
+			needsEmpathy = analysis.EmotionalState.Valence < -0.1
+		case NeedCelebration:
+			needsEmpathy = analysis.EmotionalState.Valence > 0.2
+		}
+		if needsEmpathy {
+			ctx := ar.BuildComposeContext()
+			ctx.Subtext = &analysis
+			resp := ar.Composer.Compose(nlu.Raw, RespEmpathetic, ctx)
+			if resp != nil && resp.Text != "" {
+				return &ActionResult{DirectResponse: resp.Text, Source: "subtext_empathy"}
+			}
+		}
+	}
+
 	result := ar.dispatch(nlu, conv)
 
+	// Cognitive enrichment: after generating a response, check for
+	// involuntary memory triggers and associative sparks.
+	if result != nil && result.DirectResponse != "" {
+		topics := extractKeywords(strings.ToLower(nlu.Raw))
+
+		// Memory triggers — surface relevant past episodes
+		if ar.MemTrigger != nil {
+			triggers := ar.MemTrigger.Scan(nlu.Raw, topics)
+			for _, trig := range triggers {
+				note := ar.MemTrigger.FormatTrigger(trig)
+				if note != "" {
+					result.DirectResponse += "\n\n" + note
+				}
+				ar.MemTrigger.RecordSurfaced(trig.Episode.ID)
+			}
+		}
+
+		// Associative sparks — surface unexpected connections
+		if ar.Sparks != nil {
+			ar.Sparks.RecordTopics(topics)
+			sparks := ar.Sparks.Ignite(topics)
+			for _, spark := range sparks {
+				result.DirectResponse += "\n\n" + spark.Explanation
+				ar.Sparks.RecordSurfaced(spark.Source, spark.Target)
+			}
+		}
+	}
+
+	// Opinion learning — extract evaluative language from user input
+	if ar.Opinions != nil {
+		topics := extractKeywords(strings.ToLower(nlu.Raw))
+		ar.Opinions.LearnFromConversation(nlu.Raw, topics)
+	}
+
 	// Advance dialogue state machine (tracks topic, state transitions).
-	// Follow-ups are NOT appended — they were generic and robotic.
 	if ar.Dialogue != nil && result != nil {
 		ar.Dialogue.ProcessTurn(nlu, result)
+	}
+
+	// Record interaction for conversation learning.
+	// The learner generalizes successful patterns so Nous improves over time.
+	if ar.ConvLearner != nil && result != nil && result.DirectResponse != "" {
+		topic := nlu.Entities["topic"]
+		sentiment := "neutral"
+		if ar.Composer != nil {
+			switch ar.Composer.detectSentiment(nlu.Raw) {
+			case SentimentPositive:
+				sentiment = "positive"
+			case SentimentNegative:
+				sentiment = "negative"
+			case SentimentExcited:
+				sentiment = "excited"
+			case SentimentSad:
+				sentiment = "sad"
+			case SentimentAngry:
+				sentiment = "angry"
+			case SentimentCurious:
+				sentiment = "curious"
+			}
+		}
+		// Success is determined later when the user responds.
+		// For now, record the interaction as pending.
+		ar.ConvLearner.LearnFromInteraction(
+			nlu.Raw, result.DirectResponse,
+			nlu.Intent, sentiment, topic, true,
+		)
 	}
 
 	return result
@@ -307,8 +420,47 @@ func (ar *ActionRouter) handleRespond(nlu *NLUResult) *ActionResult {
 		}
 	}
 
-	// Follow-ups: "tell me more", "go on", "continue" — use conversation tracker
-	if nlu.Intent == "follow_up" {
+	// Follow-ups: "tell me more", "why?", "go on", "elaborate"
+	// Uses conversation history to expand on the previous topic.
+	if (nlu.Intent == "followup" || nlu.Intent == "follow_up") && ar.Composer != nil {
+		prevTopic := ar.getPreviousTopic()
+		if prevTopic != "" {
+			// Determine follow-up type from the user's phrasing
+			followUpType := classifyFollowUpType(lower)
+
+			// Try the composer's follow-up method first — it uses the
+			// knowledge graph and discourse corpus for rich responses.
+			resp := ar.Composer.ComposeFollowUp(prevTopic, followUpType)
+			if resp != nil && resp.Text != "" {
+				return &ActionResult{
+					DirectResponse: resp.Text,
+					Source:         "followup:" + strings.Join(resp.Sources, ","),
+				}
+			}
+
+			// Fallback: try the thinking engine for deeper exploration
+			if ar.Thinker != nil {
+				expandedQuery := prevTopic
+				switch followUpType {
+				case "why":
+					expandedQuery = "why " + prevTopic
+				case "example":
+					expandedQuery = "example of " + prevTopic
+				case "deeper":
+					expandedQuery = "explain " + prevTopic + " in depth"
+				}
+				ctx := &ThinkContext{RecentTopics: []string{prevTopic}}
+				result := ar.Thinker.Think(expandedQuery, ctx)
+				if result != nil && result.Text != "" {
+					return &ActionResult{
+						DirectResponse: result.Text,
+						Source:         "followup:thinking:" + result.Frame,
+					}
+				}
+			}
+		}
+
+		// Legacy path: try the conversation tracker's fact store
 		if ar.Tracker != nil {
 			if ar.Tracker.IsContinuation(nlu.Raw) {
 				more := ar.Tracker.ContinueResponse()
@@ -379,7 +531,7 @@ func (ar *ActionRouter) handleRespond(nlu *NLUResult) *ActionResult {
 
 	// Use Composer for ALL respond-type queries — farewells, thanks, conversational
 	if ar.Composer != nil {
-		ctx := ar.BuildComposeContext()
+		ctx := ar.BuildComposeContextWithSubtext(nlu.Raw, nlu)
 		respType := ar.ClassifyForComposer(nlu.Raw)
 
 		// For knowledge queries (factual, explain), check if we have knowledge first.
@@ -393,6 +545,29 @@ func (ar *ActionRouter) handleRespond(nlu *NLUResult) *ActionResult {
 						Source:         "honest_fallback",
 					}
 				}
+			}
+		}
+
+		// Inner Council deliberation for complex queries.
+		// The council provides structured reasoning that enriches the response.
+		if ar.Council != nil {
+			switch respType {
+			case RespOpinion, RespConversational, RespReflect, RespEmpathetic:
+				delib := ar.Council.Deliberate(nlu.Raw, nlu, ctx)
+				if delib != nil {
+					ctx.CouncilResult = delib
+				}
+			}
+		}
+
+		// Check for formed opinions on the topic
+		if ar.Opinions != nil && respType == RespOpinion {
+			topic := nlu.Entities["topic"]
+			if topic == "" {
+				topic = extractMainTopic(nlu.Raw)
+			}
+			if op := ar.Opinions.GetOpinion(topic); op != nil && op.Confidence >= 0.3 {
+				ctx.Opinion = op
 			}
 		}
 
@@ -608,9 +783,11 @@ func isPersonalStatement(lower string) bool {
 // isContinuationRequest detects continuation requests like "tell me more", "go on".
 func isContinuationRequest(lower string) bool {
 	followUps := []string{
-		"tell me more", "go on", "continue", "keep going",
-		"what else", "more about", "dig deeper", "elaborate",
-		"and then", "go ahead", "anything else",
+		"tell me more", "more about that", "go on", "continue",
+		"keep going", "what else", "more about", "dig deeper",
+		"elaborate", "and then", "go ahead", "anything else",
+		"why is that", "how come", "can you explain",
+		"explain that", "what do you mean", "in more detail",
 	}
 	clean := strings.TrimRight(strings.TrimSpace(lower), "!?.")
 	for _, f := range followUps {
@@ -618,7 +795,45 @@ func isContinuationRequest(lower string) bool {
 			return true
 		}
 	}
+	// Short single-word follow-ups
+	shortFollowUps := []string{
+		"why", "how", "really", "interesting", "huh",
+		"and", "so", "meaning", "more", "seriously",
+	}
+	for _, sf := range shortFollowUps {
+		if clean == sf {
+			return true
+		}
+	}
 	return false
+}
+
+// getPreviousTopic returns the topic from the most recent conversation turn.
+// Checks the conversation tracker, then composer history, as fallbacks.
+func (ar *ActionRouter) getPreviousTopic() string {
+	// 1. Conversation tracker — the authoritative source for current topic
+	if ar.Tracker != nil {
+		if topic := ar.Tracker.CurrentTopic(); topic != "" {
+			return topic
+		}
+	}
+
+	// 2. Composer history — last turn's topics
+	if ar.Composer != nil && len(ar.Composer.history) > 0 {
+		last := ar.Composer.history[len(ar.Composer.history)-1]
+		if len(last.Topics) > 0 {
+			return last.Topics[0]
+		}
+		// 3. Fallback: extract topic from the last input
+		if last.Input != "" {
+			keywords := extractKeywords(strings.ToLower(last.Input))
+			if len(keywords) > 0 {
+				return keywords[0]
+			}
+		}
+	}
+
+	return ""
 }
 
 // isCounterfactualQuestion detects "what if" / "without X" questions.
@@ -660,6 +875,33 @@ func isCounterfactualQuestion(input string) (hypothesis string, isRemoval bool) 
 
 // composeHonestFallback generates a clear "I don't know" response
 // instead of a confusing bridge to an unrelated topic.
+// extractMainTopic extracts the primary topic from a query.
+func extractMainTopic(query string) string {
+	lower := strings.ToLower(strings.TrimRight(strings.TrimSpace(query), "?!."))
+	prefixes := []string{
+		"what do you think about ", "what's your opinion on ",
+		"your take on ", "how do you feel about ",
+		"tell me about ", "what is ", "what are ",
+	}
+	for _, p := range prefixes {
+		if strings.HasPrefix(lower, p) {
+			return strings.TrimSpace(lower[len(p):])
+		}
+	}
+	// Fallback: return the longest keyword
+	words := extractKeywords(lower)
+	if len(words) > 0 {
+		best := words[0]
+		for _, w := range words[1:] {
+			if len(w) > len(best) {
+				best = w
+			}
+		}
+		return best
+	}
+	return lower
+}
+
 func composeHonestFallback(query string) string {
 	lower := strings.ToLower(query)
 
@@ -738,6 +980,25 @@ func (ar *ActionRouter) BuildComposeContext() *ComposeContext {
 				}
 			}
 		}
+	}
+
+	ctx.TimeOfDay = time.Now()
+
+	return ctx
+}
+
+// BuildComposeContextWithSubtext builds context enriched with subtext analysis.
+func (ar *ActionRouter) BuildComposeContextWithSubtext(input string, nluResult *NLUResult) *ComposeContext {
+	ctx := ar.BuildComposeContext()
+
+	// Run subtext analysis if available
+	if ar.Subtext != nil {
+		var history []ConvTurn
+		if ar.Composer != nil {
+			history = ar.Composer.history
+		}
+		analysis := ar.Subtext.Analyze(input, nluResult, history)
+		ctx.Subtext = &analysis
 	}
 
 	return ctx
@@ -1368,36 +1629,123 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 		}
 	}
 
-	// Fast path: if we have a clean described_as fact (from Wikipedia),
-	// use it directly — it's already natural language. Supplement with
-	// a few structured facts for depth. Skip very short descriptions
-	// (< 50 chars) — they're usually adjective fragments, not real descriptions.
+	// Fast path: if we have Wikipedia knowledge (lead paragraph + discourse
+	// sentences), compose the response from REAL human-written text.
+	// No templates. Every word from Wikipedia.
 	if ar.CogGraph != nil {
+		// For follow-up questions, use discourse corpus to answer the
+		// specific question type instead of repeating the definition.
+		followUpType := nlu.Entities["_follow_up_type"]
+		if followUpType != "" && ar.Composer != nil && ar.Composer.DiscourseCorpus != nil {
+			var funcs []DiscourseFunc
+			switch followUpType {
+			case "why":
+				funcs = []DiscourseFunc{DFExplainsWhy, DFConsequence}
+			case "how":
+				funcs = []DiscourseFunc{DFDescribes, DFGivesExample}
+			case "example":
+				funcs = []DiscourseFunc{DFGivesExample, DFDescribes}
+			case "quantify":
+				funcs = []DiscourseFunc{DFQuantifies, DFContext}
+			case "consequence":
+				funcs = []DiscourseFunc{DFConsequence, DFExplainsWhy}
+			case "compare":
+				funcs = []DiscourseFunc{DFCompares, DFEvaluates}
+			default: // "elaborate"
+				funcs = []DiscourseFunc{DFEvaluates, DFGivesExample, DFContext, DFQuantifies}
+			}
+			sents := ar.Composer.DiscourseCorpus.RetrieveMulti(query, funcs)
+			if len(sents) > 0 {
+				return &ActionResult{
+					DirectResponse: strings.Join(sents, " "),
+					Source:         "discourse",
+				}
+			}
+		}
+
 		desc := ar.CogGraph.LookupDescription(query)
 		if len(desc) < 40 {
 			desc = "" // too short to be a real description
 		}
-		facts := ar.CogGraph.LookupFacts(query, 5)
-		if desc != "" || len(facts) > 0 {
+
+		// Layer 2b: supplement with discourse-typed sentences from the
+		// topic's own Wikipedia article. These are real sentences tagged
+		// by how they communicate (explains_why, evaluates, gives_example).
+		var supplement string
+		if ar.Composer != nil && ar.Composer.DiscourseCorpus != nil {
+			// Pick discourse functions that complement the lead paragraph.
+			suppFuncs := []DiscourseFunc{DFEvaluates, DFExplainsWhy, DFContext, DFGivesExample, DFQuantifies}
+			suppSents := ar.Composer.DiscourseCorpus.RetrieveMulti(query, suppFuncs)
+			if desc != "" && len(suppSents) > 0 {
+				// Filter sentences already in the description.
+				descLower := strings.ToLower(desc)
+				var filtered []string
+				for _, s := range suppSents {
+					// Skip if >50% of words overlap with description.
+					if !sentenceOverlaps(s, descLower) {
+						filtered = append(filtered, s)
+					}
+				}
+				if len(filtered) > 3 {
+					filtered = filtered[:3]
+				}
+				if len(filtered) > 0 {
+					supplement = strings.Join(filtered, " ")
+				}
+			} else if desc == "" && len(suppSents) > 0 {
+				// No lead paragraph — use discourse sentences as the response.
+				supplement = strings.Join(suppSents, " ")
+			}
+		}
+
+		// Fallback: if discourse corpus didn't provide supplements,
+		// use structured facts from the knowledge graph.
+		if supplement == "" {
+			facts := ar.CogGraph.LookupFacts(query, 4)
+			if len(facts) > 0 {
+				if ar.Composer != nil {
+					facts = ar.Composer.applyPronounVariation(facts, query)
+				}
+				supplement = strings.Join(facts, " ")
+			}
+		}
+
+		if desc != "" || supplement != "" {
 			var response string
 			if desc != "" {
 				response = desc
 			}
-			if len(facts) > 0 {
-				// Apply pronoun variation so facts don't all repeat the subject.
-				if ar.Composer != nil {
-					facts = ar.Composer.applyPronounVariation(facts, query)
-				}
-				factStr := strings.Join(facts, " ")
+			if supplement != "" {
 				if response != "" {
-					response += "\n\n" + factStr
+					response += "\n\n" + supplement
 				} else {
-					response = factStr
+					response = supplement
 				}
+			}
+			// Track this topic for follow-up conversation context.
+			if ar.Tracker != nil && query != "" {
+				ar.Tracker.TrackTopic(query, "knowledge")
 			}
 			return &ActionResult{
 				DirectResponse: response,
 				Source:         "knowledge",
+			}
+		}
+	}
+
+	// Common sense fallback: when wiki knowledge doesn't cover the topic,
+	// try everyday associations. "what should I have for dinner?" → food suggestions.
+	// This runs AFTER wiki lookup so factual topics go through Wikipedia.
+	if ar.CommonSense != nil {
+		resolved := ar.CommonSense.Resolve(nlu.Raw)
+		if resolved != nil && resolved.Topic != "" {
+			suggestions := ar.CommonSense.Suggest(resolved.Topic, resolved.Context)
+			if len(suggestions) > 0 {
+				response := strings.Join(suggestions[:min(len(suggestions), 3)], " ")
+				return &ActionResult{
+					DirectResponse: response,
+					Source:         "commonsense",
+				}
 			}
 		}
 	}
@@ -1556,6 +1904,23 @@ func (ar *ActionRouter) handleCompare(nlu *NLUResult) *ActionResult {
 				itemA = strings.TrimSpace(stripped[:idx])
 				itemB = strings.TrimSpace(stripped[idx+len(sep):])
 				break
+			}
+		}
+	}
+	// "should I learn X or Y", "which is better X or Y"
+	if itemA == "" {
+		if idx := strings.Index(raw, " or "); idx > 0 {
+			before := raw[:idx]
+			after := strings.TrimSpace(raw[idx+4:])
+			// Extract last word(s) before "or" as item A
+			words := strings.Fields(before)
+			if len(words) > 0 {
+				itemA = words[len(words)-1]
+			}
+			// First word(s) after "or" as item B
+			afterWords := strings.Fields(after)
+			if len(afterWords) > 0 {
+				itemB = afterWords[0]
 			}
 		}
 	}
@@ -2150,6 +2515,50 @@ func (ar *ActionRouter) handleLLMChat(nlu *NLUResult, conv *Conversation) *Actio
 		}
 	}
 
+	// On-demand wiki loading: if the topic isn't in the graph yet,
+	// load it before composing. This prevents deflections for topics
+	// that are in the wiki index but haven't been loaded.
+	if !personal && ar.Packages != nil {
+		topic := nlu.Entities["topic"]
+		if topic == "" {
+			topic = nlu.Entities["query"]
+		}
+		if topic == "" {
+			topic = extractTopicFromQuery(nlu.Raw)
+		}
+		if topic != "" {
+			if loaded := ar.Packages.LookupWiki(topic); loaded > 0 {
+				if ar.Composer != nil {
+					ar.Composer.Graph = ar.CogGraph
+				}
+				// Wiki loaded — compose response from description + discourse sentences.
+				desc := ar.CogGraph.LookupDescription(topic)
+				if len(desc) >= 40 {
+					response := desc
+					// Add discourse corpus sentences for depth.
+					if ar.Composer != nil && ar.Composer.DiscourseCorpus != nil {
+						suppFuncs := []DiscourseFunc{DFEvaluates, DFExplainsWhy, DFGivesExample}
+						suppSents := ar.Composer.DiscourseCorpus.RetrieveMulti(topic, suppFuncs)
+						descLower := strings.ToLower(desc)
+						var extra []string
+						for _, s := range suppSents {
+							if !sentenceOverlaps(s, descLower) {
+								extra = append(extra, s)
+							}
+							if len(extra) >= 2 {
+								break
+							}
+						}
+						if len(extra) > 0 {
+							response += "\n\n" + strings.Join(extra, " ")
+						}
+					}
+					return &ActionResult{DirectResponse: response, Source: "knowledge"}
+				}
+			}
+		}
+	}
+
 	// Composer engine — generates natural language from structured knowledge.
 	// Zero-LLM path: graph facts → natural sentences. Always produces a response.
 	if ar.Composer != nil {
@@ -2739,7 +3148,7 @@ func (ar *ActionRouter) handleCreative(nlu *NLUResult) *ActionResult {
 
 	if ar.Creative == nil {
 		return &ActionResult{
-			DirectResponse: "Creative engine is not initialized.",
+			DirectResponse: "I can't generate creative writing right now, but I can help you think through ideas. What are you working on?",
 			Source:         "creative",
 		}
 	}
@@ -2772,4 +3181,271 @@ func (ar *ActionRouter) handleCreative(nlu *NLUResult) *ActionResult {
 		DirectResponse: result,
 		Source:         "creative",
 	}
+}
+
+// resolveConversationalReferences replaces pronouns and vague references
+// in the NLU result with the current conversation topic. This bridges
+// single-turn NLU to multi-turn conversation without any LLM.
+//
+// "what is a black hole?" → topic = "black hole" (stored)
+// "why are they dangerous?" → "they" = "black hole" → topic = "black hole"
+// "can anything escape from one?" → "one" = "black hole" → rewrites query
+func (ar *ActionRouter) resolveConversationalReferences(nlu *NLUResult) {
+	if ar.Tracker == nil {
+		return
+	}
+	currentTopic := ar.Tracker.CurrentTopic()
+	if currentTopic == "" {
+		return
+	}
+
+	lower := strings.ToLower(nlu.Raw)
+
+	// Check if the extracted topic is a pronoun or generic word that
+	// needs resolution to the current conversation topic.
+	topic := nlu.Entities["topic"]
+	if topic == "" {
+		topic = nlu.Entities["query"]
+	}
+	topicLower := strings.ToLower(topic)
+
+	// Pronouns and generic references that should resolve to the current topic.
+	pronouns := map[string]bool{
+		"it": true, "they": true, "them": true, "its": true, "their": true,
+		"this": true, "that": true, "these": true, "those": true,
+		"one": true, "ones": true, "he": true, "she": true,
+	}
+
+	// Generic words that are almost certainly not the intended topic.
+	generic := map[string]bool{
+		"dangerous": true, "important": true, "useful": true, "interesting": true,
+		"good": true, "bad": true, "big": true, "small": true,
+		"black": true, "white": true, "blue": true, "red": true,
+		"hot": true, "cold": true, "fast": true, "slow": true,
+		"work": true, "possible": true, "real": true,
+	}
+
+	needsResolution := false
+
+	// Case 1: extracted topic is a pronoun.
+	if pronouns[topicLower] {
+		needsResolution = true
+	}
+
+	// Case 2: extracted topic is a single generic word.
+	if !needsResolution && generic[topicLower] {
+		needsResolution = true
+	}
+
+	// Case 3: the topic or query CONTAINS a pronoun, and the topic
+	// doesn't map to a real entity. This catches:
+	// - "they dangerous" (topic contains pronoun)
+	// - "can anything escape from one" (query contains "one")
+	if !needsResolution {
+		for pron := range pronouns {
+			// Check in the extracted topic.
+			if strings.Contains(" "+topicLower+" ", " "+pron+" ") {
+				needsResolution = true
+				break
+			}
+			// Check in the raw query.
+			if strings.Contains(" "+lower+" ", " "+pron+" ") {
+				// Only resolve if the topic isn't a known entity.
+				if topic == "" || (ar.Packages != nil && !ar.Packages.HasWikiEntry(topicLower)) {
+					needsResolution = true
+					break
+				}
+			}
+		}
+	}
+
+	// Case 4: no topic extracted at all, but the query is a follow-up.
+	if !needsResolution && (topic == "" || nlu.Intent == "follow_up") {
+		followUpPatterns := []string{
+			"tell me more", "what else", "go on", "continue",
+			"can you explain", "what about", "and what", "how about",
+		}
+		for _, pat := range followUpPatterns {
+			if strings.Contains(lower, pat) {
+				needsResolution = true
+				break
+			}
+		}
+		// Queries starting with "why", "how", "can", "does", "is", "are"
+		// without a real topic are likely follow-ups.
+		if !needsResolution && topic == "" {
+			for _, prefix := range []string{"why ", "how ", "can ", "does ", "do ", "is ", "are ", "would ", "could "} {
+				if strings.HasPrefix(lower, prefix) {
+					needsResolution = true
+					break
+				}
+			}
+		}
+	}
+
+	if needsResolution {
+		nlu.Entities["topic"] = currentTopic
+		nlu.Entities["query"] = currentTopic
+		nlu.Entities["_original_query"] = nlu.Raw
+		nlu.Entities["_resolved_from"] = topicLower
+
+		// Detect what kind of follow-up this is from the original query.
+		// This tells the discourse corpus which TYPE of sentence to retrieve
+		// instead of just repeating the definition.
+		nlu.Entities["_follow_up_type"] = classifyFollowUpType(lower)
+
+		// Rewrite raw query, replacing pronouns with the actual topic.
+		rewritten := lower
+		for pron := range pronouns {
+			rewritten = strings.ReplaceAll(rewritten, " "+pron+" ", " "+currentTopic+" ")
+			if strings.HasPrefix(rewritten, pron+" ") {
+				rewritten = currentTopic + rewritten[len(pron):]
+			}
+		}
+		if rewritten != lower {
+			nlu.Raw = rewritten
+		}
+	}
+}
+
+// classifyFollowUpType determines what kind of information the follow-up
+// question is seeking, so the discourse corpus retrieves the right type
+// of sentence instead of repeating the definition.
+// Returns one of: "why", "how", "example", "compare", "deeper", "more".
+func classifyFollowUpType(query string) string {
+	lower := strings.TrimRight(strings.TrimSpace(strings.ToLower(query)), "?!.")
+
+	// Exact short-form matches first (e.g. bare "why?", "how?")
+	switch lower {
+	case "why", "how come", "how so":
+		return "why"
+	case "how":
+		return "how"
+	case "example", "examples", "like what":
+		return "example"
+	case "explain", "elaborate", "deeper", "dig deeper":
+		return "deeper"
+	}
+
+	if strings.Contains(lower, "why") || strings.Contains(lower, "because") ||
+		strings.Contains(lower, "cause") || strings.Contains(lower, "reason") ||
+		strings.Contains(lower, "how come") || strings.Contains(lower, "how so") {
+		return "why"
+	}
+	if strings.Contains(lower, "explain") || strings.Contains(lower, "elaborate") ||
+		strings.Contains(lower, "in depth") || strings.Contains(lower, "deeper") ||
+		strings.Contains(lower, "in detail") || strings.Contains(lower, "more detail") {
+		return "deeper"
+	}
+	if strings.Contains(lower, "how") || strings.Contains(lower, "work") ||
+		strings.Contains(lower, "process") {
+		return "how"
+	}
+	if strings.Contains(lower, "example") || strings.Contains(lower, "such as") ||
+		strings.Contains(lower, "instance") || strings.Contains(lower, "like what") {
+		return "example"
+	}
+	if strings.Contains(lower, "compare") || strings.Contains(lower, "differ") ||
+		strings.Contains(lower, "versus") || strings.Contains(lower, " vs ") ||
+		strings.Contains(lower, "similar") {
+		return "compare"
+	}
+	if strings.Contains(lower, "big") || strings.Contains(lower, "many") ||
+		strings.Contains(lower, "much") || strings.Contains(lower, "size") ||
+		strings.Contains(lower, "number") || strings.Contains(lower, "long") {
+		return "quantify"
+	}
+	if strings.Contains(lower, "danger") || strings.Contains(lower, "risk") ||
+		strings.Contains(lower, "effect") || strings.Contains(lower, "impact") {
+		return "consequence"
+	}
+	return "more"
+}
+
+// sentenceOverlaps checks if a sentence largely overlaps with existing text.
+// Used to avoid repeating content from the lead paragraph in supplementary sentences.
+func sentenceOverlaps(sentence, existingLower string) bool {
+	words := strings.Fields(strings.ToLower(sentence))
+	if len(words) < 4 {
+		return false
+	}
+	// Check if any 4-word phrase from the sentence appears in existing text.
+	for i := 0; i+3 < len(words); i++ {
+		phrase := words[i] + " " + words[i+1] + " " + words[i+2] + " " + words[i+3]
+		if strings.Contains(existingLower, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+// isEmotionalStatement detects personal emotional statements that need
+// empathy, not knowledge lookup. E.g., "I got promoted!", "I'm feeling sad",
+// "I just had a terrible day", "my dog passed away".
+func isEmotionalStatement(input string) bool {
+	lower := strings.ToLower(strings.TrimSpace(input))
+	// Must start with a personal pronoun or possessive.
+	personalStarts := []string{
+		"i ", "i'm ", "i've ", "i just ", "i got ", "i had ",
+		"i feel ", "i can't ", "i don't ", "i couldn't ", "i wasn't ",
+		"i am ", "i was ", "i think i ",
+		"my ", "we ", "we're ", "we've ",
+	}
+	isPersonal := false
+	for _, p := range personalStarts {
+		if strings.HasPrefix(lower, p) {
+			isPersonal = true
+			break
+		}
+	}
+	if !isPersonal {
+		return false
+	}
+	// Must contain an emotional signal (not a question or command).
+	if strings.HasSuffix(lower, "?") {
+		return false
+	}
+	emotionalWords := []string{
+		"promoted", "fired", "hired", "quit", "resigned",
+		"married", "engaged", "divorced", "pregnant", "baby",
+		"died", "passed away", "lost", "sick", "ill", "diagnosed",
+		"stressed", "anxious", "depressed", "lonely", "sad", "happy",
+		"excited", "proud", "grateful", "thankful", "frustrated",
+		"angry", "upset", "worried", "scared", "afraid",
+		"love", "hate", "miss", "broke up", "break up",
+		"graduated", "accepted", "rejected", "failed", "passed",
+		"won", "lost", "finished", "completed", "achieved",
+		"great day", "bad day", "terrible day", "amazing day", "best day", "worst day",
+		"stuck", "struggling", "overwhelmed", "burned out", "burnt out",
+		"give up", "giving up", "can't figure", "cannot figure",
+		"can't take", "cannot take", "so tired", "exhausted",
+	}
+	for _, w := range emotionalWords {
+		if strings.Contains(lower, w) {
+			return true
+		}
+	}
+	// Exclamation mark with personal pronoun = emotional.
+	if strings.HasSuffix(strings.TrimSpace(input), "!") {
+		return true
+	}
+	return false
+}
+
+// extractFactObjects extracts the object portion of natural language facts.
+// E.g., "Einstein is a theoretical physicist." → ["theoretical physicist"]
+func extractFactObjects(fact string) []string {
+	var objects []string
+	// Common fact patterns: "X is a Y", "X has Y", "X is located in Y"
+	patterns := []string{" is a ", " is an ", " is ", " has ", " are ", " was ", " were ",
+		" is located in ", " is part of ", " was created by ", " was founded by "}
+	for _, p := range patterns {
+		if idx := strings.Index(fact, p); idx >= 0 {
+			obj := strings.TrimRight(fact[idx+len(p):], ".!? ")
+			if obj != "" {
+				objects = append(objects, obj)
+			}
+		}
+	}
+	return objects
 }

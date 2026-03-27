@@ -49,7 +49,11 @@ const (
 	RelPrefers     RelType = "prefers"      // user prefers X
 	RelDislikes    RelType = "dislikes"     // user dislikes X
 	RelDomain      RelType = "domain"       // X belongs to domain Y
-	RelDescribedAs RelType = "described_as" // X is described as Y
+	RelDescribedAs  RelType = "described_as"  // X is described as Y
+	RelKnownFor     RelType = "known_for"     // X is known for Y
+	RelInfluencedBy RelType = "influenced_by" // X was influenced by Y
+	RelDerivedFrom  RelType = "derived_from"  // X is derived from Y
+	RelOppositeOf   RelType = "opposite_of"   // X is the opposite of Y
 )
 
 // transitiveRels are relation types where A→B→C implies A→C.
@@ -210,8 +214,17 @@ func (cg *CognitiveGraph) LookupDescription(topic string) string {
 	lower := strings.ToLower(strings.TrimSpace(topic))
 	best := ""
 
-	// Try exact match first, then partial match (e.g., "einstein" → "albert einstein")
+	// Try exact match first — this is the main article's description.
 	ids := cg.byLabel[lower]
+	// Try number-normalized forms: "world war 2" → "world war ii"
+	if len(ids) == 0 {
+		for _, norm := range normalizeNumbers(lower) {
+			if nids := cg.byLabel[norm]; len(nids) > 0 {
+				ids = nids
+				break
+			}
+		}
+	}
 	if len(ids) == 0 && len(lower) >= 4 {
 		ids = cg.partialLabelMatch(lower)
 	}
@@ -221,18 +234,42 @@ func (cg *CognitiveGraph) LookupDescription(topic string) string {
 			if edge.Relation == RelDescribedAs {
 				if target, ok := cg.nodes[edge.To]; ok {
 					desc := target.Label
-					// Skip fragment descriptions (e.g., "from the atmosphere")
 					if isFragmentObject(desc) {
 						continue
 					}
-					// Prefer longer descriptions (Wikipedia paragraphs > short adjective phrases).
-					// A real description should be a sentence (50+ chars, contains a verb or period).
 					isReal := len(desc) >= 50
 					bestIsReal := len(best) >= 50
 					if isReal && (!bestIsReal || len(desc) > len(best)) {
 						best = desc
 					} else if !bestIsReal && len(desc) > len(best) {
-						best = desc // both short, keep the longer one
+						best = desc
+					}
+				}
+			}
+		}
+	}
+
+	// If no good description from the main article, check disambiguation page.
+	// Disambiguation pages sometimes have a lead sentence naming the primary
+	// referent (e.g., "Gandhi" → "Mahatma Gandhi was the leader...").
+	// But skip if it's just a list of disambiguations (contains ", a" patterns
+	// like "Linux, an asteroid. Linux, a washing powder.").
+	if best == "" {
+		disambID := nodeID(lower + " (disambiguation)")
+		if _, ok := cg.nodes[disambID]; ok {
+			for _, edge := range cg.outEdges[disambID] {
+				if edge.Relation == RelDescribedAs {
+					if target, ok := cg.nodes[edge.To]; ok {
+						desc := target.Label
+						if len(desc) >= 40 && !isFragmentObject(desc) {
+							// Skip disambiguation lists — they contain multiple
+							// ", a " or ", an " patterns listing alternatives.
+							commaCount := strings.Count(desc, ", a ") + strings.Count(desc, ", an ")
+							if commaCount >= 2 {
+								continue // disambiguation list, not a definition
+							}
+							best = desc
+						}
 					}
 				}
 			}
@@ -328,10 +365,12 @@ func (cg *CognitiveGraph) LookupFacts(topic string, maxFacts int) []string {
 	defer cg.mu.RUnlock()
 
 	lower := strings.ToLower(strings.TrimSpace(topic))
+
+	// Exact match only — don't use partial matching here.
+	// Partial matches pull in facts from DIFFERENT entities (e.g., "gandhi"
+	// matching "Gandhi (rock band)" alongside "Mahatma Gandhi"), which
+	// pollutes the response with unrelated content.
 	ids := cg.byLabel[lower]
-	if len(ids) == 0 && len(lower) >= 4 {
-		ids = cg.partialLabelMatch(lower)
-	}
 	if len(ids) == 0 {
 		return nil
 	}
