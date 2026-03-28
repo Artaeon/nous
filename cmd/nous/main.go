@@ -353,6 +353,33 @@ func main() {
 		actions.CorpusNLG = corpusNLG
 	}
 
+	// Fact extraction — 5x the knowledge graph from raw text
+	factExtractor := cognitive.NewWikiFactExtractor()
+	knowledgePath := filepath.Join(workDir, "knowledge")
+	if extractedFacts, err := factExtractor.ExtractFromDirectory(knowledgePath); err == nil && len(extractedFacts) > 0 {
+		added := factExtractor.IngestIntoGraph(actions.CogGraph, extractedFacts)
+		if added > 0 {
+			fmt.Fprintf(os.Stderr, "  extracted %d facts from knowledge text (%d new)\n", len(extractedFacts), added)
+		}
+	}
+	actions.FactExtract = factExtractor
+
+	// Fluency scorer — bigram-based sentence quality scoring
+	fluencyScorer := cognitive.NewFluencyScorer()
+	fluencyScorer.LoadCorpus(knowledgePath)
+	actions.Fluency = fluencyScorer
+
+	// Dialogue policy — learns which strategies work best
+	actions.Policy = cognitive.NewDialoguePolicy()
+
+	// Context window — prevents repetition across turns
+	actions.CtxWindow = cognitive.NewContextWindow(5)
+
+	// Self-teach — mines knowledge files at query time for unknown topics
+	if actions.CogGraph != nil {
+		actions.SelfTeacher = cognitive.NewSelfTeach(knowledgePath, actions.CogGraph)
+	}
+
 	// Innovation systems
 	actions.Socratic = cognitive.NewSocraticEngine()
 	actions.Crystallizer = cognitive.NewInsightCrystallizer()
