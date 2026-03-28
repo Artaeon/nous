@@ -26,6 +26,7 @@ type EnforcedPlan struct {
 	Recap       string   // closing synthesis
 	Complete    bool     // all required parts present
 	Missing     []string // which required parts are missing
+	NoFacts     bool     // true when no facts were available — caller should use Socratic or synthesis
 }
 
 // EnforcedClaim extends PlanClaim with evidence tracking.
@@ -128,6 +129,14 @@ func EnforceContentPlan(plan *ContentPlan, template *PlanTemplate, topic string)
 		ep.Thesis = plan.Thesis
 	} else if topic != "" {
 		ep.Thesis = capitalizeFirst(topic) + "."
+	}
+
+	// When there are no facts at all, signal to the caller that Socratic
+	// or synthesis should be used instead of padding with filler claims.
+	if len(plan.Claims) == 0 {
+		ep.NoFacts = true
+		// Don't pad with filler — let the caller decide what to do
+		return ep
 	}
 
 	// Build enforced claims with evidence tracking
@@ -329,16 +338,18 @@ func formatEvidence(ev edgeFact) string {
 	}
 }
 
-// generateFillerClaim produces a minimal placeholder claim when the plan is
-// thin. Each pattern references the topic directly without generic filler.
+// generateFillerClaim produces an honest gap-acknowledging claim when the
+// plan is thin. Instead of pretending to know things ("has several distinctive
+// properties"), these patterns acknowledge limited knowledge and invite the
+// user to help narrow the question.
 func generateFillerClaim(topic string, index int) string {
 	t := capitalizeFirst(topic)
 	patterns := []string{
-		t + " has several distinctive properties.",
-		t + " serves a specific role in its domain.",
-		t + " has practical applications.",
-		t + " has a notable history.",
-		t + " connects to related fields.",
+		t + " is a topic I can explore further if you point me to a source.",
+		"More information about " + strings.ToLower(topic) + " would help me give a better answer.",
+		"My knowledge of " + strings.ToLower(topic) + " is limited — what specific aspect interests you?",
+		"I would need more context about " + strings.ToLower(topic) + " to say something substantive.",
+		"There may be important details about " + strings.ToLower(topic) + " that I am not aware of.",
 	}
 	idx := index % len(patterns)
 	return patterns[idx]
