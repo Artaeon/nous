@@ -498,6 +498,16 @@ func extractTopic(query string, state *ConversationState) string {
 		if strings.HasPrefix(lower, p) {
 			topic := strings.TrimSpace(query[len(p):])
 			topic = strings.TrimRight(topic, "?.!")
+			// Strip trailing instruction phrases from topic
+			for _, suffix := range []string{
+				". help me decide", ". help me think", ". ask me",
+				". what should i do", ". give me advice",
+				". help me", ". please help",
+			} {
+				if idx := strings.Index(strings.ToLower(topic), suffix); idx > 0 {
+					topic = strings.TrimSpace(topic[:idx])
+				}
+			}
 			if topic != "" {
 				return topic
 			}
@@ -537,6 +547,16 @@ func extractSocraticEntity(query string, state *ConversationState) string {
 		if strings.HasPrefix(lower, p) {
 			entity := strings.TrimSpace(query[len(p):])
 			entity = strings.TrimRight(entity, "?.!")
+			// Strip trailing instruction phrases from entity
+			for _, suffix := range []string{
+				". help me decide", ". help me think", ". ask me",
+				". what should i do", ". give me advice",
+				". help me", ". please help",
+			} {
+				if idx := strings.Index(strings.ToLower(entity), suffix); idx > 0 {
+					entity = strings.TrimSpace(entity[:idx])
+				}
+			}
 			if entity != "" {
 				return entity
 			}
@@ -546,6 +566,16 @@ func extractSocraticEntity(query string, state *ConversationState) string {
 	// Priority 2: extract the main topic using the global topic extractor
 	topic := extractMainTopic(query)
 	if topic != "" && len(topic) < 80 {
+		// Strip trailing instruction phrases from topic
+		for _, suffix := range []string{
+			". help me decide", ". help me think", ". ask me",
+			". what should i do", ". give me advice",
+			". help me", ". please help",
+		} {
+			if idx := strings.Index(strings.ToLower(topic), suffix); idx > 0 {
+				topic = strings.TrimSpace(topic[:idx])
+			}
+		}
 		return topic
 	}
 

@@ -261,6 +261,28 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 
 	result := ar.dispatch(nlu, conv)
 
+	// Detect implicit follow-ups: questions containing pronouns that reference previous turns.
+	// Many follow-ups are classified as "question" by the NLU (e.g., "how does that relate to
+	// genetics") and never reach the FollowUpResolver. Catch them here after dispatch when
+	// the result is thin.
+	if (result == nil || result.DirectResponse == "" || isLowInformationConversational(result.DirectResponse)) &&
+		ar.FollowUp != nil && ar.ConvState != nil && looksLikeImplicitFollowUp(nlu.Raw) {
+		resolved := ar.FollowUp.Resolve(nlu.Raw, ar.ConvState)
+		if resolved != nil && resolved.IsFollowUp && resolved.ResolvedQuery != "" {
+			resolvedNLU := &NLUResult{
+				Raw:      resolved.ResolvedQuery,
+				Intent:   "explain",
+				Action:   "lookup_knowledge",
+				Entities: map[string]string{"topic": resolved.ResolvedQuery},
+			}
+			if lookupResult := ar.handleLookupKnowledge(resolvedNLU); lookupResult != nil && lookupResult.DirectResponse != "" {
+				if !isLowInformationConversational(lookupResult.DirectResponse) {
+					result = lookupResult
+				}
+			}
+		}
+	}
+
 	// When knowledge is empty and we'd produce filler, try Socratic instead.
 	// This is the "I know that I know nothing" fallback — ask questions
 	// rather than generating generic filler text.
@@ -350,7 +372,7 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 			if topic == "" {
 				topic = nlu.Entities["topic"]
 			}
-			if insight := ar.Crystallizer.SurfaceRelevant(topic); insight != nil {
+			if insight := ar.Crystallizer.SurfaceRelevant(topic); insight != nil && insight.Confidence >= 0.5 {
 				result.DirectResponse += "\n\n---\n" + insight.Text
 			}
 		}
@@ -1060,6 +1082,28 @@ func isLowInformationConversational(text string) bool {
 	return false
 }
 
+// looksLikeImplicitFollowUp returns true if the query contains pronouns or
+// phrases that reference previous conversational context, suggesting it is a
+// follow-up even though the NLU classified it as a standalone question.
+func looksLikeImplicitFollowUp(query string) bool {
+	lower := strings.ToLower(query)
+	// Contains pronouns that reference previous context
+	pronouns := []string{" that ", " this ", " it ", " its ", " his ", " her ", " their ", " those ", " these "}
+	for _, p := range pronouns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	// Starts with relationship phrases
+	relPhrases := []string{"how does that", "how does this", "how does it", "what about", "and what about", "how is that", "why is that", "is that related"}
+	for _, r := range relPhrases {
+		if strings.HasPrefix(lower, r) {
+			return true
+		}
+	}
+	return false
+}
+
 // isExplicitTaskPrompt returns true for queries that explicitly request a
 // structured task (explain, compare, overview, summarize, walk-me-through).
 // These prompts must NEVER be intercepted by emotional/conversational
@@ -1325,6 +1369,7 @@ func extractMainTopic(query string) string {
 		"why is ", "why are ", "why does ",
 		"compare ", "summarize ", "summarise ",
 		"i want to learn about ", "i want to know about ",
+		"i want to learn ", "i want to study ",
 		"help me decide about ", "help me with ",
 	}
 	for _, p := range prefixes {
@@ -1393,7 +1438,17 @@ func (ar *ActionRouter) gatherFactsForNLG(topic string) []edgeFact {
 			if !ok {
 				continue
 			}
-			key := string(edge.Relation) + ":" + target.Label
+			obj := target.Label
+			// Quality filter: skip facts with fragment objects
+			if len(obj) < 3 || strings.HasSuffix(strings.ToLower(obj), " by") ||
+				strings.HasSuffix(strings.ToLower(obj), " in") ||
+				strings.HasSuffix(strings.ToLower(obj), " at") ||
+				strings.HasSuffix(strings.ToLower(obj), " and") ||
+				strings.Contains(obj, ". ") {
+				continue
+			}
+
+			key := string(edge.Relation) + ":" + obj
 			if seen[key] {
 				continue
 			}

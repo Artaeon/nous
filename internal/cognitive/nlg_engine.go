@@ -1,6 +1,8 @@
 package cognitive
 
 import (
+	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -339,6 +341,9 @@ func (e *NLGEngine) fuseOrigin(subject string, facts []edgeFact) string {
 
 	for _, f := range facts {
 		obj := strings.TrimSpace(f.Object)
+		if obj == "" {
+			continue
+		}
 		switch f.Relation {
 		case RelCreatedBy:
 			creators = append(creators, obj)
@@ -349,20 +354,26 @@ func (e *NLGEngine) fuseOrigin(subject string, facts []edgeFact) string {
 		}
 	}
 
+	// Deduplicate agents — same person can appear in both creator and founder.
+	agents := deduplicateStrings(append(creators, founders...))
+
+	// Pick the earliest date when multiple are present.
+	earliestDate := pickEarliestYear(dates)
+
 	var b strings.Builder
 
-	// Build the participial origin clause
-	hasAgent := len(creators) > 0 || len(founders) > 0
-	hasDate := len(dates) > 0
+	hasAgent := len(agents) > 0
+	hasDate := earliestDate != ""
 
 	if hasAgent || hasDate {
-		// Choose verb: "created by" vs "founded by"
-		if len(creators) > 0 {
-			b.WriteString("Created by ")
-			b.WriteString(joinCoordinated(creators))
-		} else if len(founders) > 0 {
-			b.WriteString("Founded by ")
-			b.WriteString(joinCoordinated(founders))
+		// Choose verb based on which relation types were present.
+		if hasAgent {
+			if len(creators) > 0 {
+				b.WriteString("Created by ")
+			} else {
+				b.WriteString("Founded by ")
+			}
+			b.WriteString(joinCoordinated(agents))
 		}
 
 		if hasDate {
@@ -371,7 +382,7 @@ func (e *NLGEngine) fuseOrigin(subject string, facts []edgeFact) string {
 			} else {
 				b.WriteString("Established in ")
 			}
-			b.WriteString(joinCoordinated(dates))
+			b.WriteString(earliestDate)
 		}
 
 		// Close with a continuation that references the actual origin.
@@ -380,13 +391,49 @@ func (e *NLGEngine) fuseOrigin(subject string, facts []edgeFact) string {
 		if hasDate && hasAgent {
 			b.WriteString(" has continued to develop since then.")
 		} else if hasDate {
-			b.WriteString(" has continued to develop since " + dates[0] + ".")
+			b.WriteString(" has continued to develop since " + earliestDate + ".")
 		} else {
 			b.WriteString(" continues to build on that foundation.")
 		}
 	}
 
 	return b.String()
+}
+
+// pickEarliestYear returns the smallest 4-digit year from a set of date strings.
+// Returns "" if no valid year is found.
+func pickEarliestYear(dates []string) string {
+	best := ""
+	bestVal := 9999
+	for _, d := range dates {
+		d = strings.TrimSpace(d)
+		if d == "" {
+			continue
+		}
+		if v, err := strconv.Atoi(d); err == nil && v > 0 && v < bestVal {
+			bestVal = v
+			best = d
+		} else if best == "" {
+			best = d // non-numeric date: keep as fallback
+		}
+	}
+	return best
+}
+
+// deduplicateStrings returns unique strings preserving first-occurrence order.
+func deduplicateStrings(ss []string) []string {
+	seen := make(map[string]bool, len(ss))
+	out := make([]string, 0, len(ss))
+	for _, s := range ss {
+		low := strings.ToLower(s)
+		if seen[low] || s == "" {
+			continue
+		}
+		seen[low] = true
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // fuseProperties aggregates Has and Offers facts into a list sentence.

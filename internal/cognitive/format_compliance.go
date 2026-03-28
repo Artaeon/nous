@@ -609,9 +609,11 @@ func ExtractNounPhrase(query string) string {
 	}
 
 	// Verbs/trailing words that terminate collection.
+	// Note: "work/works" and "function/functions" omitted — too commonly nouns
+	// ("remote work", "cognitive function").
 	verbs := map[string]bool{
-		"work": true, "works": true, "happen": true, "happens": true,
-		"function": true, "functions": true, "operate": true, "operates": true,
+		"happen": true, "happens": true,
+		"operate": true, "operates": true,
 		"mean": true, "means": true, "affect": true, "affects": true,
 		"cause": true, "causes": true, "change": true, "changes": true,
 	}
@@ -673,9 +675,13 @@ func ExtractNounPhrase(query string) string {
 			break
 		}
 
-		// "of" links noun phrases: "benefits of meditation".
-		if lower == "of" && seenNoun && i+1 < len(tokens) {
-			phrase = append(phrase, "of")
+		// Special: "X of Y" — the real topic is usually Y.
+		// "pros and cons of remote work" → "remote work"
+		// "benefits of meditation" → "meditation"
+		if lower == "of" && i+1 < len(tokens) {
+			// Restart noun phrase collection from after "of"
+			phrase = nil
+			seenNoun = false
 			i++
 			continue
 		}

@@ -405,15 +405,28 @@ func cleanObject(s string) string {
 	// Strip trailing punctuation and whitespace.
 	s = strings.TrimRight(s, " .,;:!?")
 
+	// Collapse internal whitespace early so suffix matching works reliably.
+	s = strings.Join(strings.Fields(s), " ")
+
 	// Strip trailing preposition phrases that indicate incomplete extraction.
-	for _, suffix := range []string{" by which", " through which", " whereby", " in which", " for which", " by", " through", " from", " with", " and a", " and the", " or a", " or the"} {
-		if strings.HasSuffix(strings.ToLower(s), suffix) {
-			s = s[:len(s)-len(suffix)]
+	// Run in a loop — multiple trailing prepositions can stack.
+	changed := true
+	for changed {
+		changed = false
+		low := strings.ToLower(s)
+		for _, suffix := range []string{
+			" by which", " through which", " whereby", " in which", " for which",
+			" by", " through", " from", " with", " and a", " and the", " or a", " or the",
+			" in", " on", " at", " for", " to", " as", " that", " which", " where", " when",
+		} {
+			if strings.HasSuffix(low, suffix) {
+				s = s[:len(s)-len(suffix)]
+				s = strings.TrimRight(s, " .,;:!?")
+				changed = true
+				break // restart the loop with the shortened string
+			}
 		}
 	}
-
-	// Collapse internal whitespace.
-	s = strings.Join(strings.Fields(s), " ")
 
 	// Cap length — objects longer than 120 chars are likely full sentences.
 	if len(s) > 120 {
@@ -422,14 +435,19 @@ func cleanObject(s string) string {
 		} else {
 			// Truncate at word boundary to avoid cutting mid-word.
 			cut := 120
-			for cut > 0 && s[cut] != ' ' {
+			for cut > 0 && s[cut-1] != ' ' {
 				cut--
 			}
 			if cut > 20 { // don't over-truncate
-				s = s[:cut]
+				s = strings.TrimSpace(s[:cut])
 			}
 		}
 		s = strings.TrimRight(s, " ,")
+	}
+
+	// Strip objects that are too short to be meaningful after all cleaning.
+	if len(s) < 3 {
+		return ""
 	}
 
 	return s
@@ -448,11 +466,11 @@ func cleanSubject(s string) string {
 		} else {
 			// Truncate at word boundary to avoid cutting mid-word.
 			cut := 80
-			for cut > 0 && s[cut] != ' ' {
+			for cut > 0 && s[cut-1] != ' ' {
 				cut--
 			}
 			if cut > 20 { // don't over-truncate
-				s = s[:cut]
+				s = strings.TrimSpace(s[:cut])
 			}
 		}
 		s = strings.TrimRight(s, " ,")
@@ -913,6 +931,11 @@ func (fe *WikiFactExtractor) IngestIntoGraph(graph *CognitiveGraph, facts []Extr
 	seen := make(map[string]bool)
 
 	for _, f := range facts {
+		// Quality filter: reject bad facts before ingestion
+		if !isQualityFact(f) {
+			continue
+		}
+
 		key := dedupeKey(f.Subject, f.Relation, f.Object)
 		if seen[key] {
 			continue
@@ -948,4 +971,62 @@ func (fe *WikiFactExtractor) IngestIntoGraph(graph *CognitiveGraph, facts []Extr
 	}
 
 	return added
+}
+
+// isQualityFact rejects extracted facts that would produce garbled NLG output.
+func isQualityFact(f ExtractedFact) bool {
+	obj := strings.TrimSpace(f.Object)
+	subj := strings.TrimSpace(f.Subject)
+
+	// Reject empty or very short
+	if len(obj) < 3 || len(subj) < 2 {
+		return false
+	}
+
+	// Reject objects that are clearly fragments
+	lower := strings.ToLower(obj)
+
+	// Starts with a preposition or conjunction — fragment
+	badStarts := []string{"and ", "or ", "the ", "a ", "an ", "in ", "on ", "at ", "to ", "for ", "with ", "from ", "by ", "as "}
+	for _, bs := range badStarts {
+		if strings.HasPrefix(lower, bs) && len(obj) < 30 {
+			return false
+		}
+	}
+
+	// Ends with a preposition — incomplete clause
+	badEnds := []string{" by", " in", " on", " at", " to", " for", " with", " from", " as", " and", " or", " the", " a"}
+	for _, be := range badEnds {
+		if strings.HasSuffix(lower, be) {
+			return false
+		}
+	}
+
+	// Contains sentence-breaking markers in the middle — extraction went too far
+	if strings.Contains(obj, ". ") && f.Relation != RelDescribedAs {
+		return false
+	}
+
+	// Object is too long for non-description relations (likely captured a whole clause)
+	if f.Relation != RelDescribedAs && len(obj) > 100 {
+		return false
+	}
+
+	// Subject contains verbs or is a sentence fragment
+	subjLower := strings.ToLower(subj)
+	if strings.Contains(subjLower, " produces ") || strings.Contains(subjLower, " creates ") ||
+		strings.Contains(subjLower, " makes ") || strings.Contains(subjLower, " leads ") {
+		return false
+	}
+
+	// Object is just a common word that's not informative
+	trivial := map[string]bool{
+		"outcomes": true, "accuracy": true, "vector machines": true,
+		"trial and error": true, "tightly": true,
+	}
+	if trivial[lower] {
+		return false
+	}
+
+	return true
 }
