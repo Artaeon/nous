@@ -136,6 +136,15 @@ func NewSocraticEngine() *SocraticEngine {
 			"help me understand my",
 			"i need guidance on",
 			"how should i think about",
+			"i feel stuck",
+			"feeling stuck",
+			"stuck in my",
+			"dont know what direction",
+			"don't know what direction",
+			"dont know where to start",
+			"don't know where to start",
+			"need direction",
+			"lost in my career",
 		},
 		exploreSignals: []string{
 			"i'm curious about",
@@ -513,16 +522,49 @@ func extractTopic(query string, state *ConversationState) string {
 
 // extractSocraticEntity gets the most relevant entity from state or query.
 func extractSocraticEntity(query string, state *ConversationState) string {
+	// Priority 1: extract from the current query
+	lower := strings.ToLower(strings.TrimSpace(query))
+	// Strip common prefixes to find the core entity
+	for _, p := range []string{
+		"help me decide about ", "help me decide between ",
+		"should i ", "i'm torn between ", "im torn between ",
+		"i am torn between ", "help me think about ",
+		"i want to ", "i feel stuck in ", "i feel stuck on ",
+		"i'm struggling with ", "im struggling with ",
+		"i need help with ", "help me with ",
+		"i dont know what to do about ", "i don't know what to do about ",
+	} {
+		if strings.HasPrefix(lower, p) {
+			entity := strings.TrimSpace(query[len(p):])
+			entity = strings.TrimRight(entity, "?.!")
+			if entity != "" {
+				return entity
+			}
+		}
+	}
+
+	// Priority 2: extract the main topic using the global topic extractor
+	topic := extractMainTopic(query)
+	if topic != "" && len(topic) < 80 {
+		return topic
+	}
+
+	// Priority 3: use the query itself (shortened)
+	cleaned := strings.TrimRight(strings.TrimSpace(query), "?.!")
+	if len(cleaned) > 60 {
+		cleaned = cleaned[:60]
+	}
+	if cleaned != "" {
+		return cleaned
+	}
+
+	// Priority 3: fall back to state
 	if state != nil && len(state.MentionedEntities) > 0 {
-		// Return the first entity we find (prefer "topic" key)
 		if v, ok := state.MentionedEntities["topic"]; ok {
 			return v
 		}
-		for _, v := range state.MentionedEntities {
-			return v
-		}
 	}
-	return extractTopic(query, state)
+	return "this"
 }
 
 // ---------------------------------------------------------------------------
