@@ -88,6 +88,13 @@ type ActionRouter struct {
 	CorpusNLG      *CorpusNLG
 	Format         *FormatCompliance
 
+	// Fact extraction + fluency + policy + context
+	FactExtract    *WikiFactExtractor
+	Fluency        *FluencyScorer
+	Policy         *DialoguePolicy
+	CtxWindow      *ContextWindow
+	SelfTeacher    *SelfTeach
+
 	// Innovation systems
 	Socratic       *SocraticEngine
 	Crystallizer   *InsightCrystallizer
@@ -331,6 +338,20 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 			quality = 0.7 // grounded response from knowledge
 		}
 		ar.SelfModel.RecordOutcome(domain, nlu.Raw, quality, true, result.Source)
+	}
+
+	// Context window — record turn for repetition avoidance across turns.
+	if ar.CtxWindow != nil && result != nil && result.DirectResponse != "" {
+		topics := []string{}
+		if t := nlu.Entities["topic"]; t != "" {
+			topics = append(topics, t)
+		}
+		ar.CtxWindow.Record(nlu.Raw, result.DirectResponse, topics)
+		// Remove sentences that were in previous responses.
+		cleaned := ar.CtxWindow.AvoidRepetition(result.DirectResponse)
+		if cleaned != "" {
+			result.DirectResponse = cleaned
+		}
 	}
 
 	// Update user preference model from behavioral signals.
@@ -2101,10 +2122,8 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 	// Extract the core noun phrase for graph matching.
 	// "how photosynthesis works" → "photosynthesis"
 	// "give me an overview of operating systems" → "operating systems"
-	if ar.Format != nil {
-		if np := ExtractNounPhrase(query); np != "" {
-			query = np
-		}
+	if np := ExtractNounPhrase(query); np != "" {
+		query = np
 	} else {
 		query = cleanTopicForLookup(query)
 	}
@@ -2307,6 +2326,30 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 	}
 
 	// Fallback: individual engines (when pipeline not wired)
+
+	// Self-teach: mine knowledge files for facts about the topic on the fly.
+	// This adds facts to the graph for the current session.
+	if ar.SelfTeacher != nil && !ar.SelfTeacher.HasLearned(query) {
+		learned, _ := ar.SelfTeacher.LearnAbout(query)
+		if learned > 0 {
+			// Retry NLG with newly learned facts
+			facts := ar.gatherFactsForNLG(query)
+			if len(facts) >= 2 && ar.NLG != nil {
+				prose := ar.NLG.RealizeExplanation(query, facts)
+				if prose != "" && len(strings.Fields(prose)) >= 10 {
+					if ar.Format != nil {
+						if req := ar.Format.DetectFormat(nlu.Raw); req != nil {
+							prose = ar.Format.Reshape(prose, req)
+						}
+					}
+					return &ActionResult{
+						DirectResponse: prose,
+						Source:         "self_teach",
+					}
+				}
+			}
+		}
+	}
 
 	// Deep retrieval: when surface knowledge lookup returned nothing,
 	// try query rewriting + two-tier retrieval for a deeper search.
