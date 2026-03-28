@@ -2315,6 +2315,16 @@ func (c *Composer) composeConversational(query string, ctx *ComposeContext) *Com
 		}
 	}
 
+	// If response is still just an acknowledgment, add a contextual question.
+	if len(parts) == 1 {
+		topic := c.extractTopic(query)
+		if topic != "" {
+			parts = append(parts, fmt.Sprintf("What specifically about %s would you like to explore?", topic))
+		} else {
+			parts = append(parts, "What would be most helpful for me to focus on?")
+		}
+	}
+
 	if len(parts) == 0 {
 		return nil
 	}
@@ -3254,6 +3264,16 @@ func isLikelyPlural(subject string) bool {
 	if idx := strings.LastIndex(lower, " "); idx >= 0 {
 		lastWord = lower[idx+1:]
 	}
+	// Proper nouns ending in common Greek/Latin suffixes are singular
+	// Socrates, Hercules, Heracles, Diogenes, Descartes, Pythagoras, etc.
+	if strings.HasSuffix(lastWord, "tes") || strings.HasSuffix(lastWord, "les") ||
+		strings.HasSuffix(lastWord, "nes") || strings.HasSuffix(lastWord, "res") ||
+		strings.HasSuffix(lastWord, "des") {
+		if len(subject) > 0 && subject[0] >= 'A' && subject[0] <= 'Z' {
+			return false
+		}
+	}
+
 	if strings.HasSuffix(lastWord, "s") && !strings.HasSuffix(lastWord, "ss") &&
 		!strings.HasSuffix(lastWord, "us") && !strings.HasSuffix(lastWord, "is") {
 		return true
@@ -3766,98 +3786,125 @@ var angryWords = []string{
 
 // Talk acknowledgments
 var talkAckNeutral = []string{
-	"I'm here. What's on your mind?",
-	"Happy to chat. What's going on?",
-	"I'm all ears.",
-	"Sure, let's talk.",
-	"Of course. What's up?",
+	"What's on your mind?",
+	"What would you like to explore?",
+	"What are you thinking about?",
+	"Where should we start?",
+	"What's the topic?",
 }
 var talkAckCasual = []string{
-	"Yeah, let's hang. What's up?",
-	"I'm down to chat. What's going on?",
-	"Sure thing. Fire away.",
+	"What's on your mind?",
+	"What are you curious about?",
+	"What should we dig into?",
 }
 var talkAckWarm = []string{
-	"I'd love to chat. What's on your mind?",
-	"Always happy to talk. What's going on?",
-	"I'm right here. Take your time.",
+	"I'd like to hear what's on your mind.",
+	"What are you thinking about? Take your time.",
+	"What would you like to talk through?",
 }
 var talkAckDirect = []string{
 	"Go ahead.",
-	"I'm listening.",
-	"Shoot.",
+	"What's the topic?",
+	"What do you need?",
 }
 
 // Boredom acknowledgments
 var boredAckPhrases = []string{
-	"Boredom can be a sign your brain wants something new.",
-	"I get it. Sometimes you just need a spark.",
-	"Bored? Let's fix that.",
-	"Nothing wrong with boredom — it's where ideas start.",
-	"That restless feeling? It usually means you're ready for something.",
+	"Boredom usually means you're ready for a challenge. What sounds interesting right now?",
+	"Let's find something worth your attention. What are you in the mood for?",
+	"That restless feeling is useful — it means you want to engage with something. What direction?",
+	"Good — boredom is a signal. What's something you've been meaning to think about?",
+	"Let's put that energy somewhere. What topic would grab you right now?",
 }
 
 // Positive sentiment acknowledgments
 var positiveAckNeutral = []string{
-	"That's good to hear.", "Sounds like things are going well.",
-	"Nice.", "Glad to hear that.",
+	"That's great — what made the difference?",
+	"Good to hear. What are you thinking about next?",
+	"Nice — tell me more about how that happened.",
+	"Sounds like things are moving. What's the next step?",
 }
 var positiveAckCasual = []string{
-	"Ay, that's solid.", "Love that.", "Let's go.",
+	"Love that — what's the plan from here?",
+	"Let's go! What are you building on next?",
+	"That's solid. How did you pull it off?",
 }
 var positiveAckWarm = []string{
-	"That makes me glad to hear.", "That's really wonderful.",
-	"I'm happy for you.",
+	"That's wonderful — I'd love to hear more about it.",
+	"I'm really glad to hear that. What does this open up for you?",
+	"That's the kind of thing worth celebrating. What comes next?",
 }
 var positiveAckDirect = []string{
-	"Good.", "Solid.", "That works.",
+	"Good. What's next?", "Solid result. Where does that leave you?",
+	"That works. What are you building toward?",
 }
 
 // Negative sentiment acknowledgments
 var negativeAckNeutral = []string{
-	"I hear you.", "That sounds tough.",
-	"I understand.", "That's rough.",
+	"That sounds difficult. What's the main challenge right now?",
+	"I can see why that's hard. What would help most?",
+	"That's a tough spot. What are your options?",
+	"I hear you — that's not easy. What's the biggest obstacle?",
 }
 var negativeAckCasual = []string{
-	"Yeah, that sucks.", "Ugh, I hear you.",
-	"That's not great.",
+	"Yeah, that's rough. What's the part that's getting to you most?",
+	"Ugh, I hear you. What would make the biggest difference right now?",
+	"That's frustrating. What have you tried so far?",
 }
 var negativeAckWarm = []string{
-	"I'm sorry to hear that.", "That sounds really hard.",
-	"I can only imagine how that feels.",
+	"I'm sorry you're dealing with that. What would be most helpful to talk through?",
+	"That sounds really hard. I want to help if I can — what's weighing on you most?",
+	"I can see why that's weighing on you. Where would you like to start?",
 }
 var negativeAckDirect = []string{
-	"Noted.", "Understood.", "I see.",
+	"That's a real problem. What's the core issue?",
+	"Understood. What are you trying to solve?",
+	"Clear. What would a good outcome look like?",
 }
 
 // Angry acknowledgments
 var angryAckPhrases = []string{
-	"I can tell that's frustrating.",
-	"That sounds infuriating. I hear you.",
-	"Your frustration is completely valid.",
-	"I'd be frustrated too.",
+	"That's a legitimate frustration — let's work through it.",
+	"I hear you. Let's figure out what can actually change here.",
+	"That would frustrate anyone. What's the core issue?",
+	"Understood — let's focus on what you can do about it.",
 }
 
 // Curious acknowledgments
 var curiousAckPhrases = []string{
-	"Good question.", "That's interesting to think about.",
-	"I like where your head's at.", "Let me think about that.",
-	"Hmm, let me see what I know.",
+	"Here's what I can tell you about that.",
+	"Let me share what I know.",
+	"That's a topic I can help with.",
+	"Let me pull together what I know on this.",
+	"Here's my understanding.",
 }
 
 // Neutral acknowledgments
 var neutralAckNeutral = []string{
-	"I see.", "Okay.", "Got it.", "Right.",
-	"Makes sense.", "I hear you.",
+	"That's worth thinking about.",
+	"Let me consider that.",
+	"There's a lot to unpack there.",
+	"That raises some interesting points.",
+	"Here's how I'd think about that.",
+	"Let me work through that with you.",
 }
 var neutralAckCasual = []string{
-	"Gotcha.", "Alright.", "Cool.", "Sure.",
+	"That's a solid question to dig into.",
+	"Let's think through this.",
+	"Here's what comes to mind.",
+	"Good topic — let me think about that.",
 }
 var neutralAckWarm = []string{
-	"I appreciate you sharing that.", "Thank you for telling me.",
+	"That's something I'd like to help with.",
+	"Let's explore that together.",
+	"I want to make sure I give you something useful here.",
+	"That deserves a thoughtful response.",
 }
 var neutralAckDirect = []string{
-	"Understood.", "Noted.", "Clear.",
+	"Let me address that directly.",
+	"Here's what I think.",
+	"Let me cut to what matters here.",
+	"Straightforward question — here's my take.",
 }
 
 // Bridge phrases — connecting to knowledge
@@ -4137,12 +4184,24 @@ func isIn(s string, options ...string) bool {
 func (c *Composer) extractTopic(query string) string {
 	lower := strings.ToLower(query)
 
-	// Strip common question prefixes to isolate the topic
+	// Strip common question prefixes to isolate the topic.
+	// Long prefixes first for greedy matching.
 	prefixes := []string{
+		"give me a full overview of ", "give me an overview of ",
+		"give me a summary of ", "tell me everything about ",
+		"tell me all about ", "tell me about ",
+		"walk me through ", "deep dive into ",
+		"teach me about ", "help me understand ",
 		"what do you think about ", "what's your opinion on ",
 		"your take on ", "do you think ", "how do you feel about ",
-		"what about ", "tell me about ", "what is ", "who is ",
-		"explain ", "define ",
+		"what about ",
+		"explain how ", "explain why ", "explain what ",
+		"explain to me ", "explain ", "describe ", "define ",
+		"what is ", "what are ", "what was ",
+		"who is ", "who are ", "who was ",
+		"how does ", "how do ", "how is ",
+		"why is ", "why are ", "why does ",
+		"compare ", "summarize ", "summarise ",
 	}
 	for _, p := range prefixes {
 		if strings.HasPrefix(lower, p) {
