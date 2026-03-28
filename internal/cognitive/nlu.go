@@ -2072,6 +2072,21 @@ func (n *NLU) UnderstandWithContext(input string, conv *Conversation) *NLUResult
 // isEmotionalInput detects emotional/sentiment expressions that should get an
 // empathetic response rather than tool routing.
 func isEmotionalInput(lower string) bool {
+	// Decision-making, coaching, and planning language should NOT be treated
+	// as emotional input — they are substantive queries.
+	decisionWords := []string{
+		"decide", "torn between", "choosing between", "should i", "help me decide",
+		"career", "business", "start my own", "change careers", "switching to",
+		"improve", "get better", "learn to", "want to change", "planning",
+		"strategy", "how do i", "what should", "figure out",
+		"compare", "difference", "versus", "pros and cons",
+		"stuck", "don't know where to start", "need guidance",
+	}
+	for _, d := range decisionWords {
+		if strings.Contains(lower, d) {
+			return false
+		}
+	}
 	patterns := []string{
 		"i feel ", "i'm feeling ", "im feeling ",
 		"i'm happy", "im happy", "i'm sad", "im sad",
