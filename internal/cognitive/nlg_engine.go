@@ -1298,8 +1298,10 @@ func nlgCountSubject(text, subject string) int {
 // character before and after the match is not a letter.
 func nlgFindSubject(text, subject string) int {
 	start := 0
+	textLower := strings.ToLower(text)
+	subjectLower := strings.ToLower(subject)
 	for {
-		idx := strings.Index(text[start:], subject)
+		idx := strings.Index(textLower[start:], subjectLower)
 		if idx < 0 {
 			return -1
 		}
