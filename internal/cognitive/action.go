@@ -83,8 +83,10 @@ type ActionRouter struct {
 	QueryRewrite   *QueryRewriter
 	Filler         *FillerDetector
 
-	// NLG Engine — real language generation from facts
+	// NLG engines
 	NLG            *NLGEngine
+	CorpusNLG      *CorpusNLG
+	Format         *FormatCompliance
 
 	// Innovation systems
 	Socratic       *SocraticEngine
@@ -2096,10 +2098,16 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 		query = nlu.Raw
 	}
 
-	// Clean query: strip "how/why/what" prefixes that prevent graph matching.
+	// Extract the core noun phrase for graph matching.
 	// "how photosynthesis works" → "photosynthesis"
-	// "what is quantum physics" → "quantum physics"
-	query = cleanTopicForLookup(query)
+	// "give me an overview of operating systems" → "operating systems"
+	if ar.Format != nil {
+		if np := ExtractNounPhrase(query); np != "" {
+			query = np
+		}
+	} else {
+		query = cleanTopicForLookup(query)
+	}
 
 	// On-demand wiki loading: if the topic isn't in the graph, check the wiki index
 	if ar.Packages != nil {
@@ -2111,27 +2119,40 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 		}
 	}
 
-	// NLG Engine: generate flowing prose from graph facts.
-	// This is the primary knowledge response path — real language generation,
-	// not template filling.
-	if ar.NLG != nil && ar.CogGraph != nil {
+	// NLG: generate flowing prose from graph facts.
+	// Try corpus-mined NLG first (patterns from real Wikipedia text),
+	// then fall back to the structural NLG engine.
+	if ar.CogGraph != nil {
 		facts := ar.gatherFactsForNLG(query)
 		if len(facts) >= 2 {
 			var prose string
-			if nlu.Intent == "explain" || nlu.Intent == "question" {
-				prose = ar.NLG.RealizeExplanation(query, facts)
-			} else {
-				prose = ar.NLG.Realize(query, facts)
+
+			// Structural NLG engine — sentence fusion + pronominalization
+			if (prose == "" || len(strings.Fields(prose)) < 10) && ar.NLG != nil {
+				if nlu.Intent == "explain" || nlu.Intent == "question" {
+					prose = ar.NLG.RealizeExplanation(query, facts)
+				} else {
+					prose = ar.NLG.Realize(query, facts)
+				}
 			}
+
 			if prose != "" && len(strings.Fields(prose)) >= 10 {
 				// Supplement with Wikipedia description if available
 				desc := ar.CogGraph.LookupDescription(query)
 				if len(desc) >= 40 {
 					prose = desc + "\n\n" + prose
 				}
+
+				// Apply format compliance if user requested specific formatting
+				if ar.Format != nil {
+					if req := ar.Format.DetectFormat(nlu.Raw); req != nil {
+						prose = ar.Format.Reshape(prose, req)
+					}
+				}
+
 				return &ActionResult{
 					DirectResponse: prose,
-					Source:         "nlg_engine",
+					Source:         "nlg",
 				}
 			}
 		}

@@ -345,8 +345,13 @@ func main() {
 		actions.Retriever = cognitive.NewTwoTierRetriever(actions.Knowledge, actions.CogGraph)
 	}
 
-	// NLG Engine — real language generation
+	// NLG engines
 	actions.NLG = cognitive.NewNLGEngine()
+	actions.Format = cognitive.NewFormatCompliance()
+	corpusNLG := cognitive.NewCorpusNLG()
+	if err := corpusNLG.IngestCorpus(filepath.Join(workDir, "knowledge")); err == nil {
+		actions.CorpusNLG = corpusNLG
+	}
 
 	// Innovation systems
 	actions.Socratic = cognitive.NewSocraticEngine()
