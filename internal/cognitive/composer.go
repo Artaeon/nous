@@ -1282,7 +1282,7 @@ func (c *Composer) structuredRealization(facts []edgeFact) string {
 			continue
 		}
 		displaySubj := f.Subject
-		if f.Subject == subject {
+		if strings.EqualFold(f.Subject, subject) {
 			mentionCount++
 			if mentionCount > 1 {
 				displaySubj = c.smartRef(subject, mentionCount)
