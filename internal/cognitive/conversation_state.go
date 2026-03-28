@@ -97,16 +97,24 @@ func (cs *ConversationState) Update(input string, nlu *NLUResult, response strin
 			cs.TrackEntity(k, v)
 		}
 
-		// Detect topic from NLU entities
-		if topic, ok := nlu.Entities["topic"]; ok && topic != "" {
-			cs.updateTopic(topic)
-		} else if subject, ok := nlu.Entities["subject"]; ok && subject != "" {
-			cs.updateTopic(subject)
-		} else {
-			// Try to extract topic from input
-			extracted := cs.extractTopicFromInput(lower)
-			if extracted != "" {
-				cs.updateTopic(extracted)
+		// Don't update topic for trivial turns — greetings, farewells, etc.
+		// This prevents stale topics from contaminating future Socratic questions.
+		trivialIntents := map[string]bool{
+			"greeting": true, "farewell": true, "affirmation": true,
+			"meta": true, "negation": true,
+		}
+		if !trivialIntents[nlu.Intent] {
+			// Detect topic from NLU entities
+			if topic, ok := nlu.Entities["topic"]; ok && topic != "" {
+				cs.updateTopic(topic)
+			} else if subject, ok := nlu.Entities["subject"]; ok && subject != "" {
+				cs.updateTopic(subject)
+			} else {
+				// Try to extract topic from input
+				extracted := cs.extractTopicFromInput(lower)
+				if extracted != "" {
+					cs.updateTopic(extracted)
+				}
 			}
 		}
 
@@ -131,7 +139,17 @@ func (cs *ConversationState) Update(input string, nlu *NLUResult, response strin
 // updateTopic sets a new active topic and manages the stack.
 func (cs *ConversationState) updateTopic(topic string) {
 	topic = strings.TrimSpace(topic)
-	if topic == "" {
+	if topic == "" || len(topic) < 3 {
+		return
+	}
+	// Reject common non-topics that leak from greetings / short turns.
+	lower := strings.ToLower(topic)
+	nonTopics := map[string]bool{
+		"hello": true, "hi": true, "hey": true, "thanks": true,
+		"ok": true, "yes": true, "no": true, "sure": true,
+		"bye": true, "goodbye": true,
+	}
+	if nonTopics[lower] {
 		return
 	}
 	// Don't push duplicates at the top of the stack
