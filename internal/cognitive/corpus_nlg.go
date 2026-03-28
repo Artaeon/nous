@@ -36,6 +36,7 @@ import (
 type CorpusNLG struct {
 	patterns     []MinedPattern            // sentence structures extracted from corpus
 	byFunction   map[string][]int          // discourse function → pattern indices
+	byDomain     map[string][]int          // domain → pattern indices
 	bigrams      map[string]map[string]int // word → next_word → count
 	totalBigrams map[string]int            // word → total next count (for probability)
 	vocab        map[string]bool           // known vocabulary
@@ -52,6 +53,7 @@ type MinedPattern struct {
 	SlotCount int     // number of slots to fill
 	Quality   float64 // usage-weighted quality score
 	WordCount int
+	Domain    string // "science", "history", "philosophy", etc. — from source filename
 }
 
 // discourseFunctions and their detection signals.
@@ -81,6 +83,7 @@ var corpusOpenerSeeds = map[string][]string{
 func NewCorpusNLG() *CorpusNLG {
 	return &CorpusNLG{
 		byFunction:   make(map[string][]int),
+		byDomain:     make(map[string][]int),
 		bigrams:      make(map[string]map[string]int),
 		totalBigrams: make(map[string]int),
 		vocab:        make(map[string]bool),
@@ -101,7 +104,14 @@ func (c *CorpusNLG) IngestCorpus(dir string) error {
 		return err
 	}
 
+	// Collect per-file text with domain tags, plus full corpus for bigrams.
+	type fileContent struct {
+		domain string
+		text   string
+	}
+	var files []fileContent
 	var allText strings.Builder
+
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".txt") {
 			continue
@@ -110,6 +120,8 @@ func (c *CorpusNLG) IngestCorpus(dir string) error {
 		if err != nil {
 			continue
 		}
+		domain := extractDomainFromFilename(e.Name())
+		files = append(files, fileContent{domain: domain, text: string(data)})
 		allText.WriteString(string(data))
 		allText.WriteString(" ")
 	}
@@ -119,44 +131,47 @@ func (c *CorpusNLG) IngestCorpus(dir string) error {
 		return nil
 	}
 
-	sentences := corpusSplitSentences(corpus)
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	// Build bigram model from the full corpus.
 	c.buildBigrams(corpus)
 
-	// Extract patterns from each sentence.
-	for _, sent := range sentences {
-		sent = strings.TrimSpace(sent)
-		if len(sent) < 20 || len(sent) > 500 {
-			continue // skip trivially short or excessively long
-		}
-		wordCount := len(strings.Fields(sent))
-		if wordCount < 5 || wordCount > 60 {
-			continue
-		}
+	// Extract patterns per file so each pattern inherits its source domain.
+	for _, f := range files {
+		sentences := corpusSplitSentences(f.text)
+		for _, sent := range sentences {
+			sent = strings.TrimSpace(sent)
+			if len(sent) < 20 || len(sent) > 500 {
+				continue // skip trivially short or excessively long
+			}
+			wordCount := len(strings.Fields(sent))
+			if wordCount < 5 || wordCount > 60 {
+				continue
+			}
 
-		structure, slotCount := c.extractStructure(sent)
-		if slotCount == 0 {
-			continue // no entities found — not useful as a pattern
+			structure, slotCount := c.extractStructure(sent)
+			if slotCount == 0 {
+				continue // no entities found — not useful as a pattern
+			}
+
+			function := corpusClassifyFunction(sent)
+
+			pattern := MinedPattern{
+				Structure: structure,
+				Function:  function,
+				Original:  sent,
+				SlotCount: slotCount,
+				Quality:   1.0,
+				WordCount: wordCount,
+				Domain:    f.domain,
+			}
+
+			idx := len(c.patterns)
+			c.patterns = append(c.patterns, pattern)
+			c.byFunction[function] = append(c.byFunction[function], idx)
+			c.byDomain[f.domain] = append(c.byDomain[f.domain], idx)
 		}
-
-		function := corpusClassifyFunction(sent)
-
-		pattern := MinedPattern{
-			Structure: structure,
-			Function:  function,
-			Original:  sent,
-			SlotCount: slotCount,
-			Quality:   1.0,
-			WordCount: wordCount,
-		}
-
-		idx := len(c.patterns)
-		c.patterns = append(c.patterns, pattern)
-		c.byFunction[function] = append(c.byFunction[function], idx)
 	}
 
 	return nil
@@ -586,6 +601,9 @@ func (c *CorpusNLG) GenerateFromFacts(subject string, facts []edgeFact) string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
+	// Classify the topic domain to prefer same-domain patterns.
+	domain := c.classifyTopicDomain(subject)
+
 	var sentences []string
 	prevWord := ""
 
@@ -593,8 +611,8 @@ func (c *CorpusNLG) GenerateFromFacts(subject string, facts []edgeFact) string {
 		function := group.function
 		groupFacts := group.facts
 
-		// Try to find a matching pattern.
-		pattern, patIdx := c.selectPattern(function, groupFacts)
+		// Try to find a matching pattern, preferring same-domain.
+		pattern, patIdx := c.selectPattern(function, groupFacts, domain)
 
 		var sentence string
 		if pattern != nil {
@@ -687,12 +705,23 @@ func corpusRelToFunction(r RelType) string {
 	}
 }
 
-// selectPattern finds the best matching pattern for a function and facts.
+// selectPattern finds the best matching pattern for a function and facts,
+// preferring patterns from the same domain as the current topic.
 // Returns nil if no suitable pattern is found.
-func (c *CorpusNLG) selectPattern(function string, facts []edgeFact) (*MinedPattern, int) {
+func (c *CorpusNLG) selectPattern(function string, facts []edgeFact, domain string) (*MinedPattern, int) {
 	indices, ok := c.byFunction[function]
 	if !ok || len(indices) == 0 {
 		return nil, -1
+	}
+
+	// Build a set of same-domain indices for bonus scoring.
+	domainSet := make(map[int]bool)
+	if domain != "" && domain != "general" {
+		if domainIndices, ok := c.byDomain[domain]; ok {
+			for _, idx := range domainIndices {
+				domainSet[idx] = true
+			}
+		}
 	}
 
 	type scored struct {
@@ -705,6 +734,10 @@ func (c *CorpusNLG) selectPattern(function string, facts []edgeFact) (*MinedPatt
 		pat := c.patterns[idx]
 		score := c.ScorePattern(pat, facts)
 		if score > 0 {
+			// Boost same-domain patterns to reduce cross-domain incoherence.
+			if domainSet[idx] {
+				score += 3.0
+			}
 			candidates = append(candidates, scored{idx: idx, score: score})
 		}
 	}
@@ -1088,6 +1121,52 @@ func corpusGuessCategory(subject string) string {
 	}
 
 	return "subject"
+}
+
+// -----------------------------------------------------------------------
+// Domain awareness — tag patterns by source domain, classify topics
+// -----------------------------------------------------------------------
+
+// extractDomainFromFilename derives a domain tag from a knowledge filename.
+// "01_science.txt" → "science", "04_technology.txt" → "technology".
+func extractDomainFromFilename(name string) string {
+	base := filepath.Base(name)
+	base = strings.TrimSuffix(base, filepath.Ext(base))
+	// Strip leading number prefix: "01_science" → "science"
+	parts := strings.SplitN(base, "_", 2)
+	if len(parts) == 2 {
+		return parts[1]
+	}
+	return base
+}
+
+// classifyTopicDomain maps a topic string to the most likely corpus domain
+// using simple keyword matching. Returns "general" if no domain matches.
+func (c *CorpusNLG) classifyTopicDomain(topic string) string {
+	lower := strings.ToLower(topic)
+
+	domainKeywords := []struct {
+		domain   string
+		keywords []string
+	}{
+		{"science", []string{"physics", "chemistry", "biology", "atom", "molecule", "energy", "force", "quantum", "cell", "dna", "gene", "evolution", "relativity", "particle", "electron", "neutron", "proton", "gravity", "thermodynamic", "electromagnetic", "species", "organism", "photosynthesis", "enzyme", "protein"}},
+		{"history", []string{"war", "empire", "revolution", "century", "dynasty", "civilization", "medieval", "ancient", "colonial", "independence", "kingdom", "republic", "treaty", "battle", "conquest", "emperor", "pharaoh", "renaissance"}},
+		{"technology", []string{"programming", "computer", "software", "algorithm", "database", "network", "internet", "code", "processor", "semiconductor", "encryption", "protocol", "compiler", "operating system", "artificial intelligence", "machine learning"}},
+		{"philosophy", []string{"philosophy", "ethics", "logic", "metaphysics", "epistemology", "stoicism", "existentialism", "ontology", "morality", "virtue", "consciousness", "free will", "determinism", "utilitarianism", "dialectic", "phenomenology"}},
+		{"arts", []string{"painting", "sculpture", "music", "composer", "symphony", "novel", "poetry", "literature", "theater", "cinema", "artist", "baroque", "romantic", "impressionism", "modernism", "architecture"}},
+		{"geography", []string{"continent", "ocean", "mountain", "river", "climate", "desert", "island", "peninsula", "volcano", "earthquake", "latitude", "longitude", "ecosystem", "biome", "glacier", "plateau"}},
+		{"mathematics", []string{"theorem", "equation", "calculus", "algebra", "geometry", "prime", "integral", "derivative", "probability", "statistics", "topology", "matrix", "polynomial", "logarithm", "fibonacci"}},
+	}
+
+	for _, dk := range domainKeywords {
+		for _, kw := range dk.keywords {
+			if strings.Contains(lower, kw) {
+				return dk.domain
+			}
+		}
+	}
+
+	return "general"
 }
 
 // -----------------------------------------------------------------------
