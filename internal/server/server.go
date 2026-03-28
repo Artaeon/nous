@@ -242,34 +242,18 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 		}
 
 		// NLU → Action → Compose pipeline (0 LLM calls)
+		// ALWAYS route through Execute() — it contains the Socratic engine,
+		// response gate, instruction detector, filler policy, and all
+		// innovations. Bypassing it produces unguarded, low-quality output.
 		if s.nlu != nil && s.actions != nil && s.conv != nil {
 			nluResult := s.nlu.UnderstandWithContext(message, s.conv)
 			applyForcedExplainRoute(message, nluResult)
-			shouldExecute := nluResult.Confidence >= 0.5 ||
-				nluResult.Intent == "explain" || nluResult.Intent == "compare" ||
-				nluResult.Action == "lookup_knowledge" || nluResult.Action == "compare"
-			if shouldExecute {
-				actionResult := s.actions.Execute(nluResult, s.conv)
-				if actionResult.DirectResponse != "" {
-					if !(looksExplanatoryMessage(message) && isLowInformationServerReply(actionResult.DirectResponse)) {
-						s.conv.User(message)
-						s.conv.Assistant(actionResult.DirectResponse)
-						return actionResult.DirectResponse, time.Since(start).Milliseconds()
-					}
-				}
-			}
-		}
-
-		// Composer engine: generates response without any LLM
-		if s.composer != nil && s.actions != nil && s.conv != nil {
-			respType := s.actions.ClassifyForComposer(message)
-			ctx := s.actions.BuildComposeContext()
-			resp := s.composer.Compose(message, respType, ctx)
-			if resp != nil && resp.Text != "" {
-				if !(looksExplanatoryMessage(message) && isLowInformationServerReply(resp.Text)) {
+			actionResult := s.actions.Execute(nluResult, s.conv)
+			if actionResult != nil && actionResult.DirectResponse != "" {
+				if !(looksExplanatoryMessage(message) && isLowInformationServerReply(actionResult.DirectResponse)) {
 					s.conv.User(message)
-					s.conv.Assistant(resp.Text)
-					return resp.Text, time.Since(start).Milliseconds()
+					s.conv.Assistant(actionResult.DirectResponse)
+					return actionResult.DirectResponse, time.Since(start).Milliseconds()
 				}
 			}
 		}
@@ -855,6 +839,9 @@ func applyForcedExplainRoute(message string, nluResult *cognitive.NLUResult) {
 		"give me an overview of ",
 		"walk me through ",
 		"deep dive into ",
+		"summarize ",
+		"summarise ",
+		"summary of ",
 		"what is ",
 		"what are ",
 		"how does ",
@@ -888,6 +875,7 @@ func looksExplanatoryMessage(message string) bool {
 		"how does ", "how do ", "why ",
 		"tell me about ", "tell me everything about ", "tell me all about ",
 		"give me an overview of ", "walk me through ", "deep dive into ",
+		"summarize ", "summarise ", "summary of ",
 		"explain ", "describe ", "define ",
 		"compare ",
 	} {
@@ -905,6 +893,21 @@ func isLowInformationServerReply(text string) bool {
 	clean := strings.ToLower(strings.TrimRight(strings.TrimSpace(text), "!?."))
 	if clean == "" {
 		return true
+	}
+	containsLowInfo := []string{
+		"i appreciate you sharing that",
+		"thank you for telling me",
+		"good question",
+		"that's interesting to think about",
+		"late night session",
+		"burning the midnight oil",
+		"night owl mode",
+		"make sure you're getting enough rest",
+	}
+	for _, p := range containsLowInfo {
+		if strings.Contains(clean, p) {
+			return true
+		}
 	}
 	lowInfo := map[string]bool{
 		"i see":                         true,
@@ -924,7 +927,21 @@ func isLowInformationServerReply(text string) bool {
 		"i appreciate you sharing that": true,
 		"good question":                 true,
 	}
-	return lowInfo[clean]
+	if lowInfo[clean] {
+		return true
+	}
+	for prefix := range lowInfo {
+		if strings.HasPrefix(clean, prefix+".") || strings.HasPrefix(clean, prefix+",") {
+			return true
+		}
+	}
+	if len(strings.Fields(clean)) <= 3 {
+		switch clean {
+		case "hmm", "oh", "wow", "interesting":
+			return true
+		}
+	}
+	return false
 }
 
 func extractExplanatoryTopic(message string) string {
@@ -936,6 +953,9 @@ func extractExplanatoryTopic(message string) string {
 		"give me an overview of ",
 		"walk me through ",
 		"deep dive into ",
+		"summarize ",
+		"summarise ",
+		"summary of ",
 		"what is ",
 		"what are ",
 		"how does ",
