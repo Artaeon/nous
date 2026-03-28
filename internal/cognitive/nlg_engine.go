@@ -244,6 +244,37 @@ func (e *NLGEngine) fuseIdentity(subject string, facts []edgeFact) string {
 		}
 	}
 
+	// Deduplicate and limit IsA facts: pick the most specific (longest)
+	// first, keep at most 2, and skip near-duplicates.
+	if len(isAFacts) > 1 {
+		// Sort by length descending so the most specific comes first.
+		for i := 1; i < len(isAFacts); i++ {
+			for j := i; j > 0 && len(isAFacts[j].Object) > len(isAFacts[j-1].Object); j-- {
+				isAFacts[j], isAFacts[j-1] = isAFacts[j-1], isAFacts[j]
+			}
+		}
+		// Keep only distinct entries (skip if one contains the other).
+		var deduped []edgeFact
+		for _, f := range isAFacts {
+			dup := false
+			lo := strings.ToLower(strings.TrimSpace(f.Object))
+			for _, kept := range deduped {
+				kl := strings.ToLower(strings.TrimSpace(kept.Object))
+				if strings.Contains(kl, lo) || strings.Contains(lo, kl) {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				deduped = append(deduped, f)
+			}
+			if len(deduped) >= 2 {
+				break
+			}
+		}
+		isAFacts = deduped
+	}
+
 	var b strings.Builder
 	sub := nlgCapFirst(subject)
 
@@ -253,14 +284,10 @@ func (e *NLGEngine) fuseIdentity(subject string, facts []edgeFact) string {
 		b.WriteString(" is ")
 		b.WriteString(articleFor(strings.TrimSpace(isAFacts[0].Object)))
 
-		// If there are additional IsA facts, attach with "and" coordination
-		for i := 1; i < len(isAFacts); i++ {
-			if i == len(isAFacts)-1 {
-				b.WriteString(" and ")
-			} else {
-				b.WriteString(", ")
-			}
-			b.WriteString(articleFor(strings.TrimSpace(isAFacts[i].Object)))
+		// Attach at most one additional IsA fact with "and" coordination.
+		if len(isAFacts) > 1 {
+			b.WriteString(" and ")
+			b.WriteString(articleFor(strings.TrimSpace(isAFacts[1].Object)))
 		}
 	} else if len(describedAs) > 0 {
 		// No IsA — lead with description

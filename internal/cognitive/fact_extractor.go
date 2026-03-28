@@ -405,6 +405,13 @@ func cleanObject(s string) string {
 	// Strip trailing punctuation and whitespace.
 	s = strings.TrimRight(s, " .,;:!?")
 
+	// Strip trailing preposition phrases that indicate incomplete extraction.
+	for _, suffix := range []string{" by which", " through which", " whereby", " in which", " for which", " by", " through", " from", " with", " and a", " and the", " or a", " or the"} {
+		if strings.HasSuffix(strings.ToLower(s), suffix) {
+			s = s[:len(s)-len(suffix)]
+		}
+	}
+
 	// Collapse internal whitespace.
 	s = strings.Join(strings.Fields(s), " ")
 
@@ -412,8 +419,15 @@ func cleanObject(s string) string {
 	if len(s) > 120 {
 		if idx := strings.Index(s[60:], ", "); idx > 0 {
 			s = s[:60+idx]
-		} else if len(s) > 120 {
-			s = s[:120]
+		} else {
+			// Truncate at word boundary to avoid cutting mid-word.
+			cut := 120
+			for cut > 0 && s[cut] != ' ' {
+				cut--
+			}
+			if cut > 20 { // don't over-truncate
+				s = s[:cut]
+			}
 		}
 		s = strings.TrimRight(s, " ,")
 	}
@@ -432,7 +446,14 @@ func cleanSubject(s string) string {
 		if idx := strings.Index(s[20:], ", "); idx > 0 {
 			s = s[:20+idx]
 		} else {
-			s = s[:80]
+			// Truncate at word boundary to avoid cutting mid-word.
+			cut := 80
+			for cut > 0 && s[cut] != ' ' {
+				cut--
+			}
+			if cut > 20 { // don't over-truncate
+				s = s[:cut]
+			}
 		}
 		s = strings.TrimRight(s, " ,")
 	}
