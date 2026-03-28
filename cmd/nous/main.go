@@ -333,6 +333,30 @@ func main() {
 	}
 	actions.Opinions = opinionEngine
 
+	// Phase 1-4 subsystems — conversation state, follow-up resolution,
+	// user preferences, deep retrieval, query rewriting, filler policy.
+	actions.ConvState = cognitive.NewConversationState()
+	actions.FollowUp = cognitive.NewFollowUpResolver()
+	actions.Preferences = cognitive.NewPreferenceModel()
+	actions.QueryRewrite = cognitive.NewQueryRewriter()
+	actions.Filler = cognitive.NewFillerDetector()
+	// TwoTierRetriever — needs KnowledgeVec and CogGraph
+	if actions.Knowledge != nil || actions.CogGraph != nil {
+		actions.Retriever = cognitive.NewTwoTierRetriever(actions.Knowledge, actions.CogGraph)
+	}
+
+	// NLG Engine — real language generation
+	actions.NLG = cognitive.NewNLGEngine()
+
+	// Innovation systems
+	actions.Socratic = cognitive.NewSocraticEngine()
+	actions.Crystallizer = cognitive.NewInsightCrystallizer()
+	actions.Transparency = cognitive.NewCognitiveTransparency()
+	actions.SelfModel = cognitive.NewSelfModel()
+	if actions.CogGraph != nil {
+		actions.Synthesizer = cognitive.NewKnowledgeSynthesizer(actions.CogGraph, actions.Analogy)
+	}
+
 	// Conversational Learning Engine — Nous learns from every interaction
 	learningEngine := cognitive.NewLearningEngine(actions.CogGraph, actions.Composer, nousDir)
 
@@ -779,6 +803,9 @@ func main() {
 		}
 		if actions.Opinions != nil {
 			actions.Opinions.Save()
+		}
+		if actions.SelfModel != nil {
+			actions.SelfModel.Save(filepath.Join(nousDir, "self_model.json"))
 		}
 		if fileWatcher != nil {
 			fileWatcher.Stop()

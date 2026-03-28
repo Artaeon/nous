@@ -74,6 +74,24 @@ type ActionRouter struct {
 	Sparks         *SparkEngine
 	Council        *InnerCouncil
 	Opinions       *OpinionEngine
+
+	// Phase 1-4 wired systems
+	ConvState      *ConversationState
+	FollowUp       *FollowUpResolver
+	Preferences    *PreferenceModel
+	Retriever      *TwoTierRetriever
+	QueryRewrite   *QueryRewriter
+	Filler         *FillerDetector
+
+	// NLG Engine — real language generation from facts
+	NLG            *NLGEngine
+
+	// Innovation systems
+	Socratic       *SocraticEngine
+	Crystallizer   *InsightCrystallizer
+	Transparency   *CognitiveTransparency
+	Synthesizer    *KnowledgeSynthesizer
+	SelfModel      *SelfModel
 }
 
 // NewActionRouter creates a router with nil subsystems.
@@ -105,11 +123,61 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 	// This is the bridge between single-turn NLU and multi-turn conversation.
 	ar.resolveConversationalReferences(nlu)
 
+	// Hard-pin: explicit task prompts (explain, compare, overview, summarize,
+	// walk me through) NEVER go through emotional/conversational pipelines.
+	// They always route to the knowledge/thinking path, no exceptions.
+	taskPinned := isExplicitTaskPrompt(nlu.Raw)
+
+	// ---------------------------------------------------------------
+	// Instruction detection: "ask me N questions" — handle immediately.
+	// Must fire BEFORE empathy/subtext to prevent emotional interceptors
+	// from swallowing coaching/decision queries.
+	// ---------------------------------------------------------------
+	if !taskPinned {
+		instructions := DetectInstructions(nlu.Raw)
+		for _, inst := range instructions {
+			if inst.Type == "ask_questions" {
+				resp := GenerateQuestions(nlu.Raw, inst.Count)
+				if resp != "" {
+					return &ActionResult{DirectResponse: resp, Source: "instruction_follow"}
+				}
+			}
+		}
+	}
+
+	// ---------------------------------------------------------------
+	// Socratic Engine — check if asking questions would be more valuable
+	// than answering. Only for non-task, non-tool prompts. Must fire
+	// BEFORE empathy/subtext so coaching and decision queries get
+	// Socratic questions, not empathetic platitudes.
+	// ---------------------------------------------------------------
+	socraticEligible := nlu.Action == "respond" || nlu.Action == "llm_chat" || nlu.Action == "" || nlu.Action == "lookup_knowledge"
+	if !taskPinned && ar.Socratic != nil && socraticEligible {
+		mode := ar.Socratic.DetectMode(nlu.Raw, ar.ConvState)
+		if mode != SocraticNone {
+			resp := ar.Socratic.Generate(nlu.Raw, mode, ar.ConvState)
+			if resp != nil && len(resp.Questions) > 0 {
+				var parts []string
+				if resp.Framing != "" {
+					parts = append(parts, resp.Framing)
+				}
+				for _, q := range resp.Questions {
+					parts = append(parts, q.Text)
+				}
+				return &ActionResult{
+					DirectResponse: strings.Join(parts, "\n\n"),
+					Source:         "socratic:" + mode.String(),
+				}
+			}
+		}
+	}
+
 	// Emotional intelligence pre-check: personal emotional statements
 	// ("I got promoted!", "I'm feeling down", "I just had a great day!")
 	// should get an empathetic response, not a knowledge lookup.
-	// Enhanced by subtext analysis when available.
-	if ar.Composer != nil && isEmotionalStatement(nlu.Raw) {
+	// Blocked for task prompts — "explain why I feel sad" is a task, not venting.
+	// Only fires if Socratic and instruction detection didn't handle the input.
+	if !taskPinned && ar.Composer != nil && isEmotionalStatement(nlu.Raw) {
 		ctx := ar.BuildComposeContextWithSubtext(nlu.Raw, nlu)
 		resp := ar.Composer.Compose(nlu.Raw, RespEmpathetic, ctx)
 		if resp != nil && resp.Text != "" {
@@ -119,7 +187,8 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 
 	// Subtext-driven response type upgrade: if the subtext engine detects
 	// emotional needs that the NLU missed, respond empathetically.
-	if ar.Subtext != nil && ar.Composer != nil {
+	// Blocked for task prompts — emotional subtext must not hijack task routing.
+	if !taskPinned && ar.Subtext != nil && ar.Composer != nil {
 		var history []ConvTurn
 		if ar.Composer != nil {
 			history = ar.Composer.history
@@ -138,6 +207,45 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 			resp := ar.Composer.Compose(nlu.Raw, RespEmpathetic, ctx)
 			if resp != nil && resp.Text != "" {
 				return &ActionResult{DirectResponse: resp.Text, Source: "subtext_empathy"}
+			}
+		}
+	}
+
+	// Hard reroute: if the NLU classified an explicit task prompt as
+	// conversational (action=respond, greeting, etc.), override it NOW
+	// before dispatch. This is the second half of the task pin — the first
+	// half blocked empathy/subtext, this one forces the correct pipeline.
+	if taskPinned {
+		switch nlu.Action {
+		case "respond", "":
+			// Determine the correct task action from the prompt.
+			lower := strings.ToLower(strings.TrimSpace(nlu.Raw))
+			switch {
+			case strings.HasPrefix(lower, "compare ") ||
+				strings.HasPrefix(lower, "contrast ") ||
+				strings.HasPrefix(lower, "difference") ||
+				strings.HasPrefix(lower, "differences") ||
+				strings.HasPrefix(lower, "pros and cons") ||
+				strings.Contains(lower, " vs ") ||
+				strings.Contains(lower, " versus "):
+				nlu.Intent = "compare"
+				nlu.Action = "compare"
+			case strings.HasPrefix(lower, "summarize ") ||
+				strings.HasPrefix(lower, "summarise ") ||
+				strings.HasPrefix(lower, "summary of ") ||
+				strings.HasPrefix(lower, "give me a summary"):
+				nlu.Intent = "explain"
+				nlu.Action = "lookup_knowledge"
+			default:
+				// explain, overview, walk me through, what is, describe, define, etc.
+				nlu.Intent = "explain"
+				nlu.Action = "lookup_knowledge"
+			}
+			if nlu.Entities == nil {
+				nlu.Entities = make(map[string]string)
+			}
+			if nlu.Entities["topic"] == "" {
+				nlu.Entities["topic"] = extractTopicFromQuery(strings.ToLower(strings.TrimSpace(nlu.Raw)))
 			}
 		}
 	}
@@ -183,6 +291,57 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 		ar.Dialogue.ProcessTurn(nlu, result)
 	}
 
+	// Update conversation state — tracks active topic, entities, coreferences.
+	if ar.ConvState != nil && result != nil {
+		ar.ConvState.Update(nlu.Raw, nlu, result.DirectResponse)
+	}
+
+	// Innovation: Insight Crystallizer — observe every turn, surface insights.
+	if ar.Crystallizer != nil {
+		sentiment := "neutral"
+		if ar.Composer != nil {
+			switch ar.Composer.detectSentiment(nlu.Raw) {
+			case SentimentPositive:
+				sentiment = "positive"
+			case SentimentNegative:
+				sentiment = "negative"
+			}
+		}
+		ar.Crystallizer.Observe(nlu.Raw, nlu.Entities, sentiment)
+
+		// Surface relevant insights when the conversation warrants it
+		if result != nil && result.DirectResponse != "" && ar.ConvState != nil {
+			topic := ar.ConvState.ActiveTopic
+			if topic == "" {
+				topic = nlu.Entities["topic"]
+			}
+			if insight := ar.Crystallizer.SurfaceRelevant(topic); insight != nil {
+				result.DirectResponse += "\n\n---\n" + insight.Text
+			}
+		}
+	}
+
+	// Innovation: SelfModel — record interaction outcome for self-improvement.
+	if ar.SelfModel != nil && result != nil {
+		domain := ar.SelfModel.ClassifyDomain(nlu.Raw)
+		quality := 0.5 // baseline; user feedback adjusts later
+		if result.Source != "" && !strings.Contains(result.Source, "fallback") {
+			quality = 0.7 // grounded response from knowledge
+		}
+		ar.SelfModel.RecordOutcome(domain, nlu.Raw, quality, true, result.Source)
+	}
+
+	// Update user preference model from behavioral signals.
+	if ar.Preferences != nil && result != nil {
+		wasFollowUp := nlu.Intent == "followup" || nlu.Intent == "follow_up"
+		wasClarification := strings.Contains(strings.ToLower(nlu.Raw), "what do you mean") ||
+			strings.Contains(strings.ToLower(nlu.Raw), "can you clarify")
+		wasCorrection := strings.Contains(strings.ToLower(nlu.Raw), "no, ") ||
+			strings.Contains(strings.ToLower(nlu.Raw), "that's wrong") ||
+			strings.Contains(strings.ToLower(nlu.Raw), "actually,")
+		ar.Preferences.ObserveTurn(nlu.Raw, result.DirectResponse, wasFollowUp, wasClarification, wasCorrection)
+	}
+
 	// Record interaction for conversation learning.
 	// The learner generalizes successful patterns so Nous improves over time.
 	if ar.ConvLearner != nil && result != nil && result.DirectResponse != "" {
@@ -210,6 +369,58 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 			nlu.Raw, result.DirectResponse,
 			nlu.Intent, sentiment, topic, true,
 		)
+	}
+
+	// Strip filler from all outputs — "As an AI...", empty hedges, etc.
+	if ar.Filler != nil && result != nil && result.DirectResponse != "" {
+		cleaned, changed := ar.Filler.EnforcePolicy(result.DirectResponse, isExplicitTaskPrompt(nlu.Raw))
+		if changed && strings.TrimSpace(cleaned) != "" {
+			result.DirectResponse = cleaned
+		}
+	}
+
+	// ---------------------------------------------------------------
+	// Response Quality Gate — last line of defense before the user
+	// sees the response. Catches tool error leaks, low-value acks
+	// on substantive turns, and parroting.
+	// ---------------------------------------------------------------
+	if result != nil && result.DirectResponse != "" {
+		gate := &ResponseGate{}
+		verdict := gate.Check(nlu.Raw, result.DirectResponse, result.Source)
+		if !verdict.Pass {
+			// Check for user instructions that we can fulfill directly
+			instructions := DetectInstructions(nlu.Raw)
+			for _, inst := range instructions {
+				if inst.Type == "ask_questions" {
+					result.DirectResponse = GenerateQuestions(nlu.Raw, inst.Count)
+					result.Source = "instruction_follow"
+					return result
+				}
+			}
+			// If gate repaired the response, use that
+			if verdict.Repaired != "" {
+				result.DirectResponse = verdict.Repaired
+				result.Source += "+gated"
+			} else if ar.Thinker != nil {
+				// Gate failed and no repair — try the thinking engine as fallback
+				if thinkResult := ar.Thinker.Think(nlu.Raw, nil); thinkResult != nil && thinkResult.Text != "" {
+					if !isLowValueResponse(thinkResult.Text) {
+						result.DirectResponse = thinkResult.Text
+						result.Source = "thinking:" + thinkResult.Frame + "+gated"
+					}
+				}
+			}
+		}
+		// Also check if user gave instructions we should honor
+		// even when the gate passed (e.g., "give me 3 bullets")
+		instructions := DetectInstructions(nlu.Raw)
+		for _, inst := range instructions {
+			if inst.Type == "ask_questions" && strings.Count(result.DirectResponse, "?") < inst.Count {
+				result.DirectResponse = GenerateQuestions(nlu.Raw, inst.Count)
+				result.Source = "instruction_follow"
+				break
+			}
+		}
 	}
 
 	return result
@@ -438,10 +649,33 @@ func (ar *ActionRouter) handleRespond(nlu *NLUResult) *ActionResult {
 	}
 
 	// Follow-ups: "tell me more", "why?", "go on", "elaborate"
-	// Uses conversation history to expand on the previous topic.
-	if (nlu.Intent == "followup" || nlu.Intent == "follow_up") && ar.Composer != nil {
+	// Uses FollowUpResolver (if wired) for better context-aware resolution,
+	// then falls back to the old conversation history approach.
+	if (nlu.Intent == "followup" || nlu.Intent == "follow_up") {
+		// Try the new FollowUpResolver with conversation state first
+		if ar.FollowUp != nil && ar.ConvState != nil {
+			resolved := ar.FollowUp.Resolve(nlu.Raw, ar.ConvState)
+			if resolved != nil && resolved.IsFollowUp && resolved.ResolvedQuery != "" {
+				// Re-route the resolved query through the thinking engine
+				if ar.Thinker != nil && ar.Thinker.CanHandle(resolved.ResolvedQuery) {
+					var ctx *ThinkContext
+					if ar.Tracker != nil {
+						ctx = &ThinkContext{RecentTopics: []string{ar.Tracker.CurrentTopic()}}
+					}
+					if result := ar.Thinker.Think(resolved.ResolvedQuery, ctx); result != nil && result.Text != "" {
+						if !isLowInformationConversational(result.Text) {
+							return &ActionResult{
+								DirectResponse: result.Text,
+								Source:         "followup_resolved:" + result.Frame,
+							}
+						}
+					}
+				}
+			}
+		}
+
 		prevTopic := ar.getPreviousTopic()
-		if prevTopic != "" {
+		if prevTopic != "" && ar.Composer != nil {
 			// Determine follow-up type from the user's phrasing
 			followUpType := classifyFollowUpType(lower)
 
@@ -710,6 +944,21 @@ func isLowInformationConversational(text string) bool {
 	if clean == "" {
 		return true
 	}
+	containsLowInfo := []string{
+		"i appreciate you sharing that",
+		"thank you for telling me",
+		"good question",
+		"that's interesting to think about",
+		"late night session",
+		"burning the midnight oil",
+		"night owl mode",
+		"make sure you're getting enough rest",
+	}
+	for _, p := range containsLowInfo {
+		if strings.Contains(clean, p) {
+			return true
+		}
+	}
 	lowInfo := map[string]bool{
 		"i see":                         true,
 		"okay":                          true,
@@ -731,6 +980,11 @@ func isLowInformationConversational(text string) bool {
 	if lowInfo[clean] {
 		return true
 	}
+	for prefix := range lowInfo {
+		if strings.HasPrefix(clean, prefix+".") || strings.HasPrefix(clean, prefix+",") {
+			return true
+		}
+	}
 
 	if len(strings.Fields(clean)) <= 3 {
 		switch clean {
@@ -742,6 +996,46 @@ func isLowInformationConversational(text string) bool {
 	return false
 }
 
+// isExplicitTaskPrompt returns true for queries that explicitly request a
+// structured task (explain, compare, overview, summarize, walk-me-through).
+// These prompts must NEVER be intercepted by emotional/conversational
+// injectors — they always route through the knowledge/thinking pipeline.
+func isExplicitTaskPrompt(query string) bool {
+	lower := strings.ToLower(strings.TrimSpace(query))
+	for _, prefix := range []string{
+		// Explain family
+		"explain ", "describe ", "define ",
+		"what is ", "what's ", "what are ", "what was ", "what were ",
+		"what does ", "what do ",
+		"who is ", "who are ", "who was ",
+		"how does ", "how do ", "how is ",
+		"why is ", "why are ", "why does ", "why do ",
+		// Overview / teach family
+		"tell me about ", "tell me everything about ", "tell me all about ",
+		"give me an overview of ", "give me a full overview of ",
+		"walk me through ", "deep dive into ",
+		"teach me about ", "help me understand ",
+		// Compare family
+		"compare ", "contrast ",
+		"difference between ", "differences between ",
+		"pros and cons of ",
+		// Summarize family
+		"summarize ", "summarise ", "summary of ",
+		"give me a summary of ",
+		// Plan family
+		"plan ", "outline ", "create a plan for ",
+	} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	// Also catch "X vs Y" patterns
+	if strings.Contains(lower, " vs ") || strings.Contains(lower, " versus ") {
+		return true
+	}
+	return false
+}
+
 func looksExplanatoryQuery(query string) bool {
 	lower := strings.ToLower(strings.TrimSpace(query))
 	for _, prefix := range []string{
@@ -749,6 +1043,7 @@ func looksExplanatoryQuery(query string) bool {
 		"how does ", "how do ", "why ",
 		"tell me about ", "tell me everything about ", "tell me all about ",
 		"give me an overview of ", "walk me through ",
+		"summarize ", "summarise ", "summary of ",
 		"explain ", "describe ", "define ",
 		"compare ",
 	} {
@@ -949,26 +1244,137 @@ func isCounterfactualQuestion(input string) (hypothesis string, isRemoval bool) 
 // extractMainTopic extracts the primary topic from a query.
 func extractMainTopic(query string) string {
 	lower := strings.ToLower(strings.TrimRight(strings.TrimSpace(query), "?!."))
+	// Long prefixes first for greedy matching.
 	prefixes := []string{
+		"give me a full overview of ", "give me an overview of ",
+		"give me a summary of ", "tell me everything about ",
+		"tell me all about ", "tell me about ",
+		"walk me through ", "deep dive into ",
+		"teach me about ", "help me understand ",
 		"what do you think about ", "what's your opinion on ",
 		"your take on ", "how do you feel about ",
-		"tell me about ", "what is ", "what are ",
+		"explain how ", "explain why ", "explain what ",
+		"explain to me ", "explain ", "describe ", "define ",
+		"what is ", "what are ", "what was ",
+		"who is ", "who are ", "who was ",
+		"how does ", "how do ", "how is ",
+		"why is ", "why are ", "why does ",
+		"compare ", "summarize ", "summarise ",
+		"i want to learn about ", "i want to know about ",
+		"help me decide about ", "help me with ",
 	}
 	for _, p := range prefixes {
 		if strings.HasPrefix(lower, p) {
 			return strings.TrimSpace(lower[len(p):])
 		}
 	}
-	// Fallback: return the longest keyword
+	// Fallback: strip personal/filler prefixes, keep multi-word phrases intact.
+	stripped := lower
+	for _, s := range []string{
+		"i am ", "i'm ", "i have been ", "i've been ",
+		"i want to ", "i need to ", "help me ",
+		"can you ", "could you ", "please ",
+		"how to ", "what about ", "about ",
+	} {
+		stripped = strings.TrimPrefix(stripped, s)
+	}
+	stripped = strings.TrimSpace(stripped)
+	if stripped != "" && stripped != lower {
+		return stripped
+	}
+	// Last resort: return all content words joined (preserves multi-word topics).
 	words := extractKeywords(lower)
-	if len(words) > 0 {
-		best := words[0]
-		for _, w := range words[1:] {
-			if len(w) > len(best) {
-				best = w
+	if len(words) > 1 {
+		return strings.Join(words, " ")
+	}
+	if len(words) == 1 {
+		return words[0]
+	}
+	return lower
+}
+
+// gatherFactsForNLG retrieves raw edgeFacts from the cognitive graph for NLG.
+func (ar *ActionRouter) gatherFactsForNLG(topic string) []edgeFact {
+	if ar.CogGraph == nil {
+		return nil
+	}
+	lower := strings.ToLower(strings.TrimSpace(topic))
+	ar.CogGraph.mu.RLock()
+	defer ar.CogGraph.mu.RUnlock()
+
+	// Try exact match first, then try individual words for compound topics
+	ids := ar.CogGraph.byLabel[lower]
+	if len(ids) == 0 {
+		// Try each word: "quantum physics" → try "quantum", "physics"
+		for _, word := range strings.Fields(lower) {
+			if len(word) > 3 {
+				if wordIDs := ar.CogGraph.byLabel[word]; len(wordIDs) > 0 {
+					ids = append(ids, wordIDs...)
+				}
 			}
 		}
-		return best
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	var facts []edgeFact
+	seen := make(map[string]bool)
+	for _, id := range ids {
+		for _, edge := range ar.CogGraph.outEdges[id] {
+			if edge.Relation == RelDescribedAs {
+				continue
+			}
+			target, ok := ar.CogGraph.nodes[edge.To]
+			if !ok {
+				continue
+			}
+			key := string(edge.Relation) + ":" + target.Label
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			facts = append(facts, edgeFact{
+				Subject:  ar.CogGraph.nodes[id].Label,
+				Relation: edge.Relation,
+				Object:   target.Label,
+			})
+			if len(facts) >= 12 {
+				return facts
+			}
+		}
+	}
+	return facts
+}
+
+// cleanTopicForLookup strips question-word prefixes from a topic so that
+// graph lookup finds "photosynthesis" from "how photosynthesis works".
+// This is NOT pattern matching for NLU — it's string cleaning for retrieval.
+func cleanTopicForLookup(topic string) string {
+	lower := strings.ToLower(strings.TrimSpace(topic))
+	// Strip leading question/explanation words
+	for _, prefix := range []string{
+		"how does ", "how do ", "how is ", "how are ",
+		"how ", "why does ", "why do ", "why is ",
+		"why ", "what is ", "what are ", "what was ",
+		"where is ", "where are ", "when was ", "when did ",
+	} {
+		if strings.HasPrefix(lower, prefix) {
+			lower = strings.TrimSpace(lower[len(prefix):])
+			break
+		}
+	}
+	// Strip trailing verbs: "photosynthesis works" → "photosynthesis"
+	for _, suffix := range []string{
+		" work", " works", " happen", " happens", " function", " functions",
+		" operate", " operates", " mean", " means",
+	} {
+		if strings.HasSuffix(lower, suffix) {
+			lower = strings.TrimSpace(lower[:len(lower)-len(suffix)])
+		}
+	}
+	if lower == "" {
+		return topic // don't return empty
 	}
 	return lower
 }
@@ -1690,12 +2096,43 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 		query = nlu.Raw
 	}
 
+	// Clean query: strip "how/why/what" prefixes that prevent graph matching.
+	// "how photosynthesis works" → "photosynthesis"
+	// "what is quantum physics" → "quantum physics"
+	query = cleanTopicForLookup(query)
+
 	// On-demand wiki loading: if the topic isn't in the graph, check the wiki index
 	if ar.Packages != nil {
 		if loaded := ar.Packages.LookupWiki(query); loaded > 0 {
 			// Re-seed the Composer so it sees newly loaded graph facts
 			if ar.Composer != nil {
 				ar.Composer.Graph = ar.CogGraph
+			}
+		}
+	}
+
+	// NLG Engine: generate flowing prose from graph facts.
+	// This is the primary knowledge response path — real language generation,
+	// not template filling.
+	if ar.NLG != nil && ar.CogGraph != nil {
+		facts := ar.gatherFactsForNLG(query)
+		if len(facts) >= 2 {
+			var prose string
+			if nlu.Intent == "explain" || nlu.Intent == "question" {
+				prose = ar.NLG.RealizeExplanation(query, facts)
+			} else {
+				prose = ar.NLG.Realize(query, facts)
+			}
+			if prose != "" && len(strings.Fields(prose)) >= 10 {
+				// Supplement with Wikipedia description if available
+				desc := ar.CogGraph.LookupDescription(query)
+				if len(desc) >= 40 {
+					prose = desc + "\n\n" + prose
+				}
+				return &ActionResult{
+					DirectResponse: prose,
+					Source:         "nlg_engine",
+				}
 			}
 		}
 	}
@@ -1850,6 +2287,42 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 
 	// Fallback: individual engines (when pipeline not wired)
 
+	// Deep retrieval: when surface knowledge lookup returned nothing,
+	// try query rewriting + two-tier retrieval for a deeper search.
+	if ar.QueryRewrite != nil && ar.Retriever != nil {
+		decomposed := ar.QueryRewrite.Decompose(query)
+		var allResults []RetrievalResult
+		if decomposed.IsComplex {
+			// Complex query — retrieve for each sub-query
+			for _, sq := range decomposed.SubQueries {
+				results := ar.Retriever.Retrieve(sq.Rewritten, 3)
+				allResults = append(allResults, results...)
+			}
+		} else {
+			rewritten := ar.QueryRewrite.RewriteForRetrieval(query)
+			allResults = ar.Retriever.Retrieve(rewritten, 5)
+		}
+		if len(allResults) > 0 {
+			var parts []string
+			seen := make(map[string]bool)
+			for _, r := range allResults {
+				if r.Score > 0.2 && !seen[r.Text] {
+					seen[r.Text] = true
+					parts = append(parts, r.Text)
+				}
+			}
+			if len(parts) > 3 {
+				parts = parts[:3]
+			}
+			if len(parts) > 0 {
+				return &ActionResult{
+					DirectResponse: strings.Join(parts, " "),
+					Source:         "deep_retrieval",
+				}
+			}
+		}
+	}
+
 	// Try multi-hop reasoning
 	if ar.Reasoner != nil && ar.CogGraph != nil && ar.CogGraph.NodeCount() > 0 {
 		chain := ar.Reasoner.Reason(query)
@@ -1877,6 +2350,21 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 				return &ActionResult{
 					DirectResponse: result.Text,
 					Source:         "thinking:" + result.Frame,
+				}
+			}
+		}
+	}
+
+	// Innovation: Knowledge Synthesis — when direct knowledge is sparse,
+	// reason from adjacent knowledge instead of saying "I don't know."
+	if ar.Synthesizer != nil && ar.Synthesizer.ShouldSynthesize(query, 0) {
+		synthResult := ar.Synthesizer.Synthesize(query)
+		if synthResult != nil && len(synthResult.Synthesized) > 0 {
+			formatted := ar.Synthesizer.FormatSynthesis(synthResult)
+			if formatted != "" {
+				return &ActionResult{
+					DirectResponse: formatted,
+					Source:         "knowledge_synthesis",
 				}
 			}
 		}
@@ -3531,6 +4019,21 @@ func isEmotionalStatement(input string) bool {
 	}
 	if !isPersonal {
 		return false
+	}
+	// Decision-making, coaching, and planning language should NOT be treated
+	// as emotional statements — they are substantive queries.
+	decisionWords := []string{
+		"decide", "torn between", "choosing between", "should i", "help me decide",
+		"career", "business", "start my own", "change careers", "switching to",
+		"improve", "get better", "learn to", "want to change", "planning",
+		"strategy", "how do i", "what should", "figure out",
+		"compare", "difference", "versus", "pros and cons",
+		"stuck", "don't know where to start", "need guidance",
+	}
+	for _, d := range decisionWords {
+		if strings.Contains(lower, d) {
+			return false
+		}
 	}
 	// Must contain an emotional signal (not a question or command).
 	if strings.HasSuffix(lower, "?") {
