@@ -261,6 +261,32 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 
 	result := ar.dispatch(nlu, conv)
 
+	// When knowledge is empty and we'd produce filler, try Socratic instead.
+	// This is the "I know that I know nothing" fallback — ask questions
+	// rather than generating generic filler text.
+	if (result == nil || result.DirectResponse == "" || isLowInformationConversational(result.DirectResponse)) &&
+		!taskPinned && ar.Socratic != nil {
+		mode := ar.Socratic.DetectMode(nlu.Raw, ar.ConvState)
+		if mode == SocraticNone {
+			// No Socratic mode detected — try generic exploration
+			mode = SocraticExplore
+		}
+		resp := ar.Socratic.Generate(nlu.Raw, mode, ar.ConvState)
+		if resp != nil && len(resp.Questions) > 0 {
+			var parts []string
+			if resp.Framing != "" {
+				parts = append(parts, resp.Framing)
+			}
+			for _, q := range resp.Questions {
+				parts = append(parts, q.Text)
+			}
+			result = &ActionResult{
+				DirectResponse: strings.Join(parts, "\n\n"),
+				Source:         "socratic_fallback",
+			}
+		}
+	}
+
 	// Cognitive enrichment: after generating a response, check for
 	// involuntary memory triggers and associative sparks.
 	if result != nil && result.DirectResponse != "" {
@@ -691,6 +717,21 @@ func (ar *ActionRouter) handleRespond(nlu *NLUResult) *ActionResult {
 								DirectResponse: result.Text,
 								Source:         "followup_resolved:" + result.Frame,
 							}
+						}
+					}
+				}
+
+				// Fallback: try knowledge lookup with the resolved query
+				if ar.CogGraph != nil {
+					resolvedNLU := &NLUResult{
+						Raw:      resolved.ResolvedQuery,
+						Intent:   "explain",
+						Action:   "lookup_knowledge",
+						Entities: map[string]string{"topic": resolved.ResolvedQuery},
+					}
+					if result := ar.handleLookupKnowledge(resolvedNLU); result != nil && result.DirectResponse != "" {
+						if !isLowInformationConversational(result.DirectResponse) {
+							return result
 						}
 					}
 				}
