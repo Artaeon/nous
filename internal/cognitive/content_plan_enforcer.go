@@ -127,7 +127,7 @@ func EnforceContentPlan(plan *ContentPlan, template *PlanTemplate, topic string)
 	if plan.Thesis != "" {
 		ep.Thesis = plan.Thesis
 	} else if topic != "" {
-		ep.Thesis = fmt.Sprintf("%s is best understood by examining its core properties.", capitalizeFirst(topic))
+		ep.Thesis = capitalizeFirst(topic) + "."
 	}
 
 	// Build enforced claims with evidence tracking
@@ -329,17 +329,19 @@ func formatEvidence(ev edgeFact) string {
 	}
 }
 
-// generateFillerClaim produces a generic placeholder claim when the plan is thin.
+// generateFillerClaim produces a minimal placeholder claim when the plan is
+// thin. Each pattern references the topic directly without generic filler.
 func generateFillerClaim(topic string, index int) string {
+	t := capitalizeFirst(topic)
 	patterns := []string{
-		"%s has notable characteristics that distinguish it from related concepts.",
-		"%s plays a role in its broader domain that merits examination.",
-		"The practical applications of %s reveal its significance.",
-		"Understanding %s requires considering its historical context.",
-		"The relationship between %s and related fields provides useful perspective.",
+		t + " has several distinctive properties.",
+		t + " serves a specific role in its domain.",
+		t + " has practical applications.",
+		t + " has a notable history.",
+		t + " connects to related fields.",
 	}
 	idx := index % len(patterns)
-	return fmt.Sprintf(patterns[idx], capitalizeFirst(topic))
+	return patterns[idx]
 }
 
 // shortenSentence truncates a sentence at the first clause boundary if it's long.

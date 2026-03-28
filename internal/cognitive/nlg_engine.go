@@ -347,10 +347,16 @@ func (e *NLGEngine) fuseOrigin(subject string, facts []edgeFact) string {
 			b.WriteString(joinCoordinated(dates))
 		}
 
-		// Close as a complete sentence with subject reference
+		// Close with a continuation that references the actual origin.
 		b.WriteString(", ")
 		b.WriteString(subject)
-		b.WriteString(" has since grown in scope and influence.")
+		if hasDate && hasAgent {
+			b.WriteString(" has continued to develop since then.")
+		} else if hasDate {
+			b.WriteString(" has continued to develop since " + dates[0] + ".")
+		} else {
+			b.WriteString(" continues to build on that foundation.")
+		}
 	}
 
 	return b.String()
@@ -372,11 +378,15 @@ func (e *NLGEngine) fuseProperties(subject string, facts []edgeFact) string {
 
 	var b strings.Builder
 	b.WriteString(nlgCapFirst(subject))
-	if len(objects) == 1 {
+	switch len(objects) {
+	case 1:
 		b.WriteString(" features ")
 		b.WriteString(objects[0])
-	} else {
-		b.WriteString(" features ")
+	case 2:
+		b.WriteString(" has ")
+		b.WriteString(joinCoordinated(objects))
+	default:
+		b.WriteString(" includes ")
 		b.WriteString(joinCoordinated(objects))
 	}
 	b.WriteString(".")
@@ -396,16 +406,17 @@ func (e *NLGEngine) fusePropertiesContinuation(pronoun string, facts []edgeFact)
 		objects = append(objects, strings.TrimSpace(f.Object))
 	}
 
-	possessive := possessiveFor(pronoun)
-
 	var b strings.Builder
-	if len(objects) == 1 {
-		b.WriteString(nlgCapFirst(pronoun))
-		b.WriteString(" is known for ")
+	b.WriteString(nlgCapFirst(pronoun))
+	switch len(objects) {
+	case 1:
+		b.WriteString(" has ")
 		b.WriteString(objects[0])
-	} else {
-		b.WriteString(nlgCapFirst(possessive))
-		b.WriteString(" key characteristics include ")
+	case 2:
+		b.WriteString(" has ")
+		b.WriteString(joinCoordinated(objects))
+	default:
+		b.WriteString(" includes ")
 		b.WriteString(joinCoordinated(objects))
 	}
 	b.WriteString(".")
@@ -426,7 +437,14 @@ func (e *NLGEngine) fuseUsageContinuation(pronoun string, facts []edgeFact) stri
 
 	var b strings.Builder
 	b.WriteString(nlgCapFirst(pronoun))
-	b.WriteString(" finds practical application in ")
+	switch len(objects) {
+	case 1:
+		b.WriteString(" is used for ")
+	case 2:
+		b.WriteString(" is used for ")
+	default:
+		b.WriteString(" is applied in ")
+	}
 	b.WriteString(joinCoordinated(objects))
 	b.WriteString(".")
 	return b.String()
@@ -474,23 +492,23 @@ func (e *NLGEngine) buildRelationClauseContinuation(pronoun string, rel RelType,
 	switch rel {
 	case RelRelatedTo:
 		b.WriteString(pro)
-		b.WriteString(" is closely related to ")
+		b.WriteString(" relates to ")
 		b.WriteString(list)
 	case RelPartOf:
 		b.WriteString(pro)
-		b.WriteString(" forms part of ")
+		b.WriteString(" is part of ")
 		b.WriteString(list)
 	case RelSimilarTo:
 		b.WriteString(pro)
-		b.WriteString(" bears similarity to ")
+		b.WriteString(" is similar to ")
 		b.WriteString(list)
 	case RelOppositeOf:
 		b.WriteString(pro)
-		b.WriteString(" stands in contrast to ")
+		b.WriteString(" contrasts with ")
 		b.WriteString(list)
 	case RelCauses:
 		b.WriteString(pro)
-		b.WriteString(" contributes to ")
+		b.WriteString(" leads to ")
 		b.WriteString(list)
 	case RelFollows:
 		b.WriteString(pro)
@@ -498,7 +516,7 @@ func (e *NLGEngine) buildRelationClauseContinuation(pronoun string, rel RelType,
 		b.WriteString(list)
 	case RelInfluencedBy:
 		b.WriteString(pro)
-		b.WriteString(" draws influence from ")
+		b.WriteString(" is influenced by ")
 		b.WriteString(list)
 	case RelDerivedFrom:
 		b.WriteString(pro)
@@ -506,7 +524,7 @@ func (e *NLGEngine) buildRelationClauseContinuation(pronoun string, rel RelType,
 		b.WriteString(list)
 	default:
 		b.WriteString(pro)
-		b.WriteString(" connects to ")
+		b.WriteString(" is connected to ")
 		b.WriteString(list)
 	}
 	b.WriteString(".")
@@ -529,7 +547,14 @@ func (e *NLGEngine) fuseUsage(subject string, facts []edgeFact) string {
 
 	var b strings.Builder
 	b.WriteString(nlgCapFirst(subject))
-	b.WriteString(" is widely used for ")
+	switch len(objects) {
+	case 1:
+		b.WriteString(" is used for ")
+	case 2:
+		b.WriteString(" is used for ")
+	default:
+		b.WriteString(" is applied in ")
+	}
 	b.WriteString(joinCoordinated(objects))
 	b.WriteString(".")
 	return b.String()
@@ -577,23 +602,23 @@ func (e *NLGEngine) buildRelationClause(subject string, rel RelType, objects []s
 	switch rel {
 	case RelRelatedTo:
 		b.WriteString(sub)
-		b.WriteString(" is closely related to ")
+		b.WriteString(" relates to ")
 		b.WriteString(list)
 	case RelPartOf:
 		b.WriteString(sub)
-		b.WriteString(" forms part of ")
+		b.WriteString(" is part of ")
 		b.WriteString(list)
 	case RelSimilarTo:
 		b.WriteString(sub)
-		b.WriteString(" bears similarity to ")
+		b.WriteString(" is similar to ")
 		b.WriteString(list)
 	case RelOppositeOf:
 		b.WriteString(sub)
-		b.WriteString(" stands in contrast to ")
+		b.WriteString(" contrasts with ")
 		b.WriteString(list)
 	case RelCauses:
 		b.WriteString(sub)
-		b.WriteString(" contributes to ")
+		b.WriteString(" leads to ")
 		b.WriteString(list)
 	case RelFollows:
 		b.WriteString(sub)
@@ -601,7 +626,7 @@ func (e *NLGEngine) buildRelationClause(subject string, rel RelType, objects []s
 		b.WriteString(list)
 	case RelInfluencedBy:
 		b.WriteString(sub)
-		b.WriteString(" draws influence from ")
+		b.WriteString(" is influenced by ")
 		b.WriteString(list)
 	case RelDerivedFrom:
 		b.WriteString(sub)
@@ -609,7 +634,7 @@ func (e *NLGEngine) buildRelationClause(subject string, rel RelType, objects []s
 		b.WriteString(list)
 	default:
 		b.WriteString(sub)
-		b.WriteString(" connects to ")
+		b.WriteString(" is connected to ")
 		b.WriteString(list)
 	}
 	b.WriteString(".")
@@ -645,16 +670,17 @@ func (e *NLGEngine) fuseGeneric(subject string, facts []edgeFact) string {
 		return ""
 	}
 
-	var sentences []string
+	// Aggregate all objects into a single sentence referencing the content.
+	objects := make([]string, 0, len(facts))
 	for _, f := range facts {
-		var b strings.Builder
-		b.WriteString(nlgCapFirst(subject))
-		b.WriteString(" is associated with ")
-		b.WriteString(strings.TrimSpace(f.Object))
-		b.WriteString(".")
-		sentences = append(sentences, b.String())
+		objects = append(objects, strings.TrimSpace(f.Object))
 	}
-	return strings.Join(sentences, " ")
+	var b strings.Builder
+	b.WriteString(nlgCapFirst(subject))
+	b.WriteString(" relates to ")
+	b.WriteString(joinCoordinated(objects))
+	b.WriteString(".")
+	return b.String()
 }
 
 // -----------------------------------------------------------------------
@@ -920,15 +946,14 @@ func (e *NLGEngine) RealizeComparison(a, b string, factsA, factsB []edgeFact) st
 		sections = append(sections, b2.String())
 	}
 
-	// Section 3: Differences
+	// Section 3: Differences — reference what each uniquely has.
 	diffA, diffB := e.findDifferences(a, b, factsA, factsB)
 	if len(diffA) > 0 || len(diffB) > 0 {
 		var diffParts []string
 		if len(diffA) > 0 {
 			var d strings.Builder
-			d.WriteString("Where ")
-			d.WriteString(a)
-			d.WriteString(" stands out is in ")
+			d.WriteString(nlgCapFirst(a))
+			d.WriteString(" uniquely offers ")
 			d.WriteString(joinCoordinated(diffA))
 			d.WriteString(".")
 			diffParts = append(diffParts, d.String())
@@ -936,7 +961,7 @@ func (e *NLGEngine) RealizeComparison(a, b string, factsA, factsB []edgeFact) st
 		if len(diffB) > 0 {
 			var d strings.Builder
 			d.WriteString(nlgCapFirst(b))
-			d.WriteString(", on the other hand, distinguishes itself through ")
+			d.WriteString(" uniquely offers ")
 			d.WriteString(joinCoordinated(diffB))
 			d.WriteString(".")
 			diffParts = append(diffParts, d.String())
@@ -1107,7 +1132,8 @@ func (e *NLGEngine) RealizeExplanation(topic string, facts []edgeFact) string {
 		}
 	}
 
-	// Mechanism section — how/why it works
+	// Mechanism section — how/why it works.
+	// No generic connector; the fused sentences flow from the definition.
 	if len(mechanism) > 0 {
 		groups := e.groupFacts(mechanism)
 		groups = e.orderGroups(groups)
@@ -1119,19 +1145,12 @@ func (e *NLGEngine) RealizeExplanation(topic string, facts []edgeFact) string {
 			}
 		}
 		if len(mechParts) > 0 {
-			connector := "To understand how this works,"
-			if len(definition) == 0 {
-				connector = ""
-			}
-			mechText := strings.Join(mechParts, " ")
-			if connector != "" {
-				mechText = connector + " " + nlgLowerFirst(mechText)
-			}
-			sections = append(sections, mechText)
+			sections = append(sections, strings.Join(mechParts, " "))
 		}
 	}
 
-	// Examples section — practical manifestations
+	// Examples section — practical manifestations.
+	// No generic connector; the content speaks for itself.
 	if len(examples) > 0 {
 		groups := e.groupFacts(examples)
 		groups = e.orderGroups(groups)
@@ -1143,34 +1162,32 @@ func (e *NLGEngine) RealizeExplanation(topic string, facts []edgeFact) string {
 			}
 		}
 		if len(exParts) > 0 {
-			connector := "In practical terms,"
-			if len(definition) == 0 && len(mechanism) == 0 {
-				connector = ""
-			}
-			exText := strings.Join(exParts, " ")
-			if connector != "" {
-				exText = connector + " " + nlgLowerFirst(exText)
-			}
-			sections = append(sections, exText)
+			sections = append(sections, strings.Join(exParts, " "))
 		}
 	}
 
-	// Caveats section — contradictions and opposites
+	// Caveats section — contradictions and opposites.
+	// Reference the actual contrasting concept instead of generic filler.
 	if len(caveats) > 0 {
 		var caveatParts []string
 		for _, f := range caveats {
+			obj := strings.TrimSpace(f.Object)
 			var cb strings.Builder
 			switch f.Relation {
 			case RelContradicts:
-				cb.WriteString("It is worth noting that this stands in tension with ")
-				cb.WriteString(strings.TrimSpace(f.Object))
+				cb.WriteString(nlgCapFirst(topic))
+				cb.WriteString(" contrasts with ")
+				cb.WriteString(obj)
 			case RelOppositeOf:
-				cb.WriteString("This should be distinguished from ")
-				cb.WriteString(strings.TrimSpace(f.Object))
-				cb.WriteString(", which represents a contrasting perspective")
+				cb.WriteString("Unlike ")
+				cb.WriteString(obj)
+				cb.WriteString(", ")
+				cb.WriteString(topic)
+				cb.WriteString(" takes a different approach")
 			default:
-				cb.WriteString("A related consideration is ")
-				cb.WriteString(strings.TrimSpace(f.Object))
+				cb.WriteString(nlgCapFirst(obj))
+				cb.WriteString(" also relates to ")
+				cb.WriteString(topic)
 			}
 			cb.WriteString(".")
 			caveatParts = append(caveatParts, cb.String())
@@ -1338,20 +1355,6 @@ func inferCategoryFromString(category string) string {
 		return ""
 	}
 	return parts[len(parts)-1]
-}
-
-// possessiveFor returns the possessive form of a pronoun.
-func possessiveFor(pronoun string) string {
-	switch strings.ToLower(pronoun) {
-	case "he":
-		return "his"
-	case "she":
-		return "her"
-	case "they":
-		return "their"
-	default:
-		return "its"
-	}
 }
 
 // isPlural returns true if a category string suggests a plural/group entity.

@@ -239,8 +239,8 @@ func (te *ThinkingEngine) realizePlanVariant(plan *ContentPlan, frame *Frame, st
 		parts = append(parts, plan.Counterpoint)
 	}
 
-	if len(claims) > 0 {
-		parts = append(parts, capitalizeFirst(conclusionCue)+", the strongest interpretation is to focus on the highest-impact facts first.")
+	if len(claims) > 0 && plan.Thesis != "" {
+		parts = append(parts, capitalizeFirst(conclusionCue)+", these points define what matters most about "+strings.ToLower(strings.TrimSuffix(strings.TrimSpace(plan.Thesis), "."))+".")
 	}
 
 	if frame != nil && frame.Name == "email" {

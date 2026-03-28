@@ -1373,32 +1373,32 @@ func (g *GenerativeEngine) composeOpener(topic string) string {
 	return capitalizeFirst(topic) + " is a topic with several notable aspects."
 }
 
-// composeCloser generates a neutral topic conclusion.
+// composeCloser generates a topic conclusion referencing the subject.
 func (g *GenerativeEngine) composeCloser(topic string) string {
-	return "Together, these facts form a comprehensive picture of " + topic + "."
+	return "These details capture the essentials of " + topic + "."
 }
 
 
-// composeHook generates a factual article introduction.
+// composeHook generates a factual article introduction from the topic itself.
 func (g *GenerativeEngine) composeHook(topic string) string {
-	return capitalizeFirst(topic) + " is a subject with several notable characteristics."
+	return capitalizeFirst(topic) + "."
 }
 
-// composeElaboration generates a neutral bridge sentence.
+// composeElaboration generates a bridge sentence referencing the topic.
 func (g *GenerativeEngine) composeElaboration(topic string) string {
-	return "The following details provide a closer look at " + topic + "."
+	return capitalizeFirst(topic) + " has several key aspects."
 }
 
-// composeTransition generates a neutral section transition.
+// composeTransition generates a section transition from the topic name.
 func (g *GenerativeEngine) composeTransition(topic string) string {
 	return g.pick([]string{
-		"Additionally, " + topic + " has other notable aspects.",
-		"There is more to " + topic + " worth noting.",
-		"Another aspect of " + topic + " is also significant.",
+		capitalizeFirst(topic) + " also has other aspects.",
+		"Beyond this, " + topic + " has further dimensions.",
+		capitalizeFirst(topic) + " extends into other areas.",
 	})
 }
 
-// composeInsight generates a neutral section-closing sentence.
+// composeInsight generates a section-closing sentence from the theme.
 func (g *GenerativeEngine) composeInsight(topic string, theme string) string {
 	themeNoun := "details"
 	switch theme {
@@ -1413,7 +1413,7 @@ func (g *GenerativeEngine) composeInsight(topic string, theme string) string {
 	case "The Bigger Picture":
 		themeNoun = "connections"
 	}
-	return "These " + themeNoun + " are central to understanding " + topic + "."
+	return "These " + themeNoun + " define " + topic + "."
 }
 
 // -----------------------------------------------------------------------

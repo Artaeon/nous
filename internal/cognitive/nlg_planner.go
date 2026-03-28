@@ -99,7 +99,14 @@ func (te *ThinkingEngine) planThesis(topic string) string {
 		}
 	}
 
-	return fmt.Sprintf("%s is best understood by looking at its core properties and practical effects.", capitalizeFirst(topic))
+	// Fallback: realize whatever facts we have directly instead of generic filler.
+	if len(facts) > 0 {
+		eng := NewNLGEngine()
+		if text := eng.Realize(topic, facts); text != "" {
+			return text
+		}
+	}
+	return capitalizeFirst(topic) + "."
 }
 
 func (te *ThinkingEngine) factToClaim(f edgeFact) string {
