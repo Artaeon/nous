@@ -989,27 +989,45 @@ func isQualityFact(f ExtractedFact) bool {
 	// Starts with a preposition or conjunction — fragment
 	badStarts := []string{"and ", "or ", "the ", "a ", "an ", "in ", "on ", "at ", "to ", "for ", "with ", "from ", "by ", "as "}
 	for _, bs := range badStarts {
-		if strings.HasPrefix(lower, bs) && len(obj) < 30 {
+		if strings.HasPrefix(lower, bs) && len(obj) < 40 {
 			return false
 		}
 	}
 
-	// Ends with a preposition — incomplete clause
-	badEnds := []string{" by", " in", " on", " at", " to", " for", " with", " from", " as", " and", " or", " the", " a"}
+	// Ends with a preposition, conjunction, or article — incomplete clause
+	badEnds := []string{" by", " in", " on", " at", " to", " for", " with", " from", " as",
+		" and", " or", " the", " a", " an", " of", " is", " are", " was", " were",
+		" that", " which", " who", " whom", " whose", " where", " when",
+		" into", " onto", " upon", " about", " through", " between", " among"}
 	for _, be := range badEnds {
 		if strings.HasSuffix(lower, be) {
 			return false
 		}
 	}
 
-	// Contains sentence-breaking markers in the middle — extraction went too far
+	// Contains sentence-breaking markers — extraction went too far
 	if strings.Contains(obj, ". ") && f.Relation != RelDescribedAs {
 		return false
 	}
 
-	// Object is too long for non-description relations (likely captured a whole clause)
-	if f.Relation != RelDescribedAs && len(obj) > 100 {
+	// Object is too long for non-description relations
+	if f.Relation != RelDescribedAs && len(obj) > 80 {
 		return false
+	}
+
+	// Object looks like a truncated word (ends with consonant cluster that's not a real suffix)
+	words := strings.Fields(obj)
+	if len(words) > 0 {
+		last := words[len(words)-1]
+		if len(last) > 3 {
+			// Check if word is truncated: common truncation patterns
+			truncPatterns := []string{"progra", "peop", "intelligenc", "phys", "administr", "recogn"}
+			for _, tp := range truncPatterns {
+				if strings.HasSuffix(strings.ToLower(last), tp) {
+					return false
+				}
+			}
+		}
 	}
 
 	// Subject contains verbs or is a sentence fragment

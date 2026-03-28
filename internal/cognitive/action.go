@@ -1440,15 +1440,38 @@ func (ar *ActionRouter) gatherFactsForNLG(topic string) []edgeFact {
 			}
 			obj := target.Label
 			// Quality filter: skip facts with fragment objects
-			if len(obj) < 3 || strings.HasSuffix(strings.ToLower(obj), " by") ||
-				strings.HasSuffix(strings.ToLower(obj), " in") ||
-				strings.HasSuffix(strings.ToLower(obj), " at") ||
-				strings.HasSuffix(strings.ToLower(obj), " and") ||
-				strings.Contains(obj, ". ") {
+			objLower := strings.ToLower(obj)
+			if len(obj) < 3 || len(obj) > 80 ||
+				strings.HasSuffix(objLower, " by") || strings.HasSuffix(objLower, " in") ||
+				strings.HasSuffix(objLower, " at") || strings.HasSuffix(objLower, " and") ||
+				strings.HasSuffix(objLower, " or") || strings.HasSuffix(objLower, " the") ||
+				strings.HasSuffix(objLower, " a") || strings.HasSuffix(objLower, " of") ||
+				strings.HasSuffix(objLower, " to") || strings.HasSuffix(objLower, " for") ||
+				strings.Contains(obj, ". ") ||
+				strings.HasSuffix(objLower, "progra") || strings.HasSuffix(objLower, "peop") ||
+				strings.HasSuffix(objLower, "intelligenc") {
 				continue
 			}
 
-			key := string(edge.Relation) + ":" + obj
+			// Deduplicate: skip if we already have a fact with the same
+			// relation where one object contains the other
+			relKey := string(edge.Relation)
+			duplicate := false
+			for _, existing := range facts {
+				if string(existing.Relation) == relKey {
+					existLower := strings.ToLower(existing.Object)
+					newLower := strings.ToLower(obj)
+					if strings.Contains(existLower, newLower) || strings.Contains(newLower, existLower) {
+						duplicate = true
+						break
+					}
+				}
+			}
+			if duplicate {
+				continue
+			}
+
+			key := relKey + ":" + obj
 			if seen[key] {
 				continue
 			}
