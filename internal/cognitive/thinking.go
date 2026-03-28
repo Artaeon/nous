@@ -549,11 +549,20 @@ func (te *ThinkingEngine) Think(query string, ctx *ThinkContext) *ThoughtResult 
 
 	// 6. Non-LLM semantic reranking for knowledge-heavy tasks.
 	if te.shouldUsePlanRerank(task) {
-		plan := te.BuildContentPlan(query, task, params)
-		candidates := te.BuildPlanCandidates(query, task, plan, frame, text)
-		if len(candidates) > 0 {
-			text = te.SelectBestCandidate(plan, candidates)
-			trace.WriteString(fmt.Sprintf("Plan rerank: %d candidates selected\n", len(candidates)))
+		// Try multi-pass generation first — plan→draft→verify→refine.
+		config := DefaultMultiPassConfig()
+		mpResult := te.MultiPassGenerate(query, task, params, config)
+		if mpResult != nil && mpResult.Accepted && mpResult.FinalText != "" {
+			text = mpResult.FinalText
+			trace.WriteString(fmt.Sprintf("Multi-pass: %d passes, score=%.2f\n", mpResult.TotalPasses, mpResult.FinalScore.Total))
+		} else {
+			// Fall back to single-pass plan-rerank
+			plan := te.BuildContentPlan(query, task, params)
+			candidates := te.BuildPlanCandidates(query, task, plan, frame, text)
+			if len(candidates) > 0 {
+				text = te.SelectBestCandidate(plan, candidates)
+				trace.WriteString(fmt.Sprintf("Plan rerank: %d candidates selected\n", len(candidates)))
+			}
 		}
 	}
 
@@ -840,19 +849,13 @@ func (te *ThinkingEngine) generateExplainSection(query string, params *TaskParam
 	}
 
 	switch sec.Role {
-	// Explanation frame roles
-	case "hook":
-		// Skip generic hooks — go straight to substance. If we have
-		// real knowledge, the definition section speaks for itself.
-		return ""
+	// Explanation skeleton: definition → mechanism → example → caveat → recap
 
 	case "definition":
 		content := te.generateTopicContent(topic, ToneNeutral, 4)
 		if content != "" {
 			return content
 		}
-		// Try individual keywords if compound topic failed
-		// (e.g., "quantum mechanics" → try "quantum", "mechanics")
 		for _, kw := range params.Keywords {
 			if len(kw) > 3 {
 				content = te.generateTopicContent(kw, ToneNeutral, 4)
@@ -861,8 +864,6 @@ func (te *ThinkingEngine) generateExplainSection(query string, params *TaskParam
 				}
 			}
 		}
-		// If we found related facts via keywords, they were used above.
-		// Final resort: generate an honest admission of limited knowledge.
 		essence := te.inferEssence(topic, params.Keywords)
 		if essence != "" {
 			return fmt.Sprintf("%s is fundamentally about %s.", capitalizeFirst(topic), essence)
@@ -870,9 +871,26 @@ func (te *ThinkingEngine) generateExplainSection(query string, params *TaskParam
 		return fmt.Sprintf("I don't have detailed knowledge about %s yet, but I can learn about it if you point me to a source.", topic)
 
 	case "mechanism":
-		content := te.generateTopicContent(topic, ToneNeutral, 2)
-		if content != "" {
-			return content
+		// How it works / why it matters — pull UsedFor, Has, PartOf relations
+		if te.graph != nil {
+			facts := te.gatherTopicFacts(topic)
+			var mechanisms []string
+			for _, f := range facts {
+				switch f.Relation {
+				case RelUsedFor:
+					mechanisms = append(mechanisms, fmt.Sprintf("It is used for %s.", f.Object))
+				case RelHas:
+					mechanisms = append(mechanisms, fmt.Sprintf("A key component is %s.", f.Object))
+				case RelPartOf:
+					mechanisms = append(mechanisms, fmt.Sprintf("It is part of %s.", f.Object))
+				}
+			}
+			if len(mechanisms) > 3 {
+				mechanisms = mechanisms[:3]
+			}
+			if len(mechanisms) > 0 {
+				return strings.Join(mechanisms, " ")
+			}
 		}
 		return ""
 
@@ -883,29 +901,57 @@ func (te *ThinkingEngine) generateExplainSection(query string, params *TaskParam
 				if f.Relation == RelUsedFor {
 					return fmt.Sprintf("For example, %s is used in %s.", topic, f.Object)
 				}
+				if f.Relation == RelRelatedTo {
+					return fmt.Sprintf("A concrete instance: %s is closely related to %s.", topic, f.Object)
+				}
 			}
 		}
 		return ""
 
-	case "significance":
-		// Only include if we have something specific to say
+	case "caveat":
+		// State what's uncertain, limited, or commonly misunderstood.
+		// Only emit if we actually have enough knowledge to identify gaps.
+		if te.graph != nil {
+			facts := te.gatherTopicFacts(topic)
+			if len(facts) > 0 && len(facts) < 4 {
+				return fmt.Sprintf("Note: this overview covers the basics. %s has aspects I don't have full evidence for — further reading is recommended.", capitalizeFirst(topic))
+			}
+			if len(facts) == 0 {
+				return fmt.Sprintf("I have limited knowledge about %s. The above is based on what I could find, but may be incomplete.", topic)
+			}
+		}
 		return ""
 
-	// Tutorial frame roles
+	case "recap":
+		// One-sentence synthesis
+		if te.graph != nil {
+			facts := te.gatherTopicFacts(topic)
+			if len(facts) > 0 {
+				// Build recap from the IsA relation if available
+				for _, f := range facts {
+					if f.Relation == RelIsA {
+						return fmt.Sprintf("In short, %s is %s.", topic, f.Object)
+					}
+				}
+				return fmt.Sprintf("In summary, %s is a topic with %d known attributes in the knowledge base.", topic, len(facts))
+			}
+		}
+		essence := te.inferEssence(topic, params.Keywords)
+		if essence != "" {
+			return fmt.Sprintf("In short, %s is about %s.", topic, essence)
+		}
+		return ""
+
+	// Tutorial frame roles (unchanged)
 	case "goal":
-		// Skip generic hooks — the content speaks for itself
 		return ""
-
 	case "prerequisites":
 		return ""
-
 	case "steps":
-		// Main content: pull knowledge about the topic
 		content := te.generateTopicContent(topic, ToneNeutral, 6)
 		if content != "" {
 			return content
 		}
-		// Try individual keywords for compound topics
 		for _, kw := range params.Keywords {
 			if len(kw) > 3 {
 				content = te.generateTopicContent(kw, ToneNeutral, 6)
@@ -915,10 +961,8 @@ func (te *ThinkingEngine) generateExplainSection(query string, params *TaskParam
 			}
 		}
 		return fmt.Sprintf("I don't have detailed knowledge about %s yet. Try asking me to look it up, or point me to a source I can learn from.", topic)
-
 	case "tips":
 		return ""
-
 	case "next_steps":
 		return ""
 	}
@@ -1007,42 +1051,113 @@ func (te *ThinkingEngine) generateCompareSection(params *TaskParams, sec FrameSe
 		b = "the second option"
 	}
 
-	switch sec.Role {
-	case "intro":
-		return fmt.Sprintf("Let's compare %s and %s to see how they stack up.", a, b)
+	// Gather facts for both items (used across multiple sections).
+	var factsA, factsB []edgeFact
+	if te.graph != nil {
+		factsA = te.gatherTopicFacts(a)
+		factsB = te.gatherTopicFacts(b)
+	}
 
-	case "item_a":
-		content := te.generateTopicContent(a, ToneNeutral, 2)
-		if content != "" {
-			return content
-		}
-		return fmt.Sprintf("%s has its own strengths and characteristics worth understanding.", capitalizeFirst(a))
-
-	case "item_b":
-		content := te.generateTopicContent(b, ToneNeutral, 2)
-		if content != "" {
-			return content
-		}
-		return fmt.Sprintf("%s brings a different set of qualities to the table.", capitalizeFirst(b))
-
-	case "differences":
-		// Try graph-based comparison
-		if te.graph != nil {
-			factsA := te.gatherTopicFacts(a)
-			factsB := te.gatherTopicFacts(b)
-			if len(factsA) > 0 && len(factsB) > 0 {
-				return te.composeDifferences(a, b, factsA, factsB)
+	// Derive comparison criteria from the union of relation types.
+	deriveCriteria := func() []string {
+		seen := make(map[string]bool)
+		var criteria []string
+		for _, f := range factsA {
+			rel := string(f.Relation)
+			if !seen[rel] {
+				seen[rel] = true
+				criteria = append(criteria, rel)
 			}
 		}
-		return fmt.Sprintf("The main difference comes down to their core purpose and approach. %s and %s each solve different problems in different ways.",
-			capitalizeFirst(a), capitalizeFirst(b))
+		for _, f := range factsB {
+			rel := string(f.Relation)
+			if !seen[rel] {
+				seen[rel] = true
+				criteria = append(criteria, rel)
+			}
+		}
+		return criteria
+	}
+
+	switch sec.Role {
+	case "criteria":
+		criteria := deriveCriteria()
+		if len(criteria) == 0 {
+			return fmt.Sprintf("Comparing %s and %s. I'll evaluate based on what I know about each.", a, b)
+		}
+		readable := make([]string, 0, len(criteria))
+		for _, c := range criteria {
+			readable = append(readable, criterionLabel(c))
+		}
+		if len(readable) > 5 {
+			readable = readable[:5]
+		}
+		return fmt.Sprintf("Comparing %s and %s on: %s.", a, b, strings.Join(readable, ", "))
+
+	case "item_a_evidence":
+		if len(factsA) == 0 {
+			return fmt.Sprintf("%s: no detailed evidence available.", capitalizeFirst(a))
+		}
+		var lines []string
+		for _, f := range factsA {
+			lines = append(lines, fmt.Sprintf("- %s: %s %s %s",
+				criterionLabel(string(f.Relation)), a, relationVerb(string(f.Relation)), f.Object))
+		}
+		if len(lines) > 5 {
+			lines = lines[:5]
+		}
+		return capitalizeFirst(a) + ":\n" + strings.Join(lines, "\n")
+
+	case "item_b_evidence":
+		if len(factsB) == 0 {
+			return fmt.Sprintf("%s: no detailed evidence available.", capitalizeFirst(b))
+		}
+		var lines []string
+		for _, f := range factsB {
+			lines = append(lines, fmt.Sprintf("- %s: %s %s %s",
+				criterionLabel(string(f.Relation)), b, relationVerb(string(f.Relation)), f.Object))
+		}
+		if len(lines) > 5 {
+			lines = lines[:5]
+		}
+		return capitalizeFirst(b) + ":\n" + strings.Join(lines, "\n")
+
+	case "tradeoffs":
+		if len(factsA) == 0 && len(factsB) == 0 {
+			return fmt.Sprintf("Without detailed evidence for either %s or %s, a direct tradeoff analysis isn't possible.", a, b)
+		}
+		return te.composeDifferences(a, b, factsA, factsB)
+
+	case "known_unknown":
+		knownA := len(factsA)
+		knownB := len(factsB)
+		var parts []string
+		if knownA > 0 {
+			parts = append(parts, fmt.Sprintf("Known about %s: %d facts.", a, knownA))
+		} else {
+			parts = append(parts, fmt.Sprintf("Unknown: I have no structured data about %s.", a))
+		}
+		if knownB > 0 {
+			parts = append(parts, fmt.Sprintf("Known about %s: %d facts.", b, knownB))
+		} else {
+			parts = append(parts, fmt.Sprintf("Unknown: I have no structured data about %s.", b))
+		}
+		if knownA == 0 || knownB == 0 {
+			parts = append(parts, "Next step: retrieve more information for a complete comparison.")
+		}
+		return strings.Join(parts, " ")
 
 	case "verdict":
-		return te.pick([]string{
-			fmt.Sprintf("Neither %s nor %s is universally better — it depends on your needs.", a, b),
-			fmt.Sprintf("The best choice between %s and %s depends on what you're optimizing for.", a, b),
-			"Consider what matters most to you, and the right choice will become clear.",
-		})
+		if len(factsA) == 0 && len(factsB) == 0 {
+			return fmt.Sprintf("I don't have enough evidence to recommend between %s and %s. More information is needed.", a, b)
+		}
+		if len(factsA) > 0 && len(factsB) == 0 {
+			return fmt.Sprintf("Based on available evidence, %s is better documented. I'd need more data on %s to make a fair comparison.", a, b)
+		}
+		if len(factsA) == 0 && len(factsB) > 0 {
+			return fmt.Sprintf("Based on available evidence, %s is better documented. I'd need more data on %s to make a fair comparison.", b, a)
+		}
+		return fmt.Sprintf("Both %s and %s have documented strengths. The best choice depends on which criteria matter most to your use case.", a, b)
 	}
 	return ""
 }
@@ -1080,6 +1195,30 @@ func (te *ThinkingEngine) composeDifferences(a, b string, factsA, factsB []edgeF
 	}
 
 	return strings.Join(diffs, ". ") + "."
+}
+
+// criterionLabel maps a relation type to a human-readable comparison criterion.
+func criterionLabel(rel string) string {
+	switch RelType(rel) {
+	case RelIsA:
+		return "type"
+	case RelUsedFor:
+		return "use case"
+	case RelHas:
+		return "features"
+	case RelPartOf:
+		return "category"
+	case RelCreatedBy:
+		return "creator"
+	case RelFoundedIn:
+		return "founding"
+	case RelLocatedIn:
+		return "location"
+	case RelRelatedTo:
+		return "related concepts"
+	default:
+		return strings.ReplaceAll(rel, "_", " ")
+	}
 }
 
 // -----------------------------------------------------------------------

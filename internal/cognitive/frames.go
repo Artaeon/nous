@@ -93,22 +93,23 @@ var brainstormFrame = Frame{
 var explanationFrame = Frame{
 	Name: "explanation",
 	Sections: []FrameSection{
-		{Type: SecOpening, Role: "hook", Goal: "grab attention and frame topic", Required: true},
 		{Type: SecBody, Role: "definition", Goal: "define the concept clearly", Required: true},
-		{Type: SecBody, Role: "mechanism", Goal: "explain how it works", Required: false},
+		{Type: SecBody, Role: "mechanism", Goal: "explain how it works or why it matters", Required: false},
 		{Type: SecBody, Role: "example", Goal: "give a concrete example", Required: false},
-		{Type: SecClosing, Role: "significance", Goal: "explain why it matters", Required: true},
+		{Type: SecBody, Role: "caveat", Goal: "state limitations, edge cases, or common misconceptions", Required: false},
+		{Type: SecClosing, Role: "recap", Goal: "one-sentence synthesis of the key takeaway", Required: true},
 	},
 }
 
 var comparisonFrame = Frame{
 	Name: "comparison",
 	Sections: []FrameSection{
-		{Type: SecOpening, Role: "intro", Goal: "frame what we're comparing", Required: true},
-		{Type: SecBody, Role: "item_a", Goal: "describe first item", Required: true},
-		{Type: SecBody, Role: "item_b", Goal: "describe second item", Required: true},
-		{Type: SecBody, Role: "differences", Goal: "highlight key differences", Required: true},
-		{Type: SecSynthesis, Role: "verdict", Goal: "summarize or recommend", Required: false},
+		{Type: SecBody, Role: "criteria", Goal: "state the comparison criteria being evaluated", Required: true},
+		{Type: SecBody, Role: "item_a_evidence", Goal: "evidence for first item per criterion", Required: true},
+		{Type: SecBody, Role: "item_b_evidence", Goal: "evidence for second item per criterion", Required: true},
+		{Type: SecBody, Role: "tradeoffs", Goal: "direct tradeoff analysis per criterion", Required: true},
+		{Type: SecBody, Role: "known_unknown", Goal: "what is known vs unknown vs needs more retrieval", Required: false},
+		{Type: SecSynthesis, Role: "verdict", Goal: "summarize — which is better for which use case", Required: true},
 	},
 }
 
