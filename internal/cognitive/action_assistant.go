@@ -625,7 +625,11 @@ func (ar *ActionRouter) handleGenericTool(nlu *NLUResult, toolName string) *Acti
 	timeout := genericToolTimeout(toolName)
 	result, err := executeToolWithTimeout(tool.Execute, args, timeout)
 	if err != nil {
-		return &ActionResult{DirectResponse: fmt.Sprintf("%s error: %v", toolName, err), Source: toolName}
+		// Never surface raw tool errors to the user.
+		return &ActionResult{
+			DirectResponse: fmt.Sprintf("I tried to use %s for that, but I need more specific information. Could you rephrase what you'd like to do?", toolName),
+			Source:         toolName,
+		}
 	}
 	return &ActionResult{DirectResponse: result, Source: toolName}
 }
