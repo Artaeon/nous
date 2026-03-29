@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/artaeon/nous/internal/agent"
 	"github.com/artaeon/nous/internal/assistant"
 	"github.com/artaeon/nous/internal/blackboard"
 	"github.com/artaeon/nous/internal/cognitive"
@@ -827,6 +828,16 @@ func main() {
 		}
 	}()
 
+	// Autonomous Agent — goal-driven execution over extended time periods
+	agentConfig := agent.DefaultConfig()
+	agentConfig.Workspace = filepath.Join(nousDir, "agent")
+	autonomousAgent := agent.NewAgent(toolReg, agentConfig)
+	autonomousAgent.SetReportCallback(func(msg string) {
+		fmt.Printf("\n  %s[agent]%s %s\n", cognitive.ColorCyan, cognitive.ColorReset, msg)
+	})
+	agentScheduler := agent.NewScheduler(autonomousAgent)
+	agentScheduler.Start()
+
 	// Proactive Engine — surfaces suggestions during idle time (non-blocking)
 	proactive := cognitive.NewProactiveEngine(board)
 
@@ -974,6 +985,7 @@ func main() {
 		srv.SetPersonalResp(personalResp)
 		srv.SetComposer(actions.Composer)
 		srv.SetDataSources(wm, ltm, episodic, toolReg, collector, sessionStore)
+		srv.SetAgent(autonomousAgent)
 		if err := srv.Start(version, *model, len(toolList)); err != nil {
 			fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 			os.Exit(1)
@@ -1053,7 +1065,7 @@ func main() {
 				}
 				continue
 			}
-			if handleCommand(input, board, model, toolReg, wm, ltm, projMem, undoStack, sessionStore, currentSession, reasoner, learner, projectInfo, episodic, collector, autoTuner, assistantStore, handManager) {
+			if handleCommand(input, board, model, toolReg, wm, ltm, projMem, undoStack, sessionStore, currentSession, reasoner, learner, projectInfo, episodic, collector, autoTuner, assistantStore, handManager, autonomousAgent, agentScheduler) {
 				continue
 			}
 		}
@@ -1167,7 +1179,7 @@ func main() {
 	}
 }
 
-func handleCommand(input string, board *blackboard.Blackboard, model *string, toolReg *tools.Registry, wm *memory.WorkingMemory, ltm *memory.LongTermMemory, projMem *memory.ProjectMemory, undoStack *memory.UndoStack, sessions *cognitive.SessionStore, current *cognitive.Session, reasoner *cognitive.Reasoner, learner *cognitive.Learner, project *cognitive.ProjectInfo, episodic *memory.EpisodicMemory, collector *training.Collector, autoTuner *training.AutoTuner, assistantStore *assistant.Store, handManager *hands.Manager) bool {
+func handleCommand(input string, board *blackboard.Blackboard, model *string, toolReg *tools.Registry, wm *memory.WorkingMemory, ltm *memory.LongTermMemory, projMem *memory.ProjectMemory, undoStack *memory.UndoStack, sessions *cognitive.SessionStore, current *cognitive.Session, reasoner *cognitive.Reasoner, learner *cognitive.Learner, project *cognitive.ProjectInfo, episodic *memory.EpisodicMemory, collector *training.Collector, autoTuner *training.AutoTuner, assistantStore *assistant.Store, handManager *hands.Manager, autonomousAgent *agent.Agent, agentScheduler *agent.Scheduler) bool {
 	parts := strings.Fields(input)
 	cmd := strings.ToLower(parts[0])
 
@@ -1411,6 +1423,113 @@ func handleCommand(input string, board *blackboard.Blackboard, model *string, to
 				}
 			default:
 				fmt.Println("  usage: /hand [run|enable|disable|status|history] <name>")
+			}
+		}
+
+	case "/agent":
+		if len(parts) < 2 {
+			status := autonomousAgent.Status()
+			if status.Running {
+				fmt.Print(status.Progress)
+			} else if status.Goal != "" {
+				fmt.Print(autonomousAgent.Report())
+			} else {
+				fmt.Println("  no active agent goal")
+				fmt.Println("  usage:")
+				fmt.Println("    /agent start <goal>     — start autonomous execution")
+				fmt.Println("    /agent status            — show progress")
+				fmt.Println("    /agent input <text>      — provide human input")
+				fmt.Println("    /agent stop              — stop execution")
+				fmt.Println("    /agent report            — show full report")
+				fmt.Println("    /agent resume            — resume from saved state")
+				fmt.Println("    /agent schedule <goal> <schedule> — schedule recurring goal")
+				fmt.Println("    /agent jobs              — list scheduled jobs")
+			}
+		} else {
+			subCmd := strings.ToLower(parts[1])
+			switch subCmd {
+			case "start":
+				if len(parts) < 3 {
+					fmt.Println("  usage: /agent start <goal description>")
+				} else {
+					goal := strings.Join(parts[2:], " ")
+					// Strip surrounding quotes if present
+					goal = strings.Trim(goal, "\"'")
+					if err := autonomousAgent.Start(goal); err != nil {
+						fmt.Printf("  %serror: %v%s\n", cognitive.ColorRed, err, cognitive.ColorReset)
+					} else {
+						fmt.Printf("  %sagent started%s — goal: %s\n", cognitive.ColorGreen, cognitive.ColorReset, goal)
+					}
+				}
+			case "status":
+				status := autonomousAgent.Status()
+				if !status.Running && status.Goal == "" {
+					fmt.Println("  agent is idle — no active goal")
+				} else {
+					fmt.Print(status.Progress)
+					if status.PausedFor != "" {
+						fmt.Printf("  %swaiting for input:%s %s\n", cognitive.ColorYellow, cognitive.ColorReset, status.PausedFor)
+					}
+				}
+			case "input":
+				if len(parts) < 3 {
+					fmt.Println("  usage: /agent input <your response>")
+				} else {
+					input := strings.Join(parts[2:], " ")
+					input = strings.Trim(input, "\"'")
+					autonomousAgent.Resume(input)
+					fmt.Printf("  %sinput sent%s\n", cognitive.ColorGreen, cognitive.ColorReset)
+				}
+			case "stop":
+				autonomousAgent.Stop()
+				fmt.Printf("  %sagent stopped%s\n", cognitive.ColorYellow, cognitive.ColorReset)
+			case "report":
+				fmt.Print(autonomousAgent.Report())
+			case "resume":
+				if err := autonomousAgent.LoadAndResume(); err != nil {
+					fmt.Printf("  %serror: %v%s\n", cognitive.ColorRed, err, cognitive.ColorReset)
+				} else {
+					fmt.Printf("  %sagent resumed%s\n", cognitive.ColorGreen, cognitive.ColorReset)
+				}
+			case "schedule":
+				if len(parts) < 4 {
+					fmt.Println("  usage: /agent schedule <goal> <schedule>")
+					fmt.Println("  schedules: \"daily 9:00\", \"hourly\", \"every 30m\", \"weekdays 8:00\"")
+				} else {
+					// Parse: everything before the last word(s) is the goal, last is schedule
+					// Use a simple heuristic: schedule keywords are at the end
+					args := strings.Join(parts[2:], " ")
+					goal, sched := splitGoalAndSchedule(args)
+					id, err := agentScheduler.AddJob(goal, sched)
+					if err != nil {
+						fmt.Printf("  %serror: %v%s\n", cognitive.ColorRed, err, cognitive.ColorReset)
+					} else {
+						fmt.Printf("  %sscheduled%s %s [%s] — %s\n", cognitive.ColorGreen, cognitive.ColorReset, id, sched, goal)
+					}
+				}
+			case "jobs":
+				jobs := agentScheduler.ListJobs()
+				if len(jobs) == 0 {
+					fmt.Println("  no scheduled jobs")
+				} else {
+					for _, j := range jobs {
+						status := "enabled"
+						if !j.Enabled {
+							status = "disabled"
+						}
+						fmt.Printf("  %-8s  %-15s  [%s]  %s\n", j.ID, j.Schedule, status, j.Goal)
+					}
+				}
+			case "rmjob":
+				if len(parts) < 3 {
+					fmt.Println("  usage: /agent rmjob <job-id>")
+				} else {
+					agentScheduler.RemoveJob(parts[2])
+					fmt.Printf("  removed %s\n", parts[2])
+				}
+			default:
+				fmt.Printf("  unknown agent command: %s\n", subCmd)
+				fmt.Println("  try: start, status, input, stop, report, resume, schedule, jobs, rmjob")
 			}
 		}
 
@@ -2145,6 +2264,28 @@ func renderRoutines(store *assistant.Store) string {
 		}
 	}
 	return cognitive.Panel("Routines", lines)
+}
+
+// splitGoalAndSchedule splits "/agent schedule <goal> <schedule>" args.
+// Schedule keywords appear at the end: "daily 9:00", "hourly", "every 30m", etc.
+func splitGoalAndSchedule(s string) (string, string) {
+	lower := strings.ToLower(s)
+	// Try to find schedule pattern at the end
+	schedPatterns := []string{
+		"daily ", "hourly", "every ", "weekdays ", "weekly ",
+	}
+	for _, pat := range schedPatterns {
+		idx := strings.LastIndex(lower, pat)
+		if idx > 0 {
+			return strings.TrimSpace(s[:idx]), strings.TrimSpace(s[idx:])
+		}
+	}
+	// Fallback: last word is schedule
+	parts := strings.Fields(s)
+	if len(parts) >= 2 {
+		return strings.Join(parts[:len(parts)-1], " "), parts[len(parts)-1]
+	}
+	return s, "daily 9:00"
 }
 
 func truncate(s string, max int) string {

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/artaeon/nous/internal/agent"
 	"github.com/artaeon/nous/internal/assistant"
 	"github.com/artaeon/nous/internal/blackboard"
 	"github.com/artaeon/nous/internal/cognitive"
@@ -44,6 +45,9 @@ type Server struct {
 	toolReg     *tools.Registry
 	collector   *training.Collector
 	sessions    *cognitive.SessionStore
+
+	// Autonomous agent
+	agentInstance *agent.Agent
 }
 
 // ChatRequest is the JSON body for POST /api/chat.
@@ -184,6 +188,11 @@ func (s *Server) SetDataSources(wm *memory.WorkingMemory, ltm *memory.LongTermMe
 		s.actions.EpisodicMem = em
 		s.actions.Reminders = cognitive.NewReminderManager()
 	}
+}
+
+// SetAgent wires the autonomous agent for the /api/agent endpoints.
+func (s *Server) SetAgent(a *agent.Agent) {
+	s.agentInstance = a
 }
 
 // Start begins listening for HTTP requests.
@@ -800,6 +809,64 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{"messages": msgs})
+	}))
+
+	// ── Autonomous Agent endpoints ──────────────────────────────
+
+	// POST /api/agent/start — start a new goal
+	mux.HandleFunc("/api/agent/start", cors(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" { http.Error(w, "method not allowed", http.StatusMethodNotAllowed); return }
+		if s.agentInstance == nil { http.Error(w, "agent not configured", http.StatusServiceUnavailable); return }
+		var req struct{ Goal string `json:"goal"` }
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest); return
+		}
+		if err := s.agentInstance.Start(req.Goal); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "started", "goal": req.Goal})
+	}))
+
+	// POST /api/agent/input — provide human input
+	mux.HandleFunc("/api/agent/input", cors(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" { http.Error(w, "method not allowed", http.StatusMethodNotAllowed); return }
+		if s.agentInstance == nil { http.Error(w, "agent not configured", http.StatusServiceUnavailable); return }
+		var req struct{ Input string `json:"input"` }
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest); return
+		}
+		s.agentInstance.Resume(req.Input)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "resumed"})
+	}))
+
+	// GET /api/agent/status — get current status
+	mux.HandleFunc("/api/agent/status", cors(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" { http.Error(w, "method not allowed", http.StatusMethodNotAllowed); return }
+		if s.agentInstance == nil { http.Error(w, "agent not configured", http.StatusServiceUnavailable); return }
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(s.agentInstance.Status())
+	}))
+
+	// POST /api/agent/stop — stop execution
+	mux.HandleFunc("/api/agent/stop", cors(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" { http.Error(w, "method not allowed", http.StatusMethodNotAllowed); return }
+		if s.agentInstance == nil { http.Error(w, "agent not configured", http.StatusServiceUnavailable); return }
+		s.agentInstance.Stop()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "stopped"})
+	}))
+
+	// GET /api/agent/report — get full report
+	mux.HandleFunc("/api/agent/report", cors(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" { http.Error(w, "method not allowed", http.StatusMethodNotAllowed); return }
+		if s.agentInstance == nil { http.Error(w, "agent not configured", http.StatusServiceUnavailable); return }
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"report": s.agentInstance.Report()})
 	}))
 
 	// GET / — web UI
