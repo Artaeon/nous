@@ -495,3 +495,64 @@ func TestGenerateConnector(t *testing.T) {
 		t.Errorf("connector should be short (<=20 chars), got %q (%d chars)", c, len(c))
 	}
 }
+
+// -----------------------------------------------------------------------
+// Sentence fusion tests
+// -----------------------------------------------------------------------
+
+func TestFuseSameVerbSentences_Has(t *testing.T) {
+	input := "It has wave-particle duality. It has superposition. It has entanglement."
+	want := "It has wave-particle duality, superposition, and entanglement."
+	got := fuseSameVerbSentences(input)
+	if got != want {
+		t.Errorf("fuseSameVerbSentences:\n  got:  %q\n  want: %q", got, want)
+	}
+}
+
+func TestFuseSameVerbSentences_RelatedTo(t *testing.T) {
+	input := "It is related to atomic structure. It is related to modern technologies."
+	want := "It is related to atomic structure and modern technologies."
+	got := fuseSameVerbSentences(input)
+	if got != want {
+		t.Errorf("fuseSameVerbSentences:\n  got:  %q\n  want: %q", got, want)
+	}
+}
+
+func TestFuseSameVerbSentences_NoFusionForDifferentVerbs(t *testing.T) {
+	input := "Python is a programming language. Python was created by Guido van Rossum."
+	got := fuseSameVerbSentences(input)
+	// No consecutive same-prefix sentences — should be unchanged.
+	if got != input {
+		t.Errorf("should not fuse different verbs:\n  got:  %q\n  want: %q", got, input)
+	}
+}
+
+func TestFuseSameVerbSentences_MixedGroups(t *testing.T) {
+	input := "Go is a language. It has concurrency. It has garbage collection. It was created by Google."
+	got := fuseSameVerbSentences(input)
+	// "It has" group fuses; others stay.
+	if !strings.Contains(got, "concurrency") || !strings.Contains(got, "garbage collection") {
+		t.Errorf("fused output should contain both objects: %q", got)
+	}
+	if !strings.Contains(got, "and garbage collection") {
+		t.Errorf("fused output should use 'and' for two items: %q", got)
+	}
+	if !strings.Contains(got, "Google") {
+		t.Errorf("non-fused sentence should be preserved: %q", got)
+	}
+}
+
+func TestFuseSameVerbSentences_SingleSentence(t *testing.T) {
+	input := "It has concurrency."
+	got := fuseSameVerbSentences(input)
+	if got != input {
+		t.Errorf("single sentence should be unchanged: got %q", got)
+	}
+}
+
+func TestFuseSameVerbSentences_Empty(t *testing.T) {
+	got := fuseSameVerbSentences("")
+	if got != "" {
+		t.Errorf("empty input should return empty: got %q", got)
+	}
+}

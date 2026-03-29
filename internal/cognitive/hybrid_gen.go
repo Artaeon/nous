@@ -187,6 +187,10 @@ func (hg *HybridGenerator) Generate(subject string, facts []edgeFact) string {
 	text = pronominalize(text, subject, category)
 	text = cleanupWhitespace(text)
 
+	// 7. Fuse consecutive same-verb sentences into lists.
+	// "It has X. It has Y. It has Z." → "It has X, Y, and Z."
+	text = fuseSameVerbSentences(text)
+
 	return text
 }
 
@@ -895,6 +899,163 @@ func cleanupWhitespace(text string) string {
 		prev = r
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// fuseSameVerbSentences merges consecutive sentences that use the same
+// verb pattern into a single sentence with a list.
+//
+//	"It has X. It has Y. It has Z." → "It has X, Y, and Z."
+//	"It is related to X. It is related to Y." → "It is related to X and Y."
+//
+// Only fuses groups of 2+ consecutive sentences sharing the exact same
+// "SUBJECT VERB" prefix. Non-matching sentences pass through unchanged.
+func fuseSameVerbSentences(text string) string {
+	if text == "" {
+		return text
+	}
+
+	sentences := hybridSplitSentences(text)
+	if len(sentences) <= 1 {
+		return text
+	}
+
+	// Extract (prefix, object) for each sentence.
+	type parsed struct {
+		prefix string // e.g. "It has" or "It is related to"
+		object string // e.g. "wave-particle duality"
+		raw    string // original sentence
+	}
+
+	items := make([]parsed, len(sentences))
+	for i, sent := range sentences {
+		prefix, obj := extractVerbPrefix(sent)
+		items[i] = parsed{prefix: prefix, object: obj, raw: sent}
+	}
+
+	// Group consecutive sentences with the same prefix and fuse them.
+	var result []string
+	i := 0
+	for i < len(items) {
+		if items[i].prefix == "" {
+			// No extractable prefix — pass through as-is.
+			result = append(result, items[i].raw)
+			i++
+			continue
+		}
+
+		// Collect a run of consecutive sentences with the same prefix.
+		j := i + 1
+		for j < len(items) && items[j].prefix == items[i].prefix {
+			j++
+		}
+
+		if j-i < 2 {
+			// Only one sentence with this prefix — no fusion needed.
+			result = append(result, items[i].raw)
+			i++
+			continue
+		}
+
+		// Fuse: "PREFIX obj1, obj2, and obj3."
+		var objects []string
+		for k := i; k < j; k++ {
+			objects = append(objects, items[k].object)
+		}
+		fused := items[i].prefix + " " + joinWithAnd(objects) + "."
+		result = append(result, fused)
+		i = j
+	}
+
+	return strings.Join(result, " ")
+}
+
+// extractVerbPrefix splits a sentence like "It has wave-particle duality."
+// into prefix="It has" and object="wave-particle duality".
+// Returns ("", "") if no clear subject-verb pattern is found.
+func extractVerbPrefix(sentence string) (prefix, object string) {
+	sent := strings.TrimSpace(sentence)
+	// Remove trailing period/punctuation for analysis.
+	sent = strings.TrimRight(sent, ".!?")
+	sent = strings.TrimSpace(sent)
+
+	if sent == "" {
+		return "", ""
+	}
+
+	// Try increasingly specific verb phrase patterns.
+	// Order matters — longer prefixes must be tried first so
+	// "It is related to" matches before "It is".
+	//
+	// Pattern: SUBJECT + multi-word verb phrase + object
+	// We detect the subject as the first word(s) up to a known verb.
+	words := strings.Fields(sent)
+	if len(words) < 3 {
+		return "", ""
+	}
+
+	// Find the longest verb phrase starting at each word position.
+	// Common patterns: "is", "has", "was", "is related to", "is known for",
+	// "was created by", "is used for", "is part of", "is similar to", etc.
+	verbPhrases := []string{
+		"is the opposite of",
+		"was influenced by",
+		"belongs to the domain of",
+		"is associated with",
+		"was created by",
+		"was founded by",
+		"was founded in",
+		"is derived from",
+		"is described as",
+		"is related to",
+		"is similar to",
+		"is known for",
+		"is located in",
+		"is used for",
+		"is part of",
+		"contradicts",
+		"prefers",
+		"dislikes",
+		"follows",
+		"causes",
+		"offers",
+		"has",
+		"is",
+	}
+
+	// Build the lowercased version once.
+	lower := strings.ToLower(sent)
+
+	for _, vp := range verbPhrases {
+		// Find "SUBJECT vp OBJECT" where vp appears after at least one word.
+		idx := strings.Index(lower, " "+vp+" ")
+		if idx < 0 {
+			continue
+		}
+		// The prefix is everything up to and including the verb phrase.
+		prefixEnd := idx + 1 + len(vp)
+		prefix = sent[:prefixEnd]
+		object = strings.TrimSpace(sent[prefixEnd:])
+		if object != "" {
+			return prefix, object
+		}
+	}
+
+	return "", ""
+}
+
+// joinWithAnd joins a slice like ["X", "Y", "Z"] into "X, Y, and Z".
+// Two items: "X and Y". One item: "X".
+func joinWithAnd(items []string) string {
+	switch len(items) {
+	case 0:
+		return ""
+	case 1:
+		return items[0]
+	case 2:
+		return items[0] + " and " + items[1]
+	default:
+		return strings.Join(items[:len(items)-1], ", ") + ", and " + items[len(items)-1]
+	}
 }
 
 // hybridRng provides a simple deterministic random for connector selection

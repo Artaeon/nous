@@ -3,9 +3,12 @@ package cognitive
 import (
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -95,6 +98,9 @@ type ActionRouter struct {
 	Policy         *DialoguePolicy
 	CtxWindow      *ContextWindow
 	SelfTeacher    *SelfTeach
+
+	// Smart entity extraction (intent→entity bridging)
+	EntityExtract  *SmartEntityExtractor
 
 	// Innovation systems
 	Socratic       *SocraticEngine
@@ -258,6 +264,17 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 				nlu.Entities["topic"] = extractTopicFromQuery(strings.ToLower(strings.TrimSpace(nlu.Raw)))
 			}
 		}
+	}
+
+	// Smart entity extraction based on classified intent.
+	// Bridges the gap between intent classification and tool dispatch:
+	// the NLU knows what the user wants (calculate, translate, etc.) but
+	// the tool handlers need specific entities (expression, text, language).
+	if ar.EntityExtract != nil {
+		if nlu.Entities == nil {
+			nlu.Entities = make(map[string]string)
+		}
+		ar.EntityExtract.ExtractForIntent(nlu.Raw, nlu.Intent, nlu.Entities)
 	}
 
 	result := ar.dispatch(nlu, conv)
@@ -2220,6 +2237,137 @@ func parsePersonalFact(raw string) (string, string) {
 	return "", ""
 }
 
+// -----------------------------------------------------------------------
+// Knowledge paragraph cache — read knowledge/*.txt once, reuse forever.
+// -----------------------------------------------------------------------
+
+var (
+	knowledgeParagraphCache   []string
+	knowledgeParagraphCacheOnce sync.Once
+)
+
+// loadKnowledgeParagraphs reads all .txt files in dir, splits them on
+// blank lines, trims whitespace, and returns every non-empty paragraph.
+func loadKnowledgeParagraphs(dir string) []string {
+	files, err := filepath.Glob(filepath.Join(dir, "*.txt"))
+	if err != nil || len(files) == 0 {
+		return nil
+	}
+	var paragraphs []string
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		for _, p := range splitParagraphs(string(data)) {
+			if p = strings.TrimSpace(p); p != "" {
+				paragraphs = append(paragraphs, p)
+			}
+		}
+	}
+	return paragraphs
+}
+
+// findKnowledgeParagraph searches knowledge text files for a paragraph
+// about the given topic and returns it verbatim. The paragraph is real
+// human-written Wikipedia-quality prose — no reconstruction needed.
+func findKnowledgeParagraph(knowledgeDir, topic string) string {
+	if knowledgeDir == "" || topic == "" {
+		return ""
+	}
+
+	knowledgeParagraphCacheOnce.Do(func() {
+		knowledgeParagraphCache = loadKnowledgeParagraphs(knowledgeDir)
+	})
+
+	topicLower := strings.ToLower(strings.TrimSpace(topic))
+	if topicLower == "" {
+		return ""
+	}
+
+	// Strategy 1: first sentence starts with the topic.
+	// "Gravity is the fundamental force..." matches topic "gravity".
+	// "Quantum mechanics is a fundamental theory..." matches "quantum mechanics".
+	for _, p := range knowledgeParagraphCache {
+		firstSent := firstSentenceOf(p)
+		firstLower := strings.ToLower(firstSent)
+		if strings.HasPrefix(firstLower, topicLower+" ") || strings.HasPrefix(firstLower, topicLower+",") {
+			return p
+		}
+	}
+
+	// Strategy 2: the first word of the paragraph matches a single-word topic.
+	if !strings.Contains(topicLower, " ") {
+		for _, p := range knowledgeParagraphCache {
+			firstWord := strings.ToLower(strings.Fields(p)[0])
+			// Strip trailing punctuation from first word
+			firstWord = strings.TrimRight(firstWord, ".,;:!?")
+			if firstWord == topicLower {
+				return p
+			}
+		}
+	}
+
+	// Strategy 3: for multi-word topics, try matching individual significant
+	// words against paragraph starts (fallback for partial matches).
+	words := strings.Fields(topicLower)
+	if len(words) > 1 {
+		for _, word := range words {
+			if len(word) <= 3 {
+				continue // skip "the", "of", "a", etc.
+			}
+			for _, p := range knowledgeParagraphCache {
+				firstSent := firstSentenceOf(p)
+				firstLower := strings.ToLower(firstSent)
+				if strings.HasPrefix(firstLower, word+" ") || strings.HasPrefix(firstLower, word+",") {
+					return p
+				}
+			}
+		}
+	}
+
+	return ""
+}
+
+// firstSentenceOf returns everything up to the first period followed by a
+// space (or the end of string). Used to check what a paragraph is "about".
+func firstSentenceOf(text string) string {
+	idx := strings.Index(text, ". ")
+	if idx >= 0 {
+		return text[:idx+1]
+	}
+	return text
+}
+
+// resolveCompoundTopic checks if any multi-word substring of the query
+// matches a known topic in the knowledge graph. This handles "world war 2",
+// "social media", "machine learning" etc. that would otherwise be split
+// into individual words by the noun-phrase extractor.
+func (ar *ActionRouter) resolveCompoundTopic(query string) string {
+	if ar.CogGraph == nil {
+		return ""
+	}
+	queryLower := strings.ToLower(strings.TrimSpace(query))
+	if queryLower == "" {
+		return ""
+	}
+
+	labels := ar.CogGraph.AllLabels()
+
+	// Collect multi-word labels that appear inside the query.
+	// Return the longest match so "world war ii" beats "world war".
+	best := ""
+	for _, label := range labels {
+		if !strings.Contains(label, " ") {
+			continue // single-word labels handled elsewhere
+		}
+		if strings.Contains(queryLower, label) && len(label) > len(best) {
+			best = label
+		}
+	}
+	return best
+}
+
 // handleLookupKnowledge searches the knowledge vector store.
 func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 	// Planning questions ("how do I learn guitar?") → generate a learning plan
@@ -2249,6 +2397,35 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 		query = np
 	} else {
 		query = cleanTopicForLookup(query)
+	}
+
+	// Try to resolve compound topics using graph labels as dictionary.
+	// This prevents "world war 2" from being split into "world".
+	if ar.CogGraph != nil {
+		if compound := ar.resolveCompoundTopic(query); compound != "" {
+			query = compound
+		}
+	}
+
+	// Primary path: find the original Wikipedia paragraph about this topic.
+	// This is real human-written prose — no reconstruction, no templates.
+	if ar.SelfTeacher != nil {
+		if knowledgeParagraph := findKnowledgeParagraph(ar.SelfTeacher.KnowledgeDir(), query); knowledgeParagraph != "" {
+			// Apply format compliance if requested
+			if ar.Format != nil {
+				if req := ar.Format.DetectFormat(nlu.Raw); req != nil {
+					knowledgeParagraph = ar.Format.Reshape(knowledgeParagraph, req)
+				}
+			}
+			// Track this topic for follow-up conversation context.
+			if ar.Tracker != nil && query != "" {
+				ar.Tracker.TrackTopic(query, "knowledge_text")
+			}
+			return &ActionResult{
+				DirectResponse: knowledgeParagraph,
+				Source:         "knowledge_text",
+			}
+		}
 	}
 
 	// On-demand wiki loading: if the topic isn't in the graph, check the wiki index

@@ -173,6 +173,7 @@ func main() {
 
 	actions := cognitive.NewActionRouter()
 	actions.Tools = toolReg
+	actions.EntityExtract = cognitive.NewSmartEntityExtractor()
 
 	// Predictive Pre-computation
 	predictor := cognitive.NewPredictor(toolReg)

@@ -196,6 +196,19 @@ func (cg *CognitiveGraph) GetNode(id string) *CogNode {
 	return cg.nodes[id]
 }
 
+// AllLabels returns every unique label stored in the graph's label index.
+// Useful for compound-topic resolution: callers can match multi-word
+// labels against a user query to avoid breaking "world war ii" into "world".
+func (cg *CognitiveGraph) AllLabels() []string {
+	cg.mu.RLock()
+	defer cg.mu.RUnlock()
+	labels := make([]string, 0, len(cg.byLabel))
+	for label := range cg.byLabel {
+		labels = append(labels, label)
+	}
+	return labels
+}
+
 // HasLabel returns true if the knowledge graph has a node with the given label.
 func (cg *CognitiveGraph) HasLabel(label string) bool {
 	cg.mu.RLock()

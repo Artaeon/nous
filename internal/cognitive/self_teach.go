@@ -40,6 +40,11 @@ func NewSelfTeach(knowledgeDir string, graph *CognitiveGraph) *SelfTeach {
 	}
 }
 
+// KnowledgeDir returns the path to the knowledge text file directory.
+func (st *SelfTeach) KnowledgeDir() string {
+	return st.knowledgeDir
+}
+
 // HasLearned returns true if we already attempted to learn about topic,
 // preventing redundant filesystem scans.
 func (st *SelfTeach) HasLearned(topic string) bool {
