@@ -50,7 +50,17 @@ func (rg *ResponseGate) Check(query, response, source string) *GateVerdict {
 		return v
 	}
 
-	// 3. Parroting — response echoes too much of the user's input
+	// 3. Cross-domain contamination — sentences about unrelated topics
+	if cleaned := removeCrossDomainSentences(query, response); cleaned != response {
+		v.Pass = false
+		v.Violations = append(v.Violations, "cross_domain_contamination")
+		if strings.TrimSpace(cleaned) != "" {
+			v.Repaired = cleaned
+		}
+		return v
+	}
+
+	// 4. Parroting — response echoes too much of the user's input
 	if isParroting(query, response) {
 		v.Pass = false
 		v.Violations = append(v.Violations, "parroting")
@@ -405,6 +415,65 @@ func countBullets(text string) int {
 		}
 	}
 	return count
+}
+
+// removeCrossDomainSentences strips sentences that contain entities clearly
+// unrelated to the query topic. This is the nuclear option for cross-domain
+// contamination from entity-swapping corpus retrieval.
+func removeCrossDomainSentences(query, response string) string {
+	queryLower := strings.ToLower(query)
+	// Extract key topic words from the query
+	topicWords := gateContentWords(queryLower)
+	if len(topicWords) == 0 {
+		return response
+	}
+
+	// Split into sentences and check each for relevance
+	sentences := strings.Split(response, ". ")
+	var kept []string
+	for _, sent := range sentences {
+		sentLower := strings.ToLower(sent)
+		// Check if this sentence contains a foreign entity that's clearly
+		// unrelated (proper nouns not in the query, from a different domain)
+		if containsForeignEntity(sentLower, topicWords) {
+			continue // drop this sentence
+		}
+		kept = append(kept, sent)
+	}
+	if len(kept) == 0 {
+		return response // don't return empty
+	}
+	return strings.Join(kept, ". ")
+}
+
+// containsForeignEntity checks if a sentence contains proper nouns/entities
+// that are clearly from a different domain than the topic.
+func containsForeignEntity(sentLower string, topicWords []string) bool {
+	// Known cross-domain contamination markers
+	foreignEntities := []string{
+		"murakami", "diogenes", "antisthenes", "parmenides", "cynicism",
+		"ottoman", "suleymaniye", "byzantine", "genghis", "napoleonic",
+		"buffer solutions", "pre-socratic philosopher from elea",
+		"abstract mathematical models of computation",
+		"prose style", "raymond carver", "vonnegut", "fitzgerald",
+		"turing machine", "halting problem",
+	}
+	for _, fe := range foreignEntities {
+		if strings.Contains(sentLower, fe) {
+			// Check if it's actually relevant to the topic
+			relevant := false
+			for _, tw := range topicWords {
+				if strings.Contains(fe, tw) || strings.Contains(tw, fe) {
+					relevant = true
+					break
+				}
+			}
+			if !relevant {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func parseSmallInt(s string) int {
