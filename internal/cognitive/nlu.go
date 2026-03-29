@@ -724,40 +724,20 @@ func (n *NLU) extractEntities(raw, lower string, r *NLUResult) {
 
 // classifyIntent determines what the user wants.
 func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
-	// Neural classifier: if trained and confident, use it directly.
-	// This short-circuits the hundreds of pattern checks below.
-	// Exception: explicit factual question patterns ("what is X", "who is X",
-	// "tell me about X") always use pattern matching — the neural classifier
-	// sometimes misroutes these as "creative" or "conversation".
-	isExplicitFactual := false
-	for _, prefix := range []string{
-		"what is ", "what's ", "what are ", "what was ", "what were ",
-		"who is ", "who are ", "who was ",
-		"where is ", "where are ",
-		"when is ", "when was ", "when did ",
-		"tell me about ", "tell me everything about ", "tell me all about ",
-		"give me an overview of ", "give me a full overview of ",
-		"walk me through ", "deep dive into ",
-		"explain ",
-		"define ", "describe ",
-	} {
-		if strings.HasPrefix(lower, prefix) {
-			isExplicitFactual = true
-			break
-		}
-	}
-	if n.Neural != nil && n.Neural.Classifier.IsTrained() && !isExplicitFactual {
+	// Neural classifier runs FIRST on ALL inputs.
+	// It's trained on 10,000+ realistic examples and handles
+	// casual/messy input that patterns miss.
+	if n.Neural != nil && n.Neural.Classifier.IsTrained() {
 		nr := n.Neural.Classify(raw)
-		if nr != nil && nr.Confidence > 0.70 {
+		if nr != nil && nr.Confidence > 0.60 {
 			r.Intent = nr.Intent
 			r.Confidence = nr.Confidence
-			// Intent-specific entity extraction
 			n.extractEntitiesForIntent(lower, r)
 			return
 		}
-		// Medium confidence (0.4-0.7): store neural result, let patterns compete
-		// If pattern matching also fails, we'll use the neural result
 	}
+
+	// Pattern matching as fallback for low-confidence neural results
 
 	// Strip trailing punctuation for matching
 	stripped := strings.TrimRightFunc(lower, func(r rune) bool {

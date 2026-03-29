@@ -288,10 +288,11 @@ func (ic *InnerCouncil) consultEmpath(input string, subtext *SubtextAnalysis) Co
 		}
 	}
 
-	// Build assessment from signals.
+	// Build assessment from signals — user-facing language only,
+	// no debug metrics (valence/arousal numbers leak into Synthesis).
 	var parts []string
 	if emotion.Dominant != "neutral" {
-		parts = append(parts, fmt.Sprintf("User is %s (valence=%.1f, arousal=%.1f)", emotion.Dominant, emotion.Valence, emotion.Arousal))
+		parts = append(parts, fmt.Sprintf("User seems %s", emotion.Dominant))
 	}
 	for _, sig := range signals {
 		if sig.Weight >= 0.4 {
@@ -299,7 +300,18 @@ func (ic *InnerCouncil) consultEmpath(input string, subtext *SubtextAnalysis) Co
 		}
 	}
 	if subtext.ImpliedNeed != "" {
-		parts = append(parts, fmt.Sprintf("implied need: %s", subtext.ImpliedNeed))
+		needDesc := string(subtext.ImpliedNeed)
+		switch subtext.ImpliedNeed {
+		case NeedVenting:
+			needDesc = "they need to vent"
+		case NeedReassurance:
+			needDesc = "they need reassurance"
+		case NeedValidation:
+			needDesc = "they want validation"
+		case NeedCelebration:
+			needDesc = "they want to celebrate"
+		}
+		parts = append(parts, needDesc)
 	}
 
 	assessment := strings.Join(parts, ". ") + "."
