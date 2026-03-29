@@ -486,18 +486,19 @@ func (dr *DeepReasoner) searchKnowledgeText(topic string) string {
 			pLower := strings.ToLower(p)
 
 			// Score: how well does this paragraph match the topic?
+			// Use whole-word matching to prevent "blue" from matching "blues".
 			score := 0
-			if strings.Contains(pLower, topicLower) {
+			if containsWholeWord(pLower, topicLower) {
 				score += 10
 			}
 			// Bonus for topic at start of paragraph.
 			if strings.HasPrefix(pLower, topicLower+" ") || strings.HasPrefix(pLower, topicLower+",") {
 				score += 20
 			}
-			// Bonus for matching individual words.
+			// Bonus for matching individual words (whole-word only).
 			words := strings.Fields(topicLower)
 			for _, w := range words {
-				if len(w) > 3 && strings.Contains(pLower, w) {
+				if len(w) > 3 && containsWholeWord(pLower, w) {
 					score += 2
 				}
 			}

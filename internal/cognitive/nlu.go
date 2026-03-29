@@ -733,6 +733,54 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 			r.Intent = nr.Intent
 			r.Confidence = nr.Confidence
 			n.extractEntitiesForIntent(lower, r)
+
+			// Cross-check: if pattern NLU recognizes this as a greeting/farewell/affirmation,
+			// trust the pattern for these high-certainty social intents.
+			// The neural classifier sometimes misroutes short casual inputs like
+			// "hey whats up" to non-social intents.
+			if r.Intent != "greeting" && r.Intent != "farewell" && r.Intent != "affirmation" {
+				stripped := strings.TrimRightFunc(lower, func(ru rune) bool {
+					return unicode.IsPunct(ru) || unicode.IsSpace(ru)
+				})
+				for _, g := range n.greetings {
+					if stripped == g || strings.HasPrefix(lower, g+" ") || strings.HasPrefix(lower, g+"!") || strings.HasPrefix(lower, g+",") {
+						r.Intent = "greeting"
+						r.Confidence = 0.95
+						return
+					}
+				}
+				for _, f := range n.farewells {
+					if stripped == f || strings.HasPrefix(lower, f+" ") || strings.HasPrefix(lower, f+"!") || strings.HasPrefix(lower, f+",") {
+						r.Intent = "farewell"
+						r.Confidence = 0.95
+						return
+					}
+				}
+			}
+
+			// Post-check: neural "creative" with knowledge signals → explain.
+			// "write me an overview of AI" contains "overview" which is a
+			// knowledge request, not a creative writing task.
+			if r.Intent == "creative" {
+				knowledgeSignals := []string{"overview", "explain", "tell me about", "describe", "summary of", "summarize"}
+				for _, sig := range knowledgeSignals {
+					if strings.Contains(lower, sig) {
+						r.Intent = "explain"
+						r.Action = "" // let mapAction set it
+						break
+					}
+				}
+			}
+
+			// Post-check: "time in [PLACE]" is a world clock query, not sysinfo.
+			// The neural classifier routes "what time is it in Tokyo" to sysinfo
+			// because of the word "time", but this is a timezone/geography question.
+			if r.Intent == "sysinfo" && strings.Contains(lower, " in ") &&
+				(strings.Contains(lower, "time") || strings.Contains(lower, "clock")) {
+				r.Intent = "question"
+				r.Action = "" // let mapAction set it
+			}
+
 			return
 		}
 	}

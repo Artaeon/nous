@@ -529,7 +529,8 @@ func edgeToNaturalLanguage(subj string, rel RelType, obj string) string {
 }
 
 
-// FindNodes finds nodes whose label contains the query.
+// FindNodes finds nodes whose label contains the query as a whole word.
+// Uses word-boundary matching to prevent "blue" from matching "blues".
 func (cg *CognitiveGraph) FindNodes(query string) []*CogNode {
 	cg.mu.RLock()
 	defer cg.mu.RUnlock()
@@ -546,16 +547,49 @@ func (cg *CognitiveGraph) FindNodes(query string) []*CogNode {
 		}
 	}
 
-	// Substring match
+	// Word-boundary match: "blue" matches "sky blue" but NOT "blues".
 	if len(results) == 0 {
 		for _, node := range cg.nodes {
-			if strings.Contains(strings.ToLower(node.Label), lower) {
+			if containsWholeWord(strings.ToLower(node.Label), lower) {
 				results = append(results, node)
 			}
 		}
 	}
 
 	return results
+}
+
+// containsWholeWord checks if haystack contains needle as a whole word,
+// i.e., the match is surrounded by non-alphanumeric characters or string boundaries.
+func containsWholeWord(haystack, needle string) bool {
+	idx := 0
+	for {
+		pos := strings.Index(haystack[idx:], needle)
+		if pos < 0 {
+			return false
+		}
+		pos += idx
+		end := pos + len(needle)
+
+		// Check left boundary: start of string or non-alphanumeric.
+		leftOK := pos == 0 || !isAlphanumeric(haystack[pos-1])
+		// Check right boundary: end of string or non-alphanumeric.
+		rightOK := end == len(haystack) || !isAlphanumeric(haystack[end])
+
+		if leftOK && rightOK {
+			return true
+		}
+
+		idx = pos + 1
+		if idx >= len(haystack) {
+			return false
+		}
+	}
+}
+
+// isAlphanumeric returns true if b is a letter or digit (ASCII).
+func isAlphanumeric(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }
 
 // -----------------------------------------------------------------------

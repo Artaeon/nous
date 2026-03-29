@@ -282,12 +282,13 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 		ar.EntityExtract.ExtractForIntent(nlu.Raw, nlu.Intent, nlu.Entities)
 	}
 
-	// Extractive summarizer intercept: when the user pastes a long text
-	// (>200 words) and says "summarize" or "tl;dr", use the Summarizer
-	// to extract the most important sentences rather than a knowledge lookup.
+	// Extractive summarizer intercept: when the user says "summarize" or
+	// "tl;dr" with accompanying text, use the Summarizer to extract the
+	// most important sentences rather than a knowledge lookup.
+	// Threshold: 30 words — anything paragraph-length or longer is fair game.
 	if ar.Summarizer != nil && isSummarizeRequest(nlu.Raw) {
 		textToSummarize := extractTextForSummarization(nlu.Raw)
-		if len(strings.Fields(textToSummarize)) > 200 {
+		if len(strings.Fields(textToSummarize)) > 30 {
 			summary := ar.Summarizer.Summarize(textToSummarize, 5)
 			if summary != "" {
 				return &ActionResult{
@@ -1870,6 +1871,9 @@ func (ar *ActionRouter) handleFileOp(nlu *NLUResult) *ActionResult {
 // handleCompute evaluates math expressions and date calculations.
 func (ar *ActionRouter) handleCompute(nlu *NLUResult) *ActionResult {
 	expr := nlu.Entities["expr"]
+	if expr == "" {
+		expr = nlu.Entities["expression"]
+	}
 	if expr == "" {
 		expr = nlu.Raw
 	}
@@ -4495,11 +4499,13 @@ func extractFactObjects(fact string) []string {
 func isSummarizeRequest(raw string) bool {
 	lower := strings.ToLower(strings.TrimSpace(raw))
 	prefixes := []string{
-		"summarize this", "summarise this", "summarize:", "summarise:",
-		"tl;dr", "tldr", "tl dr",
+		"summarize this:", "summarise this:", "summarize this", "summarise this",
+		"summarize:", "summarise:",
+		"tl;dr:", "tl;dr", "tldr:", "tldr", "tl dr:", "tl dr",
 		"give me a summary", "can you summarize", "can you summarise",
 		"please summarize", "please summarise",
-		"summary:", "summarize the following", "summarise the following",
+		"summary:", "summarize the following:", "summarise the following:",
+		"summarize the following", "summarise the following",
 	}
 	for _, p := range prefixes {
 		if strings.HasPrefix(lower, p) {
