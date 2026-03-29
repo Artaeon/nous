@@ -340,7 +340,7 @@ func (s *AgentState) CurrentPhase() *Phase {
 	return &s.Plan.Phases[s.Phase]
 }
 
-// Snapshot returns a copy of the state safe for reading without locks.
+// Snapshot returns a deep copy of the state safe for reading without locks.
 func (s *AgentState) Snapshot() AgentState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -350,5 +350,29 @@ func (s *AgentState) Snapshot() AgentState {
 	for k, v := range s.Results {
 		cp.Results[k] = v
 	}
+
+	// Deep-copy the plan so the snapshot doesn't share mutable task/phase slices.
+	if s.Plan != nil {
+		planCopy := *s.Plan
+		planCopy.Phases = make([]Phase, len(s.Plan.Phases))
+		for i, ph := range s.Plan.Phases {
+			phCopy := ph
+			phCopy.Tasks = make([]Task, len(ph.Tasks))
+			copy(phCopy.Tasks, ph.Tasks)
+			if ph.DependsOn != nil {
+				phCopy.DependsOn = make([]int, len(ph.DependsOn))
+				copy(phCopy.DependsOn, ph.DependsOn)
+			}
+			planCopy.Phases[i] = phCopy
+		}
+		cp.Plan = &planCopy
+	}
+
+	// Deep-copy HumanInputs
+	if s.HumanInputs != nil {
+		cp.HumanInputs = make([]HumanInput, len(s.HumanInputs))
+		copy(cp.HumanInputs, s.HumanInputs)
+	}
+
 	return cp
 }

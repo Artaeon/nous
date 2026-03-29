@@ -67,9 +67,21 @@ type Agent struct {
 
 // NewAgent creates an autonomous agent.
 func NewAgent(toolReg *tools.Registry, config AgentConfig) *Agent {
+	defaults := DefaultConfig()
 	if config.Workspace == "" {
-		config = DefaultConfig()
-		config.Workspace = DefaultConfig().Workspace
+		config.Workspace = defaults.Workspace
+	}
+	if config.MaxToolCalls <= 0 {
+		config.MaxToolCalls = defaults.MaxToolCalls
+	}
+	if config.MaxRetries <= 0 {
+		config.MaxRetries = defaults.MaxRetries
+	}
+	if config.StepTimeout <= 0 {
+		config.StepTimeout = defaults.StepTimeout
+	}
+	if config.ReportInterval <= 0 {
+		config.ReportInterval = defaults.ReportInterval
 	}
 
 	// Ensure workspace directory exists
@@ -130,14 +142,16 @@ func (a *Agent) Start(goal string) error {
 // Stop halts execution. The agent saves state and can be resumed.
 func (a *Agent) Stop() {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	if !a.running {
+		a.mu.Unlock()
 		return
 	}
 
 	close(a.stopCh)
 	a.running = false
+	a.mu.Unlock()
+
+	// Report and save outside the lock to avoid deadlock (report() also locks a.mu).
 	a.report("[STOPPED] Agent stopped by user. State saved — can be resumed.")
 	a.State.Save()
 }
@@ -255,8 +269,13 @@ func (a *Agent) run() {
 			break
 		}
 
+		// Read current phase index under lock
+		a.State.mu.RLock()
+		phaseIdx := a.State.Phase
+		a.State.mu.RUnlock()
+
 		// Check phase dependencies
-		if !a.phaseDepsComplete(a.State.Phase) {
+		if !a.phaseDepsComplete(phaseIdx) {
 			a.report(fmt.Sprintf("[BLOCKED] Phase %q waiting for dependencies", phase.Name))
 			break
 		}
@@ -275,7 +294,11 @@ func (a *Agent) run() {
 		}
 
 		// If task needs human input, pause
-		if task.Status == TaskNeedsHuman {
+		a.State.mu.RLock()
+		needsHuman := task.Status == TaskNeedsHuman
+		a.State.mu.RUnlock()
+
+		if needsHuman {
 			a.pause(task)
 			if a.stopped() {
 				break
@@ -283,21 +306,28 @@ func (a *Agent) run() {
 			continue // re-evaluate the same task after human input
 		}
 
-		// Advance to next task
-		a.report(a.Reporter.TaskReport(task))
+		// Advance to next task — snapshot the task for reporting
+		a.State.mu.RLock()
+		taskReport := a.Reporter.TaskReport(task)
+		a.State.mu.RUnlock()
+		a.report(taskReport)
 
 		// Check if phase is complete
+		a.State.mu.Lock()
 		phaseComplete := true
-		for _, t := range phase.Tasks {
+		curPhase := &a.State.Plan.Phases[a.State.Phase]
+		for _, t := range curPhase.Tasks {
 			if t.Status != TaskCompleted && t.Status != TaskFailed {
 				phaseComplete = false
 				break
 			}
 		}
 		if phaseComplete {
-			a.State.mu.Lock()
-			a.State.Plan.Phases[a.State.Phase].Status = PhaseCompleted
-			a.State.mu.Unlock()
+			curPhase.Status = PhaseCompleted
+		}
+		a.State.mu.Unlock()
+
+		if phaseComplete {
 			a.report(a.Reporter.PhaseReport(phase))
 		}
 

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -281,9 +282,12 @@ func TestAgentRun_SimpleGoal(t *testing.T) {
 
 	a := NewAgent(reg, config)
 
+	var mu sync.Mutex
 	var reports []string
 	a.SetReportCallback(func(msg string) {
+		mu.Lock()
 		reports = append(reports, msg)
+		mu.Unlock()
 	})
 
 	err := a.Start("Research Go programming")
@@ -307,13 +311,18 @@ func TestAgentRun_SimpleGoal(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	if len(reports) == 0 {
+	mu.Lock()
+	reportsCopy := make([]string, len(reports))
+	copy(reportsCopy, reports)
+	mu.Unlock()
+
+	if len(reportsCopy) == 0 {
 		t.Error("expected progress reports")
 	}
 
 	// Should have a final report
 	finalFound := false
-	for _, r := range reports {
+	for _, r := range reportsCopy {
 		if strings.Contains(r, "[COMPLETE]") {
 			finalFound = true
 		}
@@ -333,13 +342,17 @@ func TestAgent_HumanInLoop(t *testing.T) {
 	}
 
 	a := NewAgent(reg, config)
+	defer a.Stop() // ensure goroutine cleanup
 
 	// Override planner to produce a plan that needs human input
 	a.Planner = NewPlanner([]string{"web_search", "write"})
 
+	var mu sync.Mutex
 	var reports []string
 	a.SetReportCallback(func(msg string) {
+		mu.Lock()
 		reports = append(reports, msg)
+		mu.Unlock()
 	})
 
 	err := a.Start("Plan a product launch strategy")
@@ -550,4 +563,509 @@ func TestIsDangerousTool(t *testing.T) {
 			t.Errorf("%q should not be dangerous", name)
 		}
 	}
+}
+
+// ── Edge-case tests ─────────────────────────────────────────────────
+
+func TestAgent_DoubleStart(t *testing.T) {
+	reg := mockRegistry()
+	config := AgentConfig{
+		Workspace:    t.TempDir(),
+		MaxToolCalls: 50,
+		MaxRetries:   1,
+		StepTimeout:  5 * time.Second,
+	}
+	a := NewAgent(reg, config)
+
+	// Start first goal
+	if err := a.Start("Research Go programming"); err != nil {
+		t.Fatalf("first Start: %v", err)
+	}
+
+	// Second start while running must fail
+	err := a.Start("Research Rust programming")
+	if err == nil {
+		t.Fatal("expected error on double start")
+	}
+	if !strings.Contains(err.Error(), "already running") {
+		t.Errorf("expected 'already running' error, got: %v", err)
+	}
+
+	a.Stop()
+}
+
+func TestAgent_StopWhileIdle(t *testing.T) {
+	reg := mockRegistry()
+	a := NewAgent(reg, AgentConfig{Workspace: t.TempDir()})
+	// Stopping an idle agent should not panic
+	a.Stop()
+}
+
+func TestAgent_ResumeWhileNotPaused(t *testing.T) {
+	reg := mockRegistry()
+	a := NewAgent(reg, AgentConfig{Workspace: t.TempDir()})
+	// Resume when not paused should be a no-op
+	a.Resume("some input")
+}
+
+func TestAgent_StatusWhileIdle(t *testing.T) {
+	reg := mockRegistry()
+	a := NewAgent(reg, AgentConfig{Workspace: t.TempDir()})
+	status := a.Status()
+	if status.Running {
+		t.Error("idle agent should not be running")
+	}
+	if status.Goal != "" {
+		t.Errorf("idle agent goal should be empty, got %q", status.Goal)
+	}
+}
+
+func TestAgent_EmptyGoalStart(t *testing.T) {
+	reg := mockRegistry()
+	a := NewAgent(reg, AgentConfig{Workspace: t.TempDir()})
+
+	err := a.Start("")
+	if err != nil {
+		// Start itself doesn't validate — the planner does.
+		// Wait for the run goroutine to finish.
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	// Agent should finish (with error report) and not be running
+	time.Sleep(500 * time.Millisecond)
+	status := a.Status()
+	if status.Running {
+		t.Error("agent should have stopped after empty goal")
+	}
+}
+
+func TestAgent_ConfigDefaults(t *testing.T) {
+	reg := mockRegistry()
+
+	// Provide custom MaxToolCalls but empty workspace
+	config := AgentConfig{
+		MaxToolCalls: 42,
+		MaxRetries:   7,
+	}
+	a := NewAgent(reg, config)
+
+	// Workspace should be defaulted
+	if a.Config.Workspace == "" {
+		t.Error("workspace should be defaulted")
+	}
+	// MaxToolCalls should be preserved, not overwritten
+	if a.Config.MaxToolCalls != 42 {
+		t.Errorf("MaxToolCalls: got %d, want 42", a.Config.MaxToolCalls)
+	}
+	if a.Config.MaxRetries != 7 {
+		t.Errorf("MaxRetries: got %d, want 7", a.Config.MaxRetries)
+	}
+}
+
+func TestAgentState_SaveLoadRoundTrip_TaskStatus(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	s := NewAgentState(path)
+	s.Reset("goal")
+	s.SetPlan(&Plan{
+		Goal: "goal",
+		Phases: []Phase{
+			{
+				Name:   "P1",
+				Status: PhaseCompleted,
+				Tasks: []Task{
+					{ID: "t1", Status: TaskCompleted, Result: "done"},
+					{ID: "t2", Status: TaskFailed, Error: "boom"},
+					{ID: "t3", Status: TaskNeedsHuman, HumanPrompt: "help?"},
+				},
+			},
+		},
+	})
+	s.RecordHumanInput("t3", "help?", "yes")
+
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	s2 := NewAgentState(path)
+	if err := s2.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Verify statuses survived round-trip
+	tasks := s2.Plan.Phases[0].Tasks
+	if tasks[0].Status != TaskCompleted {
+		t.Errorf("t1 status: got %v, want completed", tasks[0].Status)
+	}
+	if tasks[1].Status != TaskFailed {
+		t.Errorf("t2 status: got %v, want failed", tasks[1].Status)
+	}
+	if tasks[2].Status != TaskNeedsHuman {
+		t.Errorf("t3 status: got %v, want needs_human", tasks[2].Status)
+	}
+	if s2.Plan.Phases[0].Status != PhaseCompleted {
+		t.Errorf("phase status: got %v, want completed", s2.Plan.Phases[0].Status)
+	}
+	if len(s2.HumanInputs) != 1 {
+		t.Errorf("human inputs: got %d, want 1", len(s2.HumanInputs))
+	}
+}
+
+func TestAgentState_LoadNonexistent(t *testing.T) {
+	s := NewAgentState(filepath.Join(t.TempDir(), "nope.json"))
+	if err := s.Load(); err != nil {
+		t.Errorf("Load of nonexistent file should return nil, got: %v", err)
+	}
+}
+
+func TestAgentState_SnapshotIsolation(t *testing.T) {
+	s := NewAgentState("")
+	s.Reset("test")
+	s.SetPlan(&Plan{
+		Goal:   "test",
+		Phases: []Phase{{Name: "P1", Tasks: []Task{{ID: "t1", Status: TaskPending}}}},
+	})
+
+	snap := s.Snapshot()
+
+	// Mutate original
+	s.mu.Lock()
+	s.Plan.Phases[0].Tasks[0].Status = TaskCompleted
+	s.mu.Unlock()
+
+	// Snapshot should be unaffected
+	if snap.Plan.Phases[0].Tasks[0].Status != TaskPending {
+		t.Error("snapshot was mutated by changes to original state")
+	}
+}
+
+func TestExecuteChain_EmptyChain(t *testing.T) {
+	exec := NewExecutor(mockRegistry(), "/tmp/test")
+	result, err := exec.ExecuteChain(nil, nil)
+	if err != nil {
+		t.Fatalf("empty chain: %v", err)
+	}
+	if result.ToolCalls != 0 {
+		t.Errorf("empty chain: got %d tool calls, want 0", result.ToolCalls)
+	}
+}
+
+func TestExecuteChain_UnknownTool(t *testing.T) {
+	exec := NewExecutor(mockRegistry(), "/tmp/test")
+	exec.MaxRetries = 1
+	chain := []ToolStep{
+		{Tool: "nonexistent_tool", Args: map[string]string{}, DependsOn: -1},
+	}
+	_, err := exec.ExecuteChain(chain, nil)
+	if err == nil {
+		t.Error("expected error for unknown tool")
+	}
+}
+
+func TestExecuteChain_VariableSubstitution(t *testing.T) {
+	reg := tools.NewRegistry()
+	var capturedArgs map[string]string
+	reg.Register(tools.Tool{
+		Name:        "echo",
+		Description: "Echo args",
+		Execute: func(args map[string]string) (string, error) {
+			capturedArgs = args
+			return args["msg"], nil
+		},
+	})
+
+	exec := NewExecutor(reg, "/tmp/test")
+	chain := []ToolStep{
+		{Tool: "echo", Args: map[string]string{"msg": "hello"}, DependsOn: -1, OutputKey: "greeting"},
+		{Tool: "echo", Args: map[string]string{"msg": "got: ${greeting}"}, DependsOn: 0, OutputKey: "final"},
+	}
+
+	result, err := exec.ExecuteChain(chain, nil)
+	if err != nil {
+		t.Fatalf("chain: %v", err)
+	}
+
+	if capturedArgs["msg"] != "got: hello" {
+		t.Errorf("variable substitution failed: got %q", capturedArgs["msg"])
+	}
+	if result.FinalOutput != "got: hello" {
+		t.Errorf("final output: got %q", result.FinalOutput)
+	}
+}
+
+func TestExecuteChain_WorkspaceResolution(t *testing.T) {
+	reg := tools.NewRegistry()
+	var capturedPath string
+	reg.Register(tools.Tool{
+		Name:        "write",
+		Description: "Write",
+		Execute: func(args map[string]string) (string, error) {
+			capturedPath = args["path"]
+			return "ok", nil
+		},
+	})
+
+	exec := NewExecutor(reg, "/my/workspace")
+	chain := []ToolStep{
+		{Tool: "write", Args: map[string]string{"path": "agent_workspace/notes.md"}, DependsOn: -1},
+	}
+
+	_, err := exec.ExecuteChain(chain, nil)
+	if err != nil {
+		t.Fatalf("chain: %v", err)
+	}
+
+	if capturedPath != "/my/workspace/agent_workspace/notes.md" {
+		t.Errorf("workspace not prepended: got %q", capturedPath)
+	}
+}
+
+func TestExecuteChain_AbsolutePathNotModified(t *testing.T) {
+	reg := tools.NewRegistry()
+	var capturedPath string
+	reg.Register(tools.Tool{
+		Name:        "read",
+		Description: "Read",
+		Execute: func(args map[string]string) (string, error) {
+			capturedPath = args["path"]
+			return "ok", nil
+		},
+	})
+
+	exec := NewExecutor(reg, "/my/workspace")
+	chain := []ToolStep{
+		{Tool: "read", Args: map[string]string{"path": "/etc/hosts"}, DependsOn: -1},
+	}
+
+	_, err := exec.ExecuteChain(chain, nil)
+	if err != nil {
+		t.Fatalf("chain: %v", err)
+	}
+
+	if capturedPath != "/etc/hosts" {
+		t.Errorf("absolute path should not be modified: got %q", capturedPath)
+	}
+}
+
+func TestDecomposeGoal_AllTypes(t *testing.T) {
+	planner := NewPlanner([]string{"web_search", "write", "read"})
+
+	goals := []struct {
+		goal     string
+		minPhases int
+	}{
+		{"Research the history of cryptocurrency", 2},
+		{"Write a report about climate change", 3},
+		{"Analyze the pros and cons of remote work", 2},
+		{"Create a project plan for building a mobile app", 2},
+		{"Build a web scraper for news articles", 2},
+		{"Monitor Bitcoin price every hour", 1},
+		{"Do something completely random and odd", 2}, // generic
+	}
+
+	for _, tt := range goals {
+		plan, err := planner.DecomposeGoal(tt.goal)
+		if err != nil {
+			t.Errorf("DecomposeGoal(%q): %v", tt.goal, err)
+			continue
+		}
+		if len(plan.Phases) < tt.minPhases {
+			t.Errorf("DecomposeGoal(%q): got %d phases, want >= %d", tt.goal, len(plan.Phases), tt.minPhases)
+		}
+		// Every phase should have at least 1 task
+		for _, phase := range plan.Phases {
+			if len(phase.Tasks) == 0 {
+				t.Errorf("DecomposeGoal(%q): phase %q has 0 tasks", tt.goal, phase.Name)
+			}
+		}
+		// Plan should have an estimated duration > 0
+		if plan.EstDuration <= 0 {
+			t.Errorf("DecomposeGoal(%q): estimated duration is %v", tt.goal, plan.EstDuration)
+		}
+	}
+}
+
+func TestScheduler_AddRemoveList(t *testing.T) {
+	reg := mockRegistry()
+	a := NewAgent(reg, AgentConfig{Workspace: t.TempDir()})
+	s := NewScheduler(a)
+
+	// Add two jobs
+	id1, err := s.AddJob("check weather", "every 30m")
+	if err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+	id2, err := s.AddJob("check stocks", "hourly")
+	if err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+
+	jobs := s.ListJobs()
+	if len(jobs) != 2 {
+		t.Fatalf("expected 2 jobs, got %d", len(jobs))
+	}
+
+	// Remove one
+	s.RemoveJob(id1)
+	jobs = s.ListJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("expected 1 job after removal, got %d", len(jobs))
+	}
+	if jobs[0].ID != id2 {
+		t.Errorf("wrong job remaining: got %s, want %s", jobs[0].ID, id2)
+	}
+
+	// Remove the other
+	s.RemoveJob(id2)
+	jobs = s.ListJobs()
+	if len(jobs) != 0 {
+		t.Fatalf("expected 0 jobs, got %d", len(jobs))
+	}
+}
+
+func TestScheduler_Persistence(t *testing.T) {
+	dir := t.TempDir()
+	reg := mockRegistry()
+	a := NewAgent(reg, AgentConfig{Workspace: dir})
+
+	s1 := NewScheduler(a)
+	_, err := s1.AddJob("daily check", "daily 9:00")
+	if err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+
+	// Create new scheduler from same path — should load the job
+	s2 := NewScheduler(a)
+	jobs := s2.ListJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("expected 1 persisted job, got %d", len(jobs))
+	}
+	if jobs[0].Goal != "daily check" {
+		t.Errorf("persisted job goal: got %q, want %q", jobs[0].Goal, "daily check")
+	}
+}
+
+func TestScheduler_InvalidSchedule(t *testing.T) {
+	reg := mockRegistry()
+	a := NewAgent(reg, AgentConfig{Workspace: t.TempDir()})
+	s := NewScheduler(a)
+
+	_, err := s.AddJob("test", "garbage")
+	if err == nil {
+		t.Error("expected error for invalid schedule")
+	}
+}
+
+func TestIsInWorkspace(t *testing.T) {
+	a := &Agent{Config: AgentConfig{Workspace: "/home/user/.nous/agent"}}
+
+	tests := []struct {
+		step ToolStep
+		safe bool
+	}{
+		{ToolStep{Tool: "write", Args: map[string]string{"path": "/home/user/.nous/agent/notes.md"}}, true},
+		{ToolStep{Tool: "write", Args: map[string]string{"path": "agent_workspace/notes.md"}}, true},
+		{ToolStep{Tool: "write", Args: map[string]string{"path": "relative/file.md"}}, true},
+		{ToolStep{Tool: "write", Args: map[string]string{"path": "/etc/passwd"}}, false},
+		{ToolStep{Tool: "write", Args: map[string]string{"path": "../../../etc/passwd"}}, false},
+		{ToolStep{Tool: "web_search", Args: map[string]string{"query": "test"}}, true}, // no path arg
+	}
+
+	for _, tt := range tests {
+		got := a.isInWorkspace(tt.step)
+		if got != tt.safe {
+			t.Errorf("isInWorkspace(%v): got %v, want %v", tt.step.Args, got, tt.safe)
+		}
+	}
+}
+
+func TestAgent_LoadAndResume_NoState(t *testing.T) {
+	reg := mockRegistry()
+	a := NewAgent(reg, AgentConfig{Workspace: t.TempDir()})
+	err := a.LoadAndResume()
+	if err == nil {
+		t.Error("expected error when no saved state exists")
+	}
+}
+
+func TestAgent_LoadAndResume_FinishedState(t *testing.T) {
+	dir := t.TempDir()
+	reg := mockRegistry()
+
+	// Create agent, run to completion, then try to resume
+	a := NewAgent(reg, AgentConfig{
+		Workspace:    dir,
+		MaxToolCalls: 50,
+		MaxRetries:   1,
+	})
+
+	a.Start("Research Go")
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("timeout waiting for agent")
+		default:
+		}
+		if !a.Status().Running {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Now try to resume — should fail since it's finished
+	a2 := NewAgent(reg, AgentConfig{Workspace: dir})
+	err := a2.LoadAndResume()
+	if err == nil {
+		t.Error("expected error when resuming finished state")
+	}
+}
+
+func TestReporter_IdleState(t *testing.T) {
+	state := NewAgentState("")
+	reporter := NewReporter(state)
+	report := reporter.ProgressReport()
+	if !strings.Contains(report, "[IDLE]") {
+		t.Errorf("idle report should contain [IDLE], got: %s", report)
+	}
+}
+
+func TestReporter_PlanningState(t *testing.T) {
+	state := NewAgentState("")
+	state.Reset("Test goal")
+	// Plan is nil but goal is set
+	reporter := NewReporter(state)
+	report := reporter.ProgressReport()
+	if !strings.Contains(report, "[PLANNING]") {
+		t.Errorf("planning report should contain [PLANNING], got: %s", report)
+	}
+}
+
+func TestAgent_ConcurrentStatusCalls(t *testing.T) {
+	reg := mockRegistry()
+	a := NewAgent(reg, AgentConfig{
+		Workspace:    t.TempDir(),
+		MaxToolCalls: 50,
+	})
+
+	a.Start("Research Go programming")
+
+	// Hammer Status() from multiple goroutines while agent is running
+	done := make(chan struct{})
+	for i := 0; i < 10; i++ {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			for j := 0; j < 50; j++ {
+				_ = a.Status()
+				_ = a.Report()
+				time.Sleep(time.Millisecond)
+			}
+		}()
+	}
+	for i := 0; i < 10; i++ {
+		<-done
+	}
+
+	a.Stop()
 }
