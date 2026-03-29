@@ -375,15 +375,6 @@ func main() {
 			}
 		}
 	}
-	var hybridTextGen *cognitive.TextGenModel
-	if actions.Composer != nil {
-		hybridTextGen = actions.Composer.TextGen
-	}
-	hybridFluency := cognitive.NewFluencyScorer()
-	hybridFluency.LoadCorpus(filepath.Join(workDir, "knowledge"))
-	actions.HybridGen = cognitive.NewHybridGenerator(hybridCorpus, hybridTextGen, hybridFluency)
-	actions.Fluency = hybridFluency
-
 	corpusNLG := cognitive.NewCorpusNLG()
 	if err := corpusNLG.IngestCorpus(filepath.Join(workDir, "knowledge")); err == nil {
 		actions.CorpusNLG = corpusNLG
@@ -399,6 +390,22 @@ func main() {
 		}
 	}
 	actions.FactExtract = factExtractor
+
+	// GRU text generation training is available but deferred to background.
+	// With 4000+ facts, training takes ~60s blocking startup. The GRU can
+	// be trained via the /train command in the REPL instead.
+	// TODO: Run training in background goroutine after server starts.
+
+	// Create hybrid generator AFTER fact extraction and GRU training
+	// so it can use the trained TextGen model
+	var hybridTextGen *cognitive.TextGenModel
+	if actions.Composer != nil {
+		hybridTextGen = actions.Composer.TextGen
+	}
+	hybridFluency := cognitive.NewFluencyScorer()
+	hybridFluency.LoadCorpus(knowledgePath)
+	actions.HybridGen = cognitive.NewHybridGenerator(hybridCorpus, hybridTextGen, hybridFluency, knowledgePath)
+	actions.Fluency = hybridFluency
 
 	// Fluency scorer — bigram-based sentence quality scoring
 	fluencyScorer := cognitive.NewFluencyScorer()

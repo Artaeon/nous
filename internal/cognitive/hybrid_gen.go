@@ -1,7 +1,10 @@
 package cognitive
 
 import (
+	"bufio"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"strings"
 	"unicode"
 )
@@ -40,17 +43,27 @@ type HybridGenerator struct {
 	textGen *TextGenModel
 	fluency *FluencyScorer
 
+	// Path to knowledge/*.txt files for same-domain sentence retrieval.
+	knowledgeDir string
+
 	// Fallback connectors for when GRU isn't available.
 	// These are SHORT (2-5 words) connecting phrases, not full sentences.
 	connectors map[string][]string // relation transition -> connector options
 }
 
 // NewHybridGenerator creates a hybrid text generation engine.
-func NewHybridGenerator(corpus *SentenceCorpus, textGen *TextGenModel, fluency *FluencyScorer) *HybridGenerator {
+// knowledgeDir is the path to knowledge/*.txt files for same-domain retrieval.
+// Pass "" to disable topic sentence retrieval.
+func NewHybridGenerator(corpus *SentenceCorpus, textGen *TextGenModel, fluency *FluencyScorer, knowledgeDir ...string) *HybridGenerator {
+	kDir := ""
+	if len(knowledgeDir) > 0 {
+		kDir = knowledgeDir[0]
+	}
 	hg := &HybridGenerator{
-		corpus:  corpus,
-		textGen: textGen,
-		fluency: fluency,
+		corpus:       corpus,
+		textGen:      textGen,
+		fluency:      fluency,
+		knowledgeDir: kDir,
 		connectors: map[string][]string{
 			"to_usage":    {"In practice,", "Practically,"},
 			"to_relation": {""},
@@ -181,13 +194,20 @@ func (hg *HybridGenerator) Generate(subject string, facts []edgeFact) string {
 // Retrieval with fallback
 // -----------------------------------------------------------------------
 
-// retrieveOrGenerate tries corpus retrieval first, then GRU, then structural.
+// retrieveOrGenerate tries topic sentence retrieval first, then GRU, then structural.
 func (hg *HybridGenerator) retrieveOrGenerate(subject string, fact edgeFact) string {
-	// Tier 1: Corpus retrieval is DISABLED for the hybrid path.
-	// Entity-swapping adapted sentences produce cross-domain contamination
-	// ("Quantum mechanics was a Pre-Socratic philosopher from Elea").
-	// Instead, we fall through to structural generation which uses the
-	// ACTUAL facts from the knowledge graph — no entity swapping needed.
+	// Tier 1: Direct topic sentences from knowledge files.
+	// These are REAL human-written sentences about THIS topic — no entity swapping.
+	if hg.knowledgeDir != "" {
+		topicSentences := hg.retrieveTopicSentences(subject)
+		objLower := strings.ToLower(fact.Object)
+		for _, sent := range topicSentences {
+			lower := strings.ToLower(sent)
+			if strings.Contains(lower, objLower) && len(sent) < 200 {
+				return sent
+			}
+		}
+	}
 
 	// Tier 2: Neural generation.
 	if hg.textGen != nil {
@@ -199,6 +219,57 @@ func (hg *HybridGenerator) retrieveOrGenerate(subject string, fact edgeFact) str
 
 	// Tier 3: Simple structural sentence (last resort).
 	return buildSimpleSentence(subject, fact.Relation, fact.Object)
+}
+
+// retrieveTopicSentences reads knowledge text files and returns individual
+// sentences from paragraphs that mention the given topic. Only returns
+// sentences from the SAME paragraph as the topic — no cross-domain mixing.
+func (hg *HybridGenerator) retrieveTopicSentences(topic string) []string {
+	if hg.knowledgeDir == "" {
+		return nil
+	}
+
+	topicLower := strings.ToLower(topic)
+
+	// Scan all .txt files in the knowledge directory.
+	matches, err := filepath.Glob(filepath.Join(hg.knowledgeDir, "*.txt"))
+	if err != nil || len(matches) == 0 {
+		return nil
+	}
+
+	var result []string
+	for _, path := range matches {
+		f, err := os.Open(path)
+		if err != nil {
+			continue
+		}
+
+		scanner := bufio.NewScanner(f)
+		scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+
+			// Check if this paragraph mentions the topic.
+			if !strings.Contains(strings.ToLower(line), topicLower) {
+				continue
+			}
+
+			// Split paragraph into sentences and collect them.
+			sentences := hybridSplitSentences(line)
+			for _, sent := range sentences {
+				sent = strings.TrimSpace(sent)
+				if len(sent) > 20 && len(sent) < 200 {
+					result = append(result, sent)
+				}
+			}
+		}
+		f.Close()
+	}
+
+	return result
 }
 
 // hybridIsRelevant checks if an adapted corpus sentence is actually about
@@ -386,11 +457,15 @@ func (hg *HybridGenerator) scoreCandidates(subject string, fact edgeFact) string
 // pronominalize replaces repeated mentions of the subject with pronouns
 // or definite descriptions to avoid monotonous repetition.
 //
+// Uses gender-aware pronouns for persons (he/she) and "it" for non-persons.
+// For plural/group entities, uses "they".
+//
 // Pattern:
-//   1st occurrence: full name
-//   2nd occurrence: "it" (pronoun)
-//   3rd occurrence: "the [category]" (definite description)
-//   4th+: alternate pronoun and description
+//
+//	1st occurrence: full name
+//	2nd occurrence: pronoun (he/she/it/they)
+//	3rd occurrence: definite description ("the philosopher", "the language")
+//	4th+: alternate pronoun and description
 func pronominalize(text, subject, category string) string {
 	if subject == "" || text == "" {
 		return text
@@ -398,11 +473,11 @@ func pronominalize(text, subject, category string) string {
 
 	capSubject := capitalizeFirst(subject)
 
+	// Determine the correct pronoun based on category and gender.
+	pronoun := hybridDeterminePronoun(subject, category)
+
 	// Build the definite description from the IsA category.
-	description := "it"
-	if category != "" {
-		description = "the " + strings.ToLower(category)
-	}
+	desc := hybridDefiniteDesc(subject, category)
 
 	// Split into sentences so we can track occurrences.
 	sentences := hybridSplitSentences(text)
@@ -418,27 +493,59 @@ func pronominalize(text, subject, category string) string {
 		case occurrence == 1:
 			// Keep the full name.
 			continue
-		case occurrence == 2:
-			// Replace with pronoun.
-			sentences[i] = replaceSubjectOnce(sent, capSubject, subject, "It")
-		case occurrence == 3 && category != "":
-			// Replace with definite description.
-			descCap := capitalizeFirst(description)
+		case occurrence%3 == 0 && desc != "":
+			// Every 3rd mention: use definite description.
+			descCap := capitalizeFirst(desc)
 			sentences[i] = replaceSubjectOnce(sent, capSubject, subject, descCap)
 		default:
-			// Alternate: even -> pronoun, odd -> description.
-			if occurrence%2 == 0 {
-				sentences[i] = replaceSubjectOnce(sent, capSubject, subject, "It")
-			} else if category != "" {
-				descCap := capitalizeFirst(description)
-				sentences[i] = replaceSubjectOnce(sent, capSubject, subject, descCap)
-			} else {
-				sentences[i] = replaceSubjectOnce(sent, capSubject, subject, "It")
-			}
+			// Other mentions: use pronoun.
+			sentences[i] = replaceSubjectOnce(sent, capSubject, subject, capitalizeFirst(pronoun))
 		}
 	}
 
 	return strings.Join(sentences, " ")
+}
+
+// hybridDeterminePronoun selects the correct pronoun for a subject.
+// For persons: he/she based on detectGender.
+// For plural/group entities: they.
+// For everything else: it.
+func hybridDeterminePronoun(subject, category string) string {
+	catNorm := inferCategoryFromString(strings.ToLower(category))
+
+	// Check for plural/group entities first.
+	if isPlural(category) {
+		return "they"
+	}
+
+	// Check for persons — use gendered pronoun.
+	if isPerson(catNorm) {
+		g := detectGender(subject)
+		switch g {
+		case GenderFemale:
+			return "she"
+		case GenderMale:
+			return "he"
+		default:
+			return "he"
+		}
+	}
+
+	return "it"
+}
+
+// hybridDefiniteDesc builds a definite description like "the philosopher"
+// or "the language" from the category. Falls back to the last word of the
+// subject if no category is available.
+func hybridDefiniteDesc(subject, category string) string {
+	if category != "" {
+		return "the " + strings.ToLower(category)
+	}
+	words := strings.Fields(strings.ToLower(subject))
+	if len(words) > 0 {
+		return "the " + words[len(words)-1]
+	}
+	return ""
 }
 
 // containsSubject checks if a sentence contains the subject (case-insensitive start match).
