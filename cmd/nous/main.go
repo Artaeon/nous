@@ -161,6 +161,7 @@ func main() {
 	undoStack := memory.NewUndoStack(100)
 	toolReg := tools.NewRegistry()
 	tools.RegisterBuiltins(toolReg, workDir, *allowShell, undoStack)
+	tools.RegisterRealTimeData(toolReg)
 
 	// NLU + ActionRouter: deterministic intent → action pipeline (shared with HTTP API)
 	nlu := cognitive.NewNLU()
@@ -392,6 +393,9 @@ func main() {
 	}
 	actions.FactExtract = factExtractor
 
+	// Deep Reasoner — multi-step structured reasoning for "why" and "how" questions
+	actions.DeepReason = cognitive.NewDeepReasoner(actions.CogGraph, knowledgePath)
+
 	// GRU text generation training is available but deferred to background.
 	// With 4000+ facts, training takes ~60s blocking startup. The GRU can
 	// be trained via the /train command in the REPL instead.
@@ -432,6 +436,12 @@ func main() {
 	if actions.CogGraph != nil {
 		actions.Synthesizer = cognitive.NewKnowledgeSynthesizer(actions.CogGraph, actions.Analogy)
 	}
+
+	// Extractive text summarizer — heuristic sentence scoring, no ML
+	actions.Summarizer = cognitive.NewSummarizer()
+
+	// Document generator — structured long-form documents from knowledge graph
+	actions.DocGen = cognitive.NewDocumentGenerator(actions.CogGraph, knowledgePath)
 
 	// Conversational Learning Engine — Nous learns from every interaction
 	learningEngine := cognitive.NewLearningEngine(actions.CogGraph, actions.Composer, nousDir)

@@ -77,6 +77,7 @@ type ActionRouter struct {
 	Sparks         *SparkEngine
 	Council        *InnerCouncil
 	Opinions       *OpinionEngine
+	DeepReason     *DeepReasoner
 
 	// Phase 1-4 wired systems
 	ConvState      *ConversationState
@@ -108,6 +109,10 @@ type ActionRouter struct {
 	Transparency   *CognitiveTransparency
 	Synthesizer    *KnowledgeSynthesizer
 	SelfModel      *SelfModel
+
+	// Text summarization and document generation
+	Summarizer     *Summarizer
+	DocGen         *DocumentGenerator
 }
 
 // NewActionRouter creates a router with nil subsystems.
@@ -275,6 +280,22 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 			nlu.Entities = make(map[string]string)
 		}
 		ar.EntityExtract.ExtractForIntent(nlu.Raw, nlu.Intent, nlu.Entities)
+	}
+
+	// Extractive summarizer intercept: when the user pastes a long text
+	// (>200 words) and says "summarize" or "tl;dr", use the Summarizer
+	// to extract the most important sentences rather than a knowledge lookup.
+	if ar.Summarizer != nil && isSummarizeRequest(nlu.Raw) {
+		textToSummarize := extractTextForSummarization(nlu.Raw)
+		if len(strings.Fields(textToSummarize)) > 200 {
+			summary := ar.Summarizer.Summarize(textToSummarize, 5)
+			if summary != "" {
+				return &ActionResult{
+					DirectResponse: summary,
+					Source:         "summarizer",
+				}
+			}
+		}
 	}
 
 	result := ar.dispatch(nlu, conv)
@@ -2428,6 +2449,20 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 		}
 	}
 
+	// Deep reasoning: for "why", "how does X affect Y", and similar complex
+	// questions, use multi-step structured reasoning with explicit chains.
+	// Fires AFTER the Wikipedia paragraph path (which serves direct answers)
+	// but BEFORE NLG reconstruction (which synthesises from graph fragments).
+	if IsDeepQuestion(nlu.Raw) && ar.DeepReason != nil {
+		result := ar.DeepReason.Reason(nlu.Raw)
+		if result != nil && result.FinalAnswer != "" {
+			return &ActionResult{
+				DirectResponse: result.Trace + "\n\n" + result.FinalAnswer,
+				Source:         "deep_reasoning",
+			}
+		}
+	}
+
 	// On-demand wiki loading: if the topic isn't in the graph, check the wiki index
 	if ar.Packages != nil {
 		if loaded := ar.Packages.LookupWiki(query); loaded > 0 {
@@ -4453,4 +4488,75 @@ func extractFactObjects(fact string) []string {
 		}
 	}
 	return objects
+}
+
+// isSummarizeRequest detects whether the user input is a summarization request
+// (e.g., "summarize this", "tl;dr", "give me a summary" followed by long text).
+func isSummarizeRequest(raw string) bool {
+	lower := strings.ToLower(strings.TrimSpace(raw))
+	prefixes := []string{
+		"summarize this", "summarise this", "summarize:", "summarise:",
+		"tl;dr", "tldr", "tl dr",
+		"give me a summary", "can you summarize", "can you summarise",
+		"please summarize", "please summarise",
+		"summary:", "summarize the following", "summarise the following",
+	}
+	for _, p := range prefixes {
+		if strings.HasPrefix(lower, p) {
+			return true
+		}
+	}
+	// Also check for trailing summarize commands after pasted text.
+	suffixes := []string{
+		"summarize this", "summarise this", "tl;dr", "tldr",
+		"summarize", "summarise", "summary please",
+	}
+	for _, s := range suffixes {
+		if strings.HasSuffix(lower, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// extractTextForSummarization strips the summarization command from the input,
+// leaving only the text to be summarized.
+func extractTextForSummarization(raw string) string {
+	lower := strings.ToLower(strings.TrimSpace(raw))
+	text := strings.TrimSpace(raw)
+
+	// Strip leading command.
+	leadPrefixes := []string{
+		"summarize this:", "summarise this:", "summarize this",
+		"summarise this", "summarize:", "summarise:",
+		"tl;dr:", "tl;dr", "tldr:", "tldr", "tl dr:",
+		"give me a summary of:", "give me a summary of",
+		"give me a summary:", "give me a summary",
+		"can you summarize this:", "can you summarize this",
+		"can you summarise this:", "can you summarise this",
+		"please summarize:", "please summarise:",
+		"please summarize", "please summarise",
+		"summary:", "summarize the following:", "summarize the following",
+		"summarise the following:", "summarise the following",
+	}
+	for _, p := range leadPrefixes {
+		if strings.HasPrefix(lower, p) {
+			text = strings.TrimSpace(text[len(p):])
+			return text
+		}
+	}
+
+	// Strip trailing command.
+	trailSuffixes := []string{
+		"summarize this", "summarise this", "tl;dr", "tldr",
+		"summarize", "summarise", "summary please",
+	}
+	for _, s := range trailSuffixes {
+		if strings.HasSuffix(lower, s) {
+			text = strings.TrimSpace(text[:len(text)-len(s)])
+			return text
+		}
+	}
+
+	return text
 }
