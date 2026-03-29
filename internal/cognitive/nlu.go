@@ -675,6 +675,10 @@ func (n *NLU) Understand(input string) *NLUResult {
 	// Phase 2: Classify intent (order matters — most specific first)
 	n.classifyIntent(trimmed, lower, result)
 
+	// Phase 2.5: Post-classification corrections — fix common misroutes
+	// regardless of whether neural or pattern classifier produced them.
+	n.postClassifyCorrections(lower, result)
+
 	// Phase 3: Map intent + entities to action
 	n.mapAction(lower, result)
 
@@ -1541,6 +1545,42 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 		r.Intent = "question"
 		r.Confidence = 0.45
 		r.Entities["topic"] = n.extractTopicGeneral(lower)
+	}
+}
+
+// postClassifyCorrections fixes common misclassifications that both
+// neural and pattern classifiers can make. These are semantic corrections
+// based on query structure, not hardcoded word lists.
+func (n *NLU) postClassifyCorrections(lower string, r *NLUResult) {
+	// "time in [PLACE]" is a world clock query, not sysinfo
+	if r.Intent == "sysinfo" && strings.Contains(lower, " in ") &&
+		(strings.Contains(lower, "time") || strings.Contains(lower, "clock")) {
+		r.Intent = "question"
+	}
+
+	// "creative" with knowledge signals → explain
+	if r.Intent == "creative" {
+		for _, sig := range []string{"overview", "explain", "tell me about", "describe", "summary of", "summarize"} {
+			if strings.Contains(lower, sig) {
+				r.Intent = "explain"
+				break
+			}
+		}
+	}
+
+	// "transform" when input contains "summarize this:" → keep as transform
+	// but the summarizer intercept in Execute() will handle it
+
+	// "conversation" or "question" with math expressions → calculate
+	if (r.Intent == "conversation" || r.Intent == "question" || r.Intent == "greeting") &&
+		n.mathRe.MatchString(lower) {
+		r.Intent = "compute"
+	}
+
+	// "conversation" with "% of" pattern → calculate
+	if r.Intent != "calculate" && r.Intent != "compute" &&
+		strings.Contains(lower, "% of") {
+		r.Intent = "calculate"
 	}
 }
 
