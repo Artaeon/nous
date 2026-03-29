@@ -348,6 +348,42 @@ func main() {
 	// NLG engines
 	actions.NLG = cognitive.NewNLGEngine()
 	actions.Format = cognitive.NewFormatCompliance()
+	// Build a SentenceCorpus from extracted facts for the hybrid generator.
+	// Each extracted fact with a source sentence becomes a retrieval exemplar.
+	hybridCorpus := actions.Composer.SentenceCorpus
+	if hybridCorpus == nil || hybridCorpus.Size() == 0 {
+		// No pre-built corpus — mine one from the knowledge text
+		hybridCorpus = cognitive.NewSentenceCorpus()
+		miner := cognitive.NewWikiFactExtractor()
+		if allFacts, err := miner.ExtractFromDirectory(filepath.Join(workDir, "knowledge")); err == nil {
+			for _, f := range allFacts {
+				if f.Source != "" && len(f.Source) > 20 && f.Relation != cognitive.RelDescribedAs {
+					hybridCorpus.Add(cognitive.SentenceExemplar{
+						Sentence: f.Source,
+						Subject:  f.Subject,
+						Object:   f.Object,
+						Relation: f.Relation,
+					})
+				}
+			}
+			if hybridCorpus.Size() > 0 {
+				fmt.Fprintf(os.Stderr, "  built sentence corpus (%d exemplars from knowledge text)\n", hybridCorpus.Size())
+				// NOTE: Do NOT give this to the Composer — cross-domain entity
+				// swapping produces garbage ("Quantum mechanics was a Pre-Socratic
+				// philosopher from Elea"). The mined corpus is only for the hybrid
+				// generator's direct-text path (which is currently disabled).
+			}
+		}
+	}
+	var hybridTextGen *cognitive.TextGenModel
+	if actions.Composer != nil {
+		hybridTextGen = actions.Composer.TextGen
+	}
+	hybridFluency := cognitive.NewFluencyScorer()
+	hybridFluency.LoadCorpus(filepath.Join(workDir, "knowledge"))
+	actions.HybridGen = cognitive.NewHybridGenerator(hybridCorpus, hybridTextGen, hybridFluency)
+	actions.Fluency = hybridFluency
+
 	corpusNLG := cognitive.NewCorpusNLG()
 	if err := corpusNLG.IngestCorpus(filepath.Join(workDir, "knowledge")); err == nil {
 		actions.CorpusNLG = corpusNLG

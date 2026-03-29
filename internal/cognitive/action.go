@@ -86,6 +86,7 @@ type ActionRouter struct {
 	// NLG engines
 	NLG            *NLGEngine
 	CorpusNLG      *CorpusNLG
+	HybridGen      *HybridGenerator
 	Format         *FormatCompliance
 
 	// Fact extraction + fluency + policy + context
@@ -1439,15 +1440,18 @@ func (ar *ActionRouter) gatherFactsForNLG(topic string) []edgeFact {
 				continue
 			}
 			obj := target.Label
-			// Quality filter: skip facts with fragment objects
+			// Quality filter: skip facts with fragment/contaminated objects.
+			// Max 60 chars for non-description facts prevents long sentence
+			// fragments from entering the NLG pipeline.
 			objLower := strings.ToLower(obj)
-			if len(obj) < 3 || len(obj) > 80 ||
+			if len(obj) < 3 || len(obj) > 60 ||
 				strings.HasSuffix(objLower, " by") || strings.HasSuffix(objLower, " in") ||
 				strings.HasSuffix(objLower, " at") || strings.HasSuffix(objLower, " and") ||
 				strings.HasSuffix(objLower, " or") || strings.HasSuffix(objLower, " the") ||
 				strings.HasSuffix(objLower, " a") || strings.HasSuffix(objLower, " of") ||
 				strings.HasSuffix(objLower, " to") || strings.HasSuffix(objLower, " for") ||
-				strings.Contains(obj, ". ") ||
+				strings.Contains(obj, ". ") || strings.Contains(objLower, " such as ") ||
+				strings.Contains(objLower, "influenced by") || strings.Contains(objLower, "prose style") ||
 				strings.HasSuffix(objLower, "progra") || strings.HasSuffix(objLower, "peop") ||
 				strings.HasSuffix(objLower, "intelligenc") {
 				continue
@@ -2257,15 +2261,22 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 		}
 	}
 
-	// NLG: generate flowing prose from graph facts.
-	// Try corpus-mined NLG first (patterns from real Wikipedia text),
-	// then fall back to the structural NLG engine.
+	// NLG: generate prose from graph facts using best available tier.
 	if ar.CogGraph != nil {
 		facts := ar.gatherFactsForNLG(query)
 		if len(facts) >= 2 {
 			var prose string
 
-			// Structural NLG engine — sentence fusion + pronominalization
+			// Tier 1: Hybrid generator — retrieval + recombination + neural connectors
+			if ar.HybridGen != nil {
+				if nlu.Intent == "explain" || nlu.Intent == "question" {
+					prose = ar.HybridGen.GenerateExplanation(query, facts)
+				} else {
+					prose = ar.HybridGen.Generate(query, facts)
+				}
+			}
+
+			// Tier 2: Structural NLG engine — sentence fusion + pronominalization
 			if (prose == "" || len(strings.Fields(prose)) < 10) && ar.NLG != nil {
 				if nlu.Intent == "explain" || nlu.Intent == "question" {
 					prose = ar.NLG.RealizeExplanation(query, facts)
