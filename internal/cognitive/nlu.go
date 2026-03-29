@@ -1582,6 +1582,22 @@ func (n *NLU) postClassifyCorrections(lower string, r *NLUResult) {
 		strings.Contains(lower, "% of") {
 		r.Intent = "calculate"
 	}
+
+	// Short grateful inputs are affirmations, not knowledge queries
+	if len(strings.Fields(lower)) <= 5 {
+		thankPatterns := []string{"thank", "thanks", "thx", "appreciate it", "cheers"}
+		for _, tp := range thankPatterns {
+			if strings.Contains(lower, tp) {
+				r.Intent = "affirmation"
+				return
+			}
+		}
+	}
+
+	// "generate/create a password" → password tool
+	if strings.Contains(lower, "password") && (strings.Contains(lower, "generate") || strings.Contains(lower, "create") || strings.Contains(lower, "make") || strings.Contains(lower, "new")) {
+		r.Intent = "password"
+	}
 }
 
 // mapAction maps the classified intent + entities to a concrete action.

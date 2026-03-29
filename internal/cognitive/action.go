@@ -2333,18 +2333,33 @@ func findKnowledgeParagraph(knowledgeDir, topic string) string {
 		}
 	}
 
-	// Strategy 3: for multi-word topics, try matching individual significant
-	// words against paragraph starts (fallback for partial matches).
+	// Strategy 3: full-phrase containment — the first sentence contains
+	// the entire topic phrase (not just a single word).
+	for _, p := range knowledgeParagraphCache {
+		firstSent := firstSentenceOf(p)
+		firstLower := strings.ToLower(firstSent)
+		if strings.Contains(firstLower, topicLower) {
+			return p
+		}
+	}
+
+	// Strategy 4: for multi-word topics, require the FIRST significant
+	// word of the topic to match the FIRST significant word of the
+	// paragraph. This prevents "programming languages" from matching
+	// "Language learning basics" via the word "language".
 	words := strings.Fields(topicLower)
 	if len(words) > 1 {
-		for _, word := range words {
-			if len(word) <= 3 {
-				continue // skip "the", "of", "a", etc.
+		topicFirstWord := ""
+		for _, w := range words {
+			if len(w) > 3 {
+				topicFirstWord = w
+				break
 			}
+		}
+		if topicFirstWord != "" {
 			for _, p := range knowledgeParagraphCache {
-				firstSent := firstSentenceOf(p)
-				firstLower := strings.ToLower(firstSent)
-				if strings.HasPrefix(firstLower, word+" ") || strings.HasPrefix(firstLower, word+",") {
+				paraFirstWord := strings.ToLower(strings.TrimRight(strings.Fields(p)[0], ".,;:!?"))
+				if paraFirstWord == topicFirstWord {
 					return p
 				}
 			}

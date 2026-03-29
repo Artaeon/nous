@@ -4017,12 +4017,13 @@ var empatheticNeutralPhrases = []string{
 	"I'm listening. Keep going if you want.",
 }
 
-// Empathetic actions
+// Empathetic actions — universally appropriate (no "take a breath" which
+// is wrong for celebration contexts, no stress-specific phrases).
 var empatheticActions = []string{
 	"Want to write about it in your journal? Sometimes that helps.",
 	"Would it help to talk it through?",
 	"I can check in with you later if you'd like.",
-	"Take a breath. I'm not going anywhere.",
+	"I'm not going anywhere.",
 	"Whatever you need — I'm here.",
 }
 
@@ -4533,10 +4534,10 @@ func (c *Composer) composeSpecificEmpathy(specifics map[string]string, sentiment
 		return fmt.Sprintf(c.pick(templates), capitalizeFirst(action), subject)
 	}
 
-	// Subject alone: "Project stress is real — especially when it matters to you."
+	// Subject alone: empathetic acknowledgment of what they're dealing with.
 	if subject != "" {
 		templates := []string{
-			"%s stress is real — especially when it matters to you.",
+			"I'm sorry you're going through that with %s.",
 			"Dealing with %s is harder than it sounds.",
 			"The %s situation sounds genuinely tough.",
 		}

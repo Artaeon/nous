@@ -288,33 +288,33 @@ func (ic *InnerCouncil) consultEmpath(input string, subtext *SubtextAnalysis) Co
 		}
 	}
 
-	// Build assessment from signals — user-facing language only,
-	// no debug metrics (valence/arousal numbers leak into Synthesis).
+	// Build assessment from signals — human-readable language only,
+	// since this text can leak into the Synthesis which the user sees.
 	var parts []string
 	if emotion.Dominant != "neutral" {
-		parts = append(parts, fmt.Sprintf("User seems %s", emotion.Dominant))
+		parts = append(parts, fmt.Sprintf("This person seems to be feeling %s right now", emotion.Dominant))
 	}
 	for _, sig := range signals {
 		if sig.Weight >= 0.4 {
-			parts = append(parts, fmt.Sprintf("detected %s", sig.Type))
+			parts = append(parts, fmt.Sprintf("there are signs of %s", sig.Type))
 		}
 	}
 	if subtext.ImpliedNeed != "" {
-		needDesc := string(subtext.ImpliedNeed)
 		switch subtext.ImpliedNeed {
 		case NeedVenting:
-			needDesc = "they need to vent"
+			parts = append(parts, "they might appreciate space to vent")
 		case NeedReassurance:
-			needDesc = "they need reassurance"
+			parts = append(parts, "they might appreciate some reassurance")
 		case NeedValidation:
-			needDesc = "they want validation"
+			parts = append(parts, "they might appreciate validation")
 		case NeedCelebration:
-			needDesc = "they want to celebrate"
+			parts = append(parts, "they might appreciate celebrating with them")
+		default:
+			parts = append(parts, fmt.Sprintf("they might appreciate %s", strings.ReplaceAll(string(subtext.ImpliedNeed), "_", " ")))
 		}
-		parts = append(parts, needDesc)
 	}
 
-	assessment := strings.Join(parts, ". ") + "."
+	assessment := strings.Join(parts, "; ") + "."
 
 	// Determine key insight based on implied need.
 	keyInsight := "Acknowledge emotional state before information."
