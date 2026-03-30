@@ -73,9 +73,12 @@ func (e *Executor) ExecuteChain(chain []ToolStep, context map[string]string) (*C
 		if step.DependsOn >= 0 && step.DependsOn < i {
 			depOutput := stepOutputs[step.DependsOn]
 			ctx["_prev"] = depOutput
-			// Also merge into args where placeholders exist
-			step = e.resolveArgs(step, ctx)
 		}
+
+		// Always resolve ${var} placeholders in args against the context.
+		// This handles both DependsOn references and cross-task references
+		// like ${synthesis} from a previous task's output.
+		step = e.resolveArgs(step, ctx)
 
 		// Resolve workspace-relative paths
 		step = e.resolveWorkspace(step)
@@ -157,11 +160,20 @@ func (e *Executor) executeCognitiveStep(tool string, args, context map[string]st
 		if query == "" {
 			query = args["topic"]
 		}
-		result := e.Brain.Think(query)
-		if result == "" {
-			return e.Brain.Compose(query), nil
+		if query == "" {
+			return "", fmt.Errorf("_think: no query provided")
 		}
-		return result, nil
+		result := e.Brain.Think(query)
+		if result != "" {
+			return result, nil
+		}
+		// Fallback to Compose
+		result = e.Brain.Compose(query)
+		if result != "" {
+			return result, nil
+		}
+		// Both failed — return a stub so downstream steps get something
+		return "No detailed analysis available for: " + query, nil
 
 	case "_reason":
 		question := args["question"]
@@ -181,17 +193,35 @@ func (e *Executor) executeCognitiveStep(tool string, args, context map[string]st
 			style = "report"
 		}
 		doc := e.Brain.GenerateDocument(topic, style)
-		if doc == "" {
-			return "", fmt.Errorf("_generate_doc: could not generate document about %q", topic)
+		if doc != "" {
+			return doc, nil
 		}
-		return doc, nil
+		// DocGen couldn't produce content (topic not in knowledge graph).
+		// Fall back to synthesis from context, or a stub.
+		synth := e.Brain.SynthesizeResults("write a "+style+" about "+topic, context)
+		if synth != "" {
+			return synth, nil
+		}
+		return "# " + topic + "\n\nDocument generation pending — topic not yet in knowledge base.", nil
 
 	case "_synthesize":
 		goal := args["goal"]
 		if goal == "" {
 			goal = "summarize the findings"
 		}
-		return e.Brain.SynthesizeResults(goal, context), nil
+		// Filter context to only include task results, not internal keys
+		filtered := make(map[string]string)
+		for k, v := range context {
+			if k == "_prev" || k == "" || v == "" {
+				continue
+			}
+			filtered[k] = v
+		}
+		result := e.Brain.SynthesizeResults(goal, filtered)
+		if result == "" {
+			return "Analysis pending — insufficient data gathered.", nil
+		}
+		return result, nil
 
 	case "_compose":
 		query := args["query"]
@@ -334,7 +364,7 @@ func IsDangerousTool(name string) bool {
 // IsSafeTool returns true for read-only tools that can run without approval.
 func IsSafeTool(name string) bool {
 	switch name {
-	case "web_search", "fetch", "read", "glob", "grep", "ls", "tree",
+	case "websearch", "web_search", "fetch", "read", "glob", "grep", "ls", "tree",
 		"calculator", "convert", "weather", "translate", "timer",
 		"notes", "todos", "habits", "expenses", "system_info":
 		return true

@@ -152,21 +152,21 @@ func (p *Planner) researchPhases(goal string) []Phase {
 					ID:          "research-1",
 					Description: "Web search for " + topic,
 					ToolChain: []ToolStep{
-						{Tool: "web_search", Args: map[string]string{"query": topic + " overview 2026"}, DependsOn: -1, OutputKey: "search_results"},
+						{Tool: "websearch", Args: map[string]string{"query": topic + " overview 2026"}, DependsOn: -1, OutputKey: "search_results"},
 					},
 				},
 				{
 					ID:          "research-2",
 					Description: "Search for competitors and alternatives",
 					ToolChain: []ToolStep{
-						{Tool: "web_search", Args: map[string]string{"query": topic + " competitors comparison"}, DependsOn: -1, OutputKey: "competitors"},
+						{Tool: "websearch", Args: map[string]string{"query": topic + " competitors comparison"}, DependsOn: -1, OutputKey: "competitors"},
 					},
 				},
 				{
 					ID:          "research-3",
 					Description: "Search for market data and trends",
 					ToolChain: []ToolStep{
-						{Tool: "web_search", Args: map[string]string{"query": topic + " market size trends"}, DependsOn: -1, OutputKey: "market_data"},
+						{Tool: "websearch", Args: map[string]string{"query": topic + " market size trends"}, DependsOn: -1, OutputKey: "market_data"},
 					},
 				},
 			},
@@ -178,16 +178,10 @@ func (p *Planner) researchPhases(goal string) []Phase {
 			Tasks: []Task{
 				{
 					ID:          "analyze-1",
-					Description: "Synthesize research findings",
+					Description: "Synthesize findings and save notes",
 					ToolChain: []ToolStep{
 						{Tool: "_synthesize", Args: map[string]string{"goal": "analyze key findings about " + topic}, DependsOn: -1, OutputKey: "synthesis"},
-					},
-				},
-				{
-					ID:          "analyze-2",
-					Description: "Save analysis notes",
-					ToolChain: []ToolStep{
-						{Tool: "write", Args: map[string]string{"path": "agent_workspace/research_notes.md", "content": "${synthesis}"}, DependsOn: -1, OutputKey: "notes_file"},
+						{Tool: "write", Args: map[string]string{"path": "agent_workspace/research_notes.md", "content": "${synthesis}"}, DependsOn: 0, OutputKey: "notes_file"},
 					},
 				},
 			},
@@ -199,16 +193,10 @@ func (p *Planner) researchPhases(goal string) []Phase {
 			Tasks: []Task{
 				{
 					ID:          "report-1",
-					Description: "Generate research report document",
+					Description: "Generate and save research report",
 					ToolChain: []ToolStep{
 						{Tool: "_generate_doc", Args: map[string]string{"topic": topic, "style": "report"}, DependsOn: -1, OutputKey: "report_content"},
-					},
-				},
-				{
-					ID:          "report-2",
-					Description: "Save research report",
-					ToolChain: []ToolStep{
-						{Tool: "write", Args: map[string]string{"path": "agent_workspace/research_report.md", "content": "${report_content}"}, DependsOn: -1, OutputKey: "report_file"},
+						{Tool: "write", Args: map[string]string{"path": "agent_workspace/research_report.md", "content": "${report_content}"}, DependsOn: 0, OutputKey: "report_file"},
 					},
 				},
 			},
@@ -227,7 +215,7 @@ func (p *Planner) writingPhases(goal string) []Phase {
 					ID:          "write-research-1",
 					Description: "Search for background information",
 					ToolChain: []ToolStep{
-						{Tool: "web_search", Args: map[string]string{"query": topic}, DependsOn: -1, OutputKey: "background"},
+						{Tool: "websearch", Args: map[string]string{"query": topic}, DependsOn: -1, OutputKey: "background"},
 					},
 				},
 			},
@@ -239,20 +227,14 @@ func (p *Planner) writingPhases(goal string) []Phase {
 			Tasks: []Task{
 				{
 					ID:          "write-outline-1",
-					Description: "Think about document structure",
+					Description: "Think about structure and save outline",
 					ToolChain: []ToolStep{
 						{Tool: "_think", Args: map[string]string{"query": "Create an outline for a document about " + topic}, DependsOn: -1, OutputKey: "outline_text"},
+						{Tool: "write", Args: map[string]string{"path": "agent_workspace/outline.md", "content": "${outline_text}"}, DependsOn: 0, OutputKey: "outline_file"},
 					},
 				},
 				{
 					ID:          "write-outline-2",
-					Description: "Save outline",
-					ToolChain: []ToolStep{
-						{Tool: "write", Args: map[string]string{"path": "agent_workspace/outline.md", "content": "${outline_text}"}, DependsOn: -1, OutputKey: "outline_file"},
-					},
-				},
-				{
-					ID:          "write-outline-3",
 					Description: "Review outline — may need human input on scope",
 					NeedsHuman:  true,
 					HumanPrompt: "I've created an outline. Would you like to adjust the scope or sections?",
@@ -266,16 +248,10 @@ func (p *Planner) writingPhases(goal string) []Phase {
 			Tasks: []Task{
 				{
 					ID:          "write-draft-1",
-					Description: "Generate document draft",
+					Description: "Generate and save document draft",
 					ToolChain: []ToolStep{
 						{Tool: "_generate_doc", Args: map[string]string{"topic": topic, "style": "overview"}, DependsOn: -1, OutputKey: "draft_text"},
-					},
-				},
-				{
-					ID:          "write-draft-2",
-					Description: "Save draft",
-					ToolChain: []ToolStep{
-						{Tool: "write", Args: map[string]string{"path": "agent_workspace/draft.md", "content": "${draft_text}"}, DependsOn: -1, OutputKey: "draft_file"},
+						{Tool: "write", Args: map[string]string{"path": "agent_workspace/draft.md", "content": "${draft_text}"}, DependsOn: 0, OutputKey: "draft_file"},
 					},
 				},
 			},
@@ -287,23 +263,10 @@ func (p *Planner) writingPhases(goal string) []Phase {
 			Tasks: []Task{
 				{
 					ID:          "write-review-1",
-					Description: "Read and review the draft",
+					Description: "Read draft, summarize, and save final",
 					ToolChain: []ToolStep{
 						{Tool: "read", Args: map[string]string{"path": "agent_workspace/draft.md"}, DependsOn: -1, OutputKey: "draft_content"},
-					},
-				},
-				{
-					ID:          "write-final-1",
-					Description: "Summarize and finalize the document",
-					ToolChain: []ToolStep{
-						{Tool: "_summarize", Args: map[string]string{"text": "${draft_content}"}, DependsOn: 0, OutputKey: "summary"},
-					},
-				},
-				{
-					ID:          "write-final-2",
-					Description: "Save final document",
-					ToolChain: []ToolStep{
-						{Tool: "write", Args: map[string]string{"path": "agent_workspace/final.md", "content": "${draft_content}"}, DependsOn: -1, OutputKey: "final_file"},
+						{Tool: "write", Args: map[string]string{"path": "agent_workspace/final.md", "content": "${draft_content}"}, DependsOn: 0, OutputKey: "final_file"},
 					},
 				},
 			},
@@ -322,14 +285,14 @@ func (p *Planner) analysisPhases(goal string) []Phase {
 					ID:          "data-1",
 					Description: "Search for relevant data",
 					ToolChain: []ToolStep{
-						{Tool: "web_search", Args: map[string]string{"query": topic + " data statistics"}, DependsOn: -1, OutputKey: "raw_data"},
+						{Tool: "websearch", Args: map[string]string{"query": topic + " data statistics"}, DependsOn: -1, OutputKey: "raw_data"},
 					},
 				},
 				{
 					ID:          "data-2",
 					Description: "Search for benchmarks and comparisons",
 					ToolChain: []ToolStep{
-						{Tool: "web_search", Args: map[string]string{"query": topic + " benchmark comparison"}, DependsOn: -1, OutputKey: "benchmarks"},
+						{Tool: "websearch", Args: map[string]string{"query": topic + " benchmark comparison"}, DependsOn: -1, OutputKey: "benchmarks"},
 					},
 				},
 			},
@@ -341,16 +304,10 @@ func (p *Planner) analysisPhases(goal string) []Phase {
 			Tasks: []Task{
 				{
 					ID:          "analysis-1",
-					Description: "Synthesize and analyze findings",
+					Description: "Synthesize findings and save analysis",
 					ToolChain: []ToolStep{
 						{Tool: "_synthesize", Args: map[string]string{"goal": "analyze " + topic}, DependsOn: -1, OutputKey: "analysis_text"},
-					},
-				},
-				{
-					ID:          "analysis-2",
-					Description: "Save analysis",
-					ToolChain: []ToolStep{
-						{Tool: "write", Args: map[string]string{"path": "agent_workspace/analysis.md", "content": "${analysis_text}"}, DependsOn: -1, OutputKey: "analysis_file"},
+						{Tool: "write", Args: map[string]string{"path": "agent_workspace/analysis.md", "content": "${analysis_text}"}, DependsOn: 0, OutputKey: "analysis_file"},
 					},
 				},
 			},
@@ -362,16 +319,10 @@ func (p *Planner) analysisPhases(goal string) []Phase {
 			Tasks: []Task{
 				{
 					ID:          "present-1",
-					Description: "Generate findings report",
+					Description: "Generate and save findings report",
 					ToolChain: []ToolStep{
 						{Tool: "_generate_doc", Args: map[string]string{"topic": topic, "style": "report"}, DependsOn: -1, OutputKey: "findings_text"},
-					},
-				},
-				{
-					ID:          "present-2",
-					Description: "Save findings report",
-					ToolChain: []ToolStep{
-						{Tool: "write", Args: map[string]string{"path": "agent_workspace/findings.md", "content": "${findings_text}"}, DependsOn: -1, OutputKey: "findings_file"},
+						{Tool: "write", Args: map[string]string{"path": "agent_workspace/findings.md", "content": "${findings_text}"}, DependsOn: 0, OutputKey: "findings_file"},
 					},
 				},
 			},
@@ -390,7 +341,7 @@ func (p *Planner) planningPhases(goal string) []Phase {
 					ID:          "brainstorm-1",
 					Description: "Research existing approaches",
 					ToolChain: []ToolStep{
-						{Tool: "web_search", Args: map[string]string{"query": topic + " best practices"}, DependsOn: -1, OutputKey: "approaches"},
+						{Tool: "websearch", Args: map[string]string{"query": topic + " best practices"}, DependsOn: -1, OutputKey: "approaches"},
 					},
 				},
 			},
@@ -402,9 +353,10 @@ func (p *Planner) planningPhases(goal string) []Phase {
 			Tasks: []Task{
 				{
 					ID:          "structure-1",
-					Description: "Create structured plan",
+					Description: "Think about plan structure and save",
 					ToolChain: []ToolStep{
-						{Tool: "write", Args: map[string]string{"path": "agent_workspace/plan.md"}, DependsOn: -1, OutputKey: "plan_file"},
+						{Tool: "_think", Args: map[string]string{"query": "Create a structured plan for " + topic}, DependsOn: -1, OutputKey: "plan_text"},
+						{Tool: "write", Args: map[string]string{"path": "agent_workspace/plan.md", "content": "${plan_text}"}, DependsOn: 0, OutputKey: "plan_file"},
 					},
 				},
 				{
@@ -422,9 +374,10 @@ func (p *Planner) planningPhases(goal string) []Phase {
 			Tasks: []Task{
 				{
 					ID:          "estimate-1",
-					Description: "Write final plan with estimates",
+					Description: "Generate and save final plan",
 					ToolChain: []ToolStep{
-						{Tool: "write", Args: map[string]string{"path": "agent_workspace/final_plan.md"}, DependsOn: -1, OutputKey: "final_plan"},
+						{Tool: "_generate_doc", Args: map[string]string{"topic": topic, "style": "guide"}, DependsOn: -1, OutputKey: "final_text"},
+						{Tool: "write", Args: map[string]string{"path": "agent_workspace/final_plan.md", "content": "${final_text}"}, DependsOn: 0, OutputKey: "final_plan"},
 					},
 				},
 			},
@@ -443,14 +396,15 @@ func (p *Planner) buildingPhases(goal string) []Phase {
 					ID:          "design-1",
 					Description: "Research existing solutions",
 					ToolChain: []ToolStep{
-						{Tool: "web_search", Args: map[string]string{"query": topic + " tutorial guide"}, DependsOn: -1, OutputKey: "research"},
+						{Tool: "websearch", Args: map[string]string{"query": topic + " tutorial guide"}, DependsOn: -1, OutputKey: "research"},
 					},
 				},
 				{
 					ID:          "design-2",
-					Description: "Write design document",
+					Description: "Think about design and save document",
 					ToolChain: []ToolStep{
-						{Tool: "write", Args: map[string]string{"path": "agent_workspace/design.md"}, DependsOn: -1, OutputKey: "design_file"},
+						{Tool: "_think", Args: map[string]string{"query": "Design a plan to build " + topic}, DependsOn: -1, OutputKey: "design_text"},
+						{Tool: "write", Args: map[string]string{"path": "agent_workspace/design.md", "content": "${design_text}"}, DependsOn: 0, OutputKey: "design_file"},
 					},
 				},
 			},
@@ -475,16 +429,17 @@ func (p *Planner) buildingPhases(goal string) []Phase {
 			Tasks: []Task{
 				{
 					ID:          "test-1",
-					Description: "Verify the implementation",
+					Description: "Review the design",
 					ToolChain: []ToolStep{
 						{Tool: "read", Args: map[string]string{"path": "agent_workspace/design.md"}, DependsOn: -1, OutputKey: "design_review"},
 					},
 				},
 				{
 					ID:          "test-2",
-					Description: "Write results summary",
+					Description: "Synthesize and save results",
 					ToolChain: []ToolStep{
-						{Tool: "write", Args: map[string]string{"path": "agent_workspace/results.md"}, DependsOn: -1, OutputKey: "results_file"},
+						{Tool: "_synthesize", Args: map[string]string{"goal": "verify implementation of " + topic}, DependsOn: -1, OutputKey: "results_text"},
+						{Tool: "write", Args: map[string]string{"path": "agent_workspace/results.md", "content": "${results_text}"}, DependsOn: 0, OutputKey: "results_file"},
 					},
 				},
 			},
@@ -516,14 +471,15 @@ func (p *Planner) monitoringPhases(goal string) []Phase {
 					ID:          "monitor-1",
 					Description: "Check " + topic,
 					ToolChain: []ToolStep{
-						{Tool: "web_search", Args: map[string]string{"query": topic + " current status"}, DependsOn: -1, OutputKey: "status"},
+						{Tool: "websearch", Args: map[string]string{"query": topic + " current status"}, DependsOn: -1, OutputKey: "status"},
 					},
 				},
 				{
 					ID:          "monitor-2",
-					Description: "Record findings",
+					Description: "Summarize and record findings",
 					ToolChain: []ToolStep{
-						{Tool: "write", Args: map[string]string{"path": "agent_workspace/monitor_log.md"}, DependsOn: -1, OutputKey: "log_file"},
+						{Tool: "_summarize", Args: map[string]string{"text": "${status}"}, DependsOn: 0, OutputKey: "summary"},
+						{Tool: "write", Args: map[string]string{"path": "agent_workspace/monitor_log.md", "content": "${summary}"}, DependsOn: 0, OutputKey: "log_file"},
 					},
 				},
 			},
@@ -541,7 +497,7 @@ func (p *Planner) genericPhases(goal string) []Phase {
 					ID:          "generic-1",
 					Description: "Search for relevant information",
 					ToolChain: []ToolStep{
-						{Tool: "web_search", Args: map[string]string{"query": goal}, DependsOn: -1, OutputKey: "search_results"},
+						{Tool: "websearch", Args: map[string]string{"query": goal}, DependsOn: -1, OutputKey: "search_results"},
 					},
 				},
 			},
@@ -553,9 +509,10 @@ func (p *Planner) genericPhases(goal string) []Phase {
 			Tasks: []Task{
 				{
 					ID:          "generic-2",
-					Description: "Process results and take action",
+					Description: "Synthesize and save findings",
 					ToolChain: []ToolStep{
-						{Tool: "write", Args: map[string]string{"path": "agent_workspace/output.md"}, DependsOn: -1, OutputKey: "output_file"},
+						{Tool: "_synthesize", Args: map[string]string{"goal": goal}, DependsOn: -1, OutputKey: "output_text"},
+						{Tool: "write", Args: map[string]string{"path": "agent_workspace/output.md", "content": "${output_text}"}, DependsOn: 0, OutputKey: "output_file"},
 					},
 				},
 			},
@@ -567,9 +524,10 @@ func (p *Planner) genericPhases(goal string) []Phase {
 			Tasks: []Task{
 				{
 					ID:          "generic-3",
-					Description: "Write final summary",
+					Description: "Generate and save summary",
 					ToolChain: []ToolStep{
-						{Tool: "write", Args: map[string]string{"path": "agent_workspace/summary.md"}, DependsOn: -1, OutputKey: "summary_file"},
+						{Tool: "_generate_doc", Args: map[string]string{"topic": goal, "style": "overview"}, DependsOn: -1, OutputKey: "summary_text"},
+						{Tool: "write", Args: map[string]string{"path": "agent_workspace/summary.md", "content": "${summary_text}"}, DependsOn: 0, OutputKey: "summary_file"},
 					},
 				},
 			},
@@ -580,8 +538,9 @@ func (p *Planner) genericPhases(goal string) []Phase {
 // extractTopic pulls the subject matter from a goal string.
 func extractTopic(goal string) string {
 	lower := strings.ToLower(goal)
+	result := goal
 
-	// Strip common goal verbs
+	// Strip common goal verbs (prefix)
 	prefixes := []string{
 		"research the market for ",
 		"research ", "investigate ", "find out about ",
@@ -599,17 +558,23 @@ func extractTopic(goal string) string {
 
 	for _, p := range prefixes {
 		if strings.HasPrefix(lower, p) {
-			return strings.TrimSpace(goal[len(p):])
+			result = goal[len(p):]
+			break
 		}
 	}
 
-	// Strip trailing goal markers
+	// Strip trailing goal markers (suffix)
 	suffixes := []string{
 		" and create a business plan",
 		" and write a report",
+		" and write a summary",
+		" and produce a report",
 		" and summarize",
+		" and create a summary",
+		" and create a report",
+		" and document it",
+		" and present findings",
 	}
-	result := goal
 	for _, s := range suffixes {
 		if idx := strings.Index(strings.ToLower(result), s); idx > 0 {
 			result = result[:idx]

@@ -16,7 +16,7 @@ func mockRegistry() *tools.Registry {
 	reg := tools.NewRegistry()
 
 	reg.Register(tools.Tool{
-		Name:        "web_search",
+		Name:        "websearch",
 		Description: "Search the web",
 		Execute: func(args map[string]string) (string, error) {
 			query := args["query"]
@@ -60,7 +60,7 @@ func mockRegistry() *tools.Registry {
 }
 
 func TestDecomposeGoal_Research(t *testing.T) {
-	planner := NewPlanner([]string{"web_search", "read", "write", "fetch"})
+	planner := NewPlanner([]string{"websearch", "read", "write", "fetch"})
 	plan, err := planner.DecomposeGoal("Research the market for local AI assistants")
 	if err != nil {
 		t.Fatalf("DecomposeGoal: %v", err)
@@ -79,7 +79,7 @@ func TestDecomposeGoal_Research(t *testing.T) {
 	for _, phase := range plan.Phases {
 		for _, task := range phase.Tasks {
 			for _, step := range task.ToolChain {
-				if step.Tool == "web_search" {
+				if step.Tool == "websearch" {
 					found = true
 				}
 			}
@@ -91,7 +91,7 @@ func TestDecomposeGoal_Research(t *testing.T) {
 }
 
 func TestDecomposeGoal_Writing(t *testing.T) {
-	planner := NewPlanner([]string{"web_search", "read", "write"})
+	planner := NewPlanner([]string{"websearch", "read", "write"})
 	plan, err := planner.DecomposeGoal("Write a blog post about Go programming")
 	if err != nil {
 		t.Fatalf("DecomposeGoal: %v", err)
@@ -128,7 +128,7 @@ func TestExecuteChain(t *testing.T) {
 	exec := NewExecutor(reg, "/tmp/test-agent")
 
 	chain := []ToolStep{
-		{Tool: "web_search", Args: map[string]string{"query": "test query"}, DependsOn: -1, OutputKey: "search"},
+		{Tool: "websearch", Args: map[string]string{"query": "test query"}, DependsOn: -1, OutputKey: "search"},
 		{Tool: "write", Args: map[string]string{"path": "/tmp/test-agent/output.md"}, DependsOn: 0, OutputKey: "file"},
 	}
 
@@ -179,9 +179,9 @@ func TestExecuteChain_ToolCallLimit(t *testing.T) {
 	exec.MaxToolCalls = 2
 
 	chain := []ToolStep{
-		{Tool: "web_search", Args: map[string]string{"query": "one"}, DependsOn: -1},
-		{Tool: "web_search", Args: map[string]string{"query": "two"}, DependsOn: -1},
-		{Tool: "web_search", Args: map[string]string{"query": "three"}, DependsOn: -1},
+		{Tool: "websearch", Args: map[string]string{"query": "one"}, DependsOn: -1},
+		{Tool: "websearch", Args: map[string]string{"query": "two"}, DependsOn: -1},
+		{Tool: "websearch", Args: map[string]string{"query": "three"}, DependsOn: -1},
 	}
 
 	_, err := exec.ExecuteChain(chain, nil)
@@ -345,7 +345,7 @@ func TestAgent_HumanInLoop(t *testing.T) {
 	defer a.Stop() // ensure goroutine cleanup
 
 	// Override planner to produce a plan that needs human input
-	a.Planner = NewPlanner([]string{"web_search", "write"})
+	a.Planner = NewPlanner([]string{"websearch", "write"})
 
 	var mu sync.Mutex
 	var reports []string
@@ -551,7 +551,7 @@ func TestExtractTopic(t *testing.T) {
 
 func TestIsDangerousTool(t *testing.T) {
 	dangerous := []string{"shell", "run", "write", "edit", "patch", "git"}
-	safe := []string{"web_search", "read", "glob", "grep", "calculator", "weather"}
+	safe := []string{"websearch", "read", "glob", "grep", "calculator", "weather"}
 
 	for _, name := range dangerous {
 		if !IsDangerousTool(name) {
@@ -849,7 +849,7 @@ func TestExecuteChain_AbsolutePathNotModified(t *testing.T) {
 }
 
 func TestDecomposeGoal_AllTypes(t *testing.T) {
-	planner := NewPlanner([]string{"web_search", "write", "read"})
+	planner := NewPlanner([]string{"websearch", "write", "read"})
 
 	goals := []struct {
 		goal     string
@@ -969,7 +969,7 @@ func TestIsInWorkspace(t *testing.T) {
 		{ToolStep{Tool: "write", Args: map[string]string{"path": "relative/file.md"}}, true},
 		{ToolStep{Tool: "write", Args: map[string]string{"path": "/etc/passwd"}}, false},
 		{ToolStep{Tool: "write", Args: map[string]string{"path": "../../../etc/passwd"}}, false},
-		{ToolStep{Tool: "web_search", Args: map[string]string{"query": "test"}}, true}, // no path arg
+		{ToolStep{Tool: "websearch", Args: map[string]string{"query": "test"}}, true}, // no path arg
 	}
 
 	for _, tt := range tests {
