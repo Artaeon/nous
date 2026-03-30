@@ -113,6 +113,10 @@ type ActionRouter struct {
 	// Text summarization and document generation
 	Summarizer     *Summarizer
 	DocGen         *DocumentGenerator
+
+	// Prose composition and code generation
+	ProseComposer  *ProseComposer
+	CodeGen        *CodeGenerator
 }
 
 // NewActionRouter creates a router with nil subsystems.
@@ -644,6 +648,8 @@ func (ar *ActionRouter) dispatch(nlu *NLUResult, conv *Conversation) *ActionResu
 		return ar.handleTransform(nlu)
 	case "creative":
 		return ar.handleCreative(nlu)
+	case "code", "codegen":
+		return ar.handleCodeGen(nlu)
 	default:
 		// Try thinking engine for unknown actions
 		return ar.handleLLMChat(nlu, conv)
@@ -4230,6 +4236,33 @@ func (ar *ActionRouter) handleCreative(nlu *NLUResult) *ActionResult {
 	return &ActionResult{
 		DirectResponse: result,
 		Source:         "creative",
+	}
+}
+
+// handleCodeGen generates code from a natural language request using the
+// CodeGenerator's template system.
+func (ar *ActionRouter) handleCodeGen(nlu *NLUResult) *ActionResult {
+	if ar.CodeGen == nil {
+		ar.CodeGen = NewCodeGenerator()
+	}
+
+	result := ar.CodeGen.GenerateFromQuery(nlu.Raw)
+	if result == nil {
+		return &ActionResult{
+			DirectResponse: "I can generate code in Python, JavaScript, and Go. Try: \"write a python function to read a CSV file\"",
+			Source:         "codegen",
+		}
+	}
+
+	var response strings.Builder
+	response.WriteString("```" + result.Language + "\n")
+	response.WriteString(result.Code)
+	response.WriteString("```\n\n")
+	response.WriteString(result.Explanation)
+
+	return &ActionResult{
+		DirectResponse: response.String(),
+		Source:         "codegen",
 	}
 }
 

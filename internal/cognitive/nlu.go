@@ -1611,6 +1611,31 @@ func (n *NLU) postClassifyCorrections(lower string, r *NLUResult) {
 	if strings.Contains(lower, "password") && (strings.Contains(lower, "generate") || strings.Contains(lower, "create") || strings.Contains(lower, "make") || strings.Contains(lower, "new")) {
 		r.Intent = "password"
 	}
+
+	// Code generation: "write a python function", "generate code", "code a ..."
+	if isCodeRequest(lower) {
+		r.Intent = "code"
+	}
+}
+
+// isCodeRequest detects if a query is asking for code generation.
+func isCodeRequest(lower string) bool {
+	codeSignals := []string{
+		"write a function", "write a python", "write a javascript", "write a go ",
+		"write me a function", "write me a python", "write me a script",
+		"generate code", "code a ", "code for ",
+		"python function", "python script", "python class",
+		"javascript function", "js function", "react component",
+		"go function", "golang function", "go http", "go struct",
+		"write code", "create a function", "create a class",
+		"make a function", "implement a function",
+	}
+	for _, sig := range codeSignals {
+		if strings.Contains(lower, sig) {
+			return true
+		}
+	}
+	return false
 }
 
 // mapAction maps the classified intent + entities to a concrete action.
@@ -1728,6 +1753,8 @@ func (n *NLU) mapAction(lower string, r *NLUResult) {
 		r.Action = "calculate"
 	case "password":
 		r.Action = "password"
+	case "code":
+		r.Action = "code"
 	case "bookmark":
 		r.Action = "bookmark"
 	case "journal":

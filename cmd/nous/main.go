@@ -444,6 +444,12 @@ func main() {
 	// Document generator — structured long-form documents from knowledge graph
 	actions.DocGen = cognitive.NewDocumentGenerator(actions.CogGraph, knowledgePath)
 
+	// Prose composer — clause-level retrieval-augmented generation
+	actions.ProseComposer = cognitive.NewProseComposer(knowledgePath)
+
+	// Code generator — template-based code generation
+	actions.CodeGen = cognitive.NewCodeGenerator()
+
 	// Conversational Learning Engine — Nous learns from every interaction
 	learningEngine := cognitive.NewLearningEngine(actions.CogGraph, actions.Composer, nousDir)
 

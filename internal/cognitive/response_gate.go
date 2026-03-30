@@ -223,7 +223,7 @@ func isAcceptableShort(response string) bool {
 // be rejected by the length gate.
 func isToolSource(source string) bool {
 	switch source {
-	case "calculator", "translate", "password", "timer", "weather",
+	case "calculator", "translate", "password", "timer", "weather", "codegen",
 		"sysinfo", "clipboard", "notes", "todos", "bookmark", "journal",
 		"habit", "expense", "convert", "reminder", "hash", "dict",
 		"volume", "brightness", "app", "process", "network",
