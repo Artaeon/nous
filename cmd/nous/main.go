@@ -832,6 +832,7 @@ func main() {
 	agentConfig := agent.DefaultConfig()
 	agentConfig.Workspace = filepath.Join(nousDir, "agent")
 	autonomousAgent := agent.NewAgent(toolReg, agentConfig)
+	autonomousAgent.SetBrain(agent.NewCognitiveBridge(actions))
 	autonomousAgent.SetReportCallback(func(msg string) {
 		fmt.Printf("\n  %s[agent]%s %s\n", cognitive.ColorCyan, cognitive.ColorReset, msg)
 	})

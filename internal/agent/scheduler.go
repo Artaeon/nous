@@ -141,10 +141,11 @@ func (s *Scheduler) checkJobs(now time.Time) {
 			continue
 		}
 
-		// Run the job (non-blocking — agent runs in its own goroutine)
-		go func(goal string) {
-			_ = s.agent.Start(goal)
-		}(job.Goal)
+		// Run the job only if the agent is idle. If busy, skip this run.
+		if err := s.agent.Start(job.Goal); err != nil {
+			// Agent is busy — skip this run, it'll fire next cycle.
+			continue
+		}
 
 		job.LastRun = now
 		next, err := nextRunTime(job.Schedule, now)

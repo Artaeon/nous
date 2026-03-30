@@ -15,6 +15,7 @@ type Executor struct {
 	MaxRetries   int           // max retries per step (default 3)
 	StepTimeout  time.Duration // timeout per step (default 30s)
 	MaxToolCalls int           // safety limit per task (default 20)
+	Brain        *CognitiveBridge // cognitive systems for synthesis
 }
 
 // StepResult is the outcome of a single tool step.
@@ -106,16 +107,24 @@ func (e *Executor) ExecuteChain(chain []ToolStep, context map[string]string) (*C
 }
 
 // ExecuteStep runs a single tool step.
+// Steps whose tool name starts with "_" are cognitive operations handled
+// by the CognitiveBridge (summarize, think, compose, generate_doc).
+// All other steps are dispatched to the tool registry.
 func (e *Executor) ExecuteStep(step ToolStep, context map[string]string) (string, error) {
-	tool, err := e.Tools.Get(step.Tool)
-	if err != nil {
-		return "", fmt.Errorf("unknown tool %q: %w", step.Tool, err)
-	}
-
 	// Build args, substituting context references
 	args := make(map[string]string, len(step.Args))
 	for k, v := range step.Args {
 		args[k] = e.substituteVars(v, context)
+	}
+
+	// Cognitive pseudo-tools — handled by the brain, not the tool registry
+	if strings.HasPrefix(step.Tool, "_") {
+		return e.executeCognitiveStep(step.Tool, args, context)
+	}
+
+	tool, err := e.Tools.Get(step.Tool)
+	if err != nil {
+		return "", fmt.Errorf("unknown tool %q: %w", step.Tool, err)
 	}
 
 	output, err := tool.Execute(args)
@@ -124,6 +133,80 @@ func (e *Executor) ExecuteStep(step ToolStep, context map[string]string) (string
 	}
 
 	return output, nil
+}
+
+// executeCognitiveStep handles internal cognitive operations.
+func (e *Executor) executeCognitiveStep(tool string, args, context map[string]string) (string, error) {
+	if e.Brain == nil {
+		return "", fmt.Errorf("cognitive tool %q requires a brain (CognitiveBridge not connected)", tool)
+	}
+
+	switch tool {
+	case "_summarize":
+		text := args["text"]
+		if text == "" {
+			text = context["_prev"]
+		}
+		if text == "" {
+			return "", fmt.Errorf("_summarize: no text to summarize")
+		}
+		return e.Brain.Summarize(text, 5), nil
+
+	case "_think":
+		query := args["query"]
+		if query == "" {
+			query = args["topic"]
+		}
+		result := e.Brain.Think(query)
+		if result == "" {
+			return e.Brain.Compose(query), nil
+		}
+		return result, nil
+
+	case "_reason":
+		question := args["question"]
+		if question == "" {
+			question = args["query"]
+		}
+		answer, _ := e.Brain.Reason(question)
+		if answer == "" {
+			return "", fmt.Errorf("_reason: could not reason about %q", question)
+		}
+		return answer, nil
+
+	case "_generate_doc":
+		topic := args["topic"]
+		style := args["style"]
+		if style == "" {
+			style = "report"
+		}
+		doc := e.Brain.GenerateDocument(topic, style)
+		if doc == "" {
+			return "", fmt.Errorf("_generate_doc: could not generate document about %q", topic)
+		}
+		return doc, nil
+
+	case "_synthesize":
+		goal := args["goal"]
+		if goal == "" {
+			goal = "summarize the findings"
+		}
+		return e.Brain.SynthesizeResults(goal, context), nil
+
+	case "_compose":
+		query := args["query"]
+		if query == "" {
+			query = context["_prev"]
+		}
+		result := e.Brain.Compose(query)
+		if result == "" {
+			return "", fmt.Errorf("_compose: could not compose response for %q", query)
+		}
+		return result, nil
+
+	default:
+		return "", fmt.Errorf("unknown cognitive tool: %q", tool)
+	}
 }
 
 // executeWithRetry runs a step with retries on failure.
@@ -136,7 +219,7 @@ func (e *Executor) executeWithRetry(step ToolStep, context map[string]string) (S
 	var lastErr error
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		start := time.Now()
-		output, err := e.ExecuteStep(step, context)
+		output, err := e.executeWithTimeout(step, context)
 		dur := time.Since(start)
 
 		if err == nil {
@@ -158,6 +241,31 @@ func (e *Executor) executeWithRetry(step ToolStep, context map[string]string) (S
 		Tool:  step.Tool,
 		Error: lastErr.Error(),
 	}, lastErr
+}
+
+// executeWithTimeout wraps ExecuteStep with a timeout.
+// If StepTimeout is zero, runs without a timeout.
+func (e *Executor) executeWithTimeout(step ToolStep, context map[string]string) (string, error) {
+	if e.StepTimeout <= 0 {
+		return e.ExecuteStep(step, context)
+	}
+
+	type result struct {
+		output string
+		err    error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		out, err := e.ExecuteStep(step, context)
+		ch <- result{out, err}
+	}()
+
+	select {
+	case r := <-ch:
+		return r.output, r.err
+	case <-time.After(e.StepTimeout):
+		return "", fmt.Errorf("step %q timed out after %v", step.Tool, e.StepTimeout)
+	}
 }
 
 // resolveArgs replaces context variable references in step arguments.

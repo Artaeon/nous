@@ -56,6 +56,7 @@ type Agent struct {
 	State    *AgentState
 	Reporter *Reporter
 	Config   AgentConfig
+	Brain    *CognitiveBridge // cognitive systems for thinking, not just tool running
 
 	mu        sync.Mutex
 	running   bool
@@ -110,6 +111,13 @@ func NewAgent(toolReg *tools.Registry, config AgentConfig) *Agent {
 		Config:   config,
 		resumeCh: make(chan string, 1),
 	}
+}
+
+// SetBrain connects the agent to Nous's cognitive systems.
+// This transforms the agent from a checklist runner into a thinking worker.
+func (a *Agent) SetBrain(brain *CognitiveBridge) {
+	a.Brain = brain
+	a.Executor.Brain = brain
 }
 
 // SetReportCallback sets a function that gets called with progress reports.

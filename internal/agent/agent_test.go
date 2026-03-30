@@ -1042,6 +1042,75 @@ func TestReporter_PlanningState(t *testing.T) {
 	}
 }
 
+func TestCognitiveBridge_NilSafe(t *testing.T) {
+	// All CognitiveBridge methods should be safe to call on a nil bridge
+	var cb *CognitiveBridge
+
+	result := cb.Summarize("some long text here that needs summarizing", 3)
+	if result == "" {
+		t.Error("nil bridge Summarize should return truncated text, not empty")
+	}
+
+	result = cb.Think("what is Go?")
+	if result != "" {
+		t.Error("nil bridge Think should return empty")
+	}
+
+	answer, trace := cb.Reason("why is the sky blue?")
+	if answer != "" || trace != "" {
+		t.Error("nil bridge Reason should return empty")
+	}
+
+	result = cb.GenerateDocument("Go programming", "overview")
+	if result != "" {
+		t.Error("nil bridge GenerateDocument should return empty")
+	}
+
+	result = cb.Compose("tell me about Go")
+	if result != "" {
+		t.Error("nil bridge Compose should return empty")
+	}
+
+	result = cb.SynthesizeResults("test goal", map[string]string{"r1": "data one", "r2": "data two"})
+	if result == "" {
+		t.Error("nil bridge SynthesizeResults should return concatenated results")
+	}
+}
+
+func TestExecutor_CognitiveSteps_NoBrain(t *testing.T) {
+	exec := NewExecutor(mockRegistry(), "/tmp/test")
+	exec.MaxRetries = 1
+
+	// Cognitive steps without a brain should fail with clear error
+	chain := []ToolStep{
+		{Tool: "_summarize", Args: map[string]string{"text": "some text"}, DependsOn: -1},
+	}
+	_, err := exec.ExecuteChain(chain, nil)
+	if err == nil {
+		t.Error("expected error for cognitive step without brain")
+	}
+	if !strings.Contains(err.Error(), "brain") {
+		t.Errorf("error should mention brain, got: %v", err)
+	}
+}
+
+func TestExecutor_CognitiveSteps_WithMockBrain(t *testing.T) {
+	exec := NewExecutor(mockRegistry(), "/tmp/test")
+	exec.Brain = &CognitiveBridge{} // empty bridge — no cognitive systems
+
+	// _summarize with no Summarizer should fallback to truncation
+	chain := []ToolStep{
+		{Tool: "_summarize", Args: map[string]string{"text": "This is a test. It has multiple sentences. We want to summarize it."}, DependsOn: -1, OutputKey: "summary"},
+	}
+	result, err := exec.ExecuteChain(chain, nil)
+	if err != nil {
+		t.Fatalf("_summarize with empty bridge: %v", err)
+	}
+	if result.FinalOutput == "" {
+		t.Error("_summarize should produce output even with empty bridge")
+	}
+}
+
 func TestAgent_ConcurrentStatusCalls(t *testing.T) {
 	reg := mockRegistry()
 	a := NewAgent(reg, AgentConfig{

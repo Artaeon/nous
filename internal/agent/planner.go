@@ -173,14 +173,21 @@ func (p *Planner) researchPhases(goal string) []Phase {
 		},
 		{
 			Name:        "Analysis",
-			Description: "Analyze gathered information",
+			Description: "Synthesize and analyze gathered information",
 			DependsOn:   []int{0},
 			Tasks: []Task{
 				{
 					ID:          "analyze-1",
-					Description: "Summarize key findings",
+					Description: "Synthesize research findings",
 					ToolChain: []ToolStep{
-						{Tool: "write", Args: map[string]string{"path": "agent_workspace/research_notes.md"}, DependsOn: -1, OutputKey: "notes_file"},
+						{Tool: "_synthesize", Args: map[string]string{"goal": "analyze key findings about " + topic}, DependsOn: -1, OutputKey: "synthesis"},
+					},
+				},
+				{
+					ID:          "analyze-2",
+					Description: "Save analysis notes",
+					ToolChain: []ToolStep{
+						{Tool: "write", Args: map[string]string{"path": "agent_workspace/research_notes.md", "content": "${synthesis}"}, DependsOn: -1, OutputKey: "notes_file"},
 					},
 				},
 			},
@@ -192,9 +199,16 @@ func (p *Planner) researchPhases(goal string) []Phase {
 			Tasks: []Task{
 				{
 					ID:          "report-1",
-					Description: "Write final research report",
+					Description: "Generate research report document",
 					ToolChain: []ToolStep{
-						{Tool: "write", Args: map[string]string{"path": "agent_workspace/research_report.md"}, DependsOn: -1, OutputKey: "report_file"},
+						{Tool: "_generate_doc", Args: map[string]string{"topic": topic, "style": "report"}, DependsOn: -1, OutputKey: "report_content"},
+					},
+				},
+				{
+					ID:          "report-2",
+					Description: "Save research report",
+					ToolChain: []ToolStep{
+						{Tool: "write", Args: map[string]string{"path": "agent_workspace/research_report.md", "content": "${report_content}"}, DependsOn: -1, OutputKey: "report_file"},
 					},
 				},
 			},
@@ -225,13 +239,20 @@ func (p *Planner) writingPhases(goal string) []Phase {
 			Tasks: []Task{
 				{
 					ID:          "write-outline-1",
-					Description: "Write document outline",
+					Description: "Think about document structure",
 					ToolChain: []ToolStep{
-						{Tool: "write", Args: map[string]string{"path": "agent_workspace/outline.md"}, DependsOn: -1, OutputKey: "outline_file"},
+						{Tool: "_think", Args: map[string]string{"query": "Create an outline for a document about " + topic}, DependsOn: -1, OutputKey: "outline_text"},
 					},
 				},
 				{
 					ID:          "write-outline-2",
+					Description: "Save outline",
+					ToolChain: []ToolStep{
+						{Tool: "write", Args: map[string]string{"path": "agent_workspace/outline.md", "content": "${outline_text}"}, DependsOn: -1, OutputKey: "outline_file"},
+					},
+				},
+				{
+					ID:          "write-outline-3",
 					Description: "Review outline — may need human input on scope",
 					NeedsHuman:  true,
 					HumanPrompt: "I've created an outline. Would you like to adjust the scope or sections?",
@@ -245,16 +266,23 @@ func (p *Planner) writingPhases(goal string) []Phase {
 			Tasks: []Task{
 				{
 					ID:          "write-draft-1",
-					Description: "Write first draft",
+					Description: "Generate document draft",
 					ToolChain: []ToolStep{
-						{Tool: "write", Args: map[string]string{"path": "agent_workspace/draft.md"}, DependsOn: -1, OutputKey: "draft_file"},
+						{Tool: "_generate_doc", Args: map[string]string{"topic": topic, "style": "overview"}, DependsOn: -1, OutputKey: "draft_text"},
+					},
+				},
+				{
+					ID:          "write-draft-2",
+					Description: "Save draft",
+					ToolChain: []ToolStep{
+						{Tool: "write", Args: map[string]string{"path": "agent_workspace/draft.md", "content": "${draft_text}"}, DependsOn: -1, OutputKey: "draft_file"},
 					},
 				},
 			},
 		},
 		{
 			Name:        "Review & Finalize",
-			Description: "Review, edit, and produce final document",
+			Description: "Review, summarize, and produce final document",
 			DependsOn:   []int{2},
 			Tasks: []Task{
 				{
@@ -266,9 +294,16 @@ func (p *Planner) writingPhases(goal string) []Phase {
 				},
 				{
 					ID:          "write-final-1",
-					Description: "Write final document",
+					Description: "Summarize and finalize the document",
 					ToolChain: []ToolStep{
-						{Tool: "write", Args: map[string]string{"path": "agent_workspace/final.md"}, DependsOn: -1, OutputKey: "final_file"},
+						{Tool: "_summarize", Args: map[string]string{"text": "${draft_content}"}, DependsOn: 0, OutputKey: "summary"},
+					},
+				},
+				{
+					ID:          "write-final-2",
+					Description: "Save final document",
+					ToolChain: []ToolStep{
+						{Tool: "write", Args: map[string]string{"path": "agent_workspace/final.md", "content": "${draft_content}"}, DependsOn: -1, OutputKey: "final_file"},
 					},
 				},
 			},
@@ -306,9 +341,16 @@ func (p *Planner) analysisPhases(goal string) []Phase {
 			Tasks: []Task{
 				{
 					ID:          "analysis-1",
-					Description: "Write analysis summary",
+					Description: "Synthesize and analyze findings",
 					ToolChain: []ToolStep{
-						{Tool: "write", Args: map[string]string{"path": "agent_workspace/analysis.md"}, DependsOn: -1, OutputKey: "analysis_file"},
+						{Tool: "_synthesize", Args: map[string]string{"goal": "analyze " + topic}, DependsOn: -1, OutputKey: "analysis_text"},
+					},
+				},
+				{
+					ID:          "analysis-2",
+					Description: "Save analysis",
+					ToolChain: []ToolStep{
+						{Tool: "write", Args: map[string]string{"path": "agent_workspace/analysis.md", "content": "${analysis_text}"}, DependsOn: -1, OutputKey: "analysis_file"},
 					},
 				},
 			},
@@ -320,9 +362,16 @@ func (p *Planner) analysisPhases(goal string) []Phase {
 			Tasks: []Task{
 				{
 					ID:          "present-1",
-					Description: "Write findings report",
+					Description: "Generate findings report",
 					ToolChain: []ToolStep{
-						{Tool: "write", Args: map[string]string{"path": "agent_workspace/findings.md"}, DependsOn: -1, OutputKey: "findings_file"},
+						{Tool: "_generate_doc", Args: map[string]string{"topic": topic, "style": "report"}, DependsOn: -1, OutputKey: "findings_text"},
+					},
+				},
+				{
+					ID:          "present-2",
+					Description: "Save findings report",
+					ToolChain: []ToolStep{
+						{Tool: "write", Args: map[string]string{"path": "agent_workspace/findings.md", "content": "${findings_text}"}, DependsOn: -1, OutputKey: "findings_file"},
 					},
 				},
 			},
