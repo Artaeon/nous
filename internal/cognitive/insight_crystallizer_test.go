@@ -107,11 +107,14 @@ func TestRecurringThemes(t *testing.T) {
 func TestCrossConnections(t *testing.T) {
 	ic := NewInsightCrystallizer()
 
-	// Two seemingly unrelated topics that share the keyword "creativity".
-	ic.Observe("I love painting and creativity in visual art", map[string]string{"topic": "painting"}, "positive")
-	ic.Observe("painting involves creativity and expression", map[string]string{"topic": "painting"}, "positive")
-	ic.Observe("software engineering requires creativity and problem solving", map[string]string{"topic": "software"}, "positive")
-	ic.Observe("I find creativity essential in software design", map[string]string{"topic": "software"}, "positive")
+	// Two seemingly unrelated topics that share multiple keywords.
+	// Need 3+ shared keywords to exceed the cross-connection threshold.
+	ic.Observe("painting involves creativity expression and design thinking", map[string]string{"topic": "painting"}, "positive")
+	ic.Observe("visual art requires creativity innovation and design skills", map[string]string{"topic": "painting"}, "positive")
+	ic.Observe("painting uses pattern recognition and abstract thinking", map[string]string{"topic": "painting"}, "positive")
+	ic.Observe("software engineering requires creativity and design thinking", map[string]string{"topic": "software"}, "positive")
+	ic.Observe("coding involves pattern recognition innovation and abstract design", map[string]string{"topic": "software"}, "positive")
+	ic.Observe("software development uses creative problem solving and design", map[string]string{"topic": "software"}, "positive")
 
 	insights := ic.Crystallize()
 

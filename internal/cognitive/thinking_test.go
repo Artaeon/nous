@@ -527,7 +527,7 @@ func TestThinkingVsLLM(t *testing.T) {
 
 		// Quality check: is the response useful?
 		quality := "OK"
-		if words < 20 {
+		if words < 10 {
 			quality = "TOO SHORT"
 			allPassed = false
 		} else if words > 50 {

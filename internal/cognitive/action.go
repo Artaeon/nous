@@ -366,13 +366,17 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 			}
 		}
 
-		// Associative sparks — surface unexpected connections
+		// Associative sparks — surface unexpected connections.
+		// Only surface sparks that are relevant to the current query.
+		// This prevents noise like "Photosynthesis connects to South America".
 		if ar.Sparks != nil {
 			ar.Sparks.RecordTopics(topics)
 			sparks := ar.Sparks.Ignite(topics)
 			for _, spark := range sparks {
-				result.DirectResponse += "\n\n" + spark.Explanation
-				ar.Sparks.RecordSurfaced(spark.Source, spark.Target)
+				if isSparkRelevant(spark.Explanation, topics) {
+					result.DirectResponse += "\n\n" + spark.Explanation
+					ar.Sparks.RecordSurfaced(spark.Source, spark.Target)
+				}
 			}
 		}
 	}
@@ -4328,6 +4332,9 @@ func (ar *ActionRouter) resolveConversationalReferences(nlu *NLUResult) {
 	}
 
 	if needsResolution {
+		if nlu.Entities == nil {
+			nlu.Entities = make(map[string]string)
+		}
 		nlu.Entities["topic"] = currentTopic
 		nlu.Entities["query"] = currentTopic
 		nlu.Entities["_original_query"] = nlu.Raw
@@ -4580,4 +4587,20 @@ func extractTextForSummarization(raw string) string {
 	}
 
 	return text
+}
+
+// isSparkRelevant checks whether an associative spark explanation is relevant
+// to the current conversation topics. Prevents cross-domain noise like
+// "Photosynthesis connects to South America" when discussing biology.
+func isSparkRelevant(explanation string, topics []string) bool {
+	if len(topics) == 0 {
+		return false
+	}
+	lower := strings.ToLower(explanation)
+	for _, topic := range topics {
+		if len(topic) >= 3 && strings.Contains(lower, topic) {
+			return true
+		}
+	}
+	return false
 }

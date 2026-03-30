@@ -324,7 +324,7 @@ func (ic *InsightCrystallizer) detectCrossConnections() []CrystallizedInsight {
 			}
 
 			strength := math.Min(1.0, float64(len(shared))/5.0)
-			if strength < 0.2 {
+			if strength < 0.5 {
 				continue
 			}
 
@@ -629,7 +629,7 @@ func (ic *InsightCrystallizer) SurfaceRelevant(currentTopic string) *Crystallize
 		}
 	}
 
-	if best == nil || bestScore < 0.1 {
+	if best == nil || bestScore < 0.3 || best.Confidence < 0.5 {
 		return nil
 	}
 

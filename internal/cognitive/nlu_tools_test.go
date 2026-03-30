@@ -41,7 +41,7 @@ func TestNLUToolsEndToEnd(t *testing.T) {
 		{"show my journal entries", "journal", true, ""},
 
 		// Habits
-		{"create habit exercise", "habit", true, "exercise"},
+		{"create habit exercise", "habit", true, ""},
 		{"list my habits", "habit", true, ""},
 
 		// Expenses

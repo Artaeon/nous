@@ -542,6 +542,17 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}))
 
+	// GET /api/version — version info
+	mux.HandleFunc("/api/version", cors(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"version":    version,
+			"model":      model,
+			"tool_count": toolCount,
+			"go_version": "1.22",
+		})
+	}))
+
 	// GET /api/assistant/today — unread reminders and upcoming tasks.
 	mux.HandleFunc("/api/assistant/today", cors(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
@@ -820,6 +831,12 @@ func (s *Server) newMux(version, model string, toolCount int, startTime time.Tim
 		var req struct{ Goal string `json:"goal"` }
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid JSON", http.StatusBadRequest); return
+		}
+		if strings.TrimSpace(req.Goal) == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "goal is required"})
+			return
 		}
 		if err := s.agentInstance.Start(req.Goal); err != nil {
 			w.Header().Set("Content-Type", "application/json")

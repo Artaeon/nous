@@ -12,22 +12,64 @@ import (
 
 var offlinePhrasebook = map[string]map[string]string{
 	"hello": {
-		"ja": "こんにちは",
-		"es": "hola",
-		"fr": "bonjour",
-		"de": "hallo",
-		"it": "ciao",
-		"pt": "olá",
-		"ru": "привет",
+		"ja": "こんにちは", "es": "hola", "fr": "bonjour",
+		"de": "hallo", "it": "ciao", "pt": "olá", "ru": "привет",
 	},
 	"thank you": {
-		"ja": "ありがとう",
-		"es": "gracias",
-		"fr": "merci",
-		"de": "danke",
-		"it": "grazie",
-		"pt": "obrigado",
-		"ru": "спасибо",
+		"ja": "ありがとう", "es": "gracias", "fr": "merci",
+		"de": "danke", "it": "grazie", "pt": "obrigado", "ru": "спасибо",
+	},
+	"good morning": {
+		"ja": "おはようございます", "es": "buenos días", "fr": "bonjour",
+		"de": "guten Morgen", "it": "buongiorno", "pt": "bom dia", "ru": "доброе утро",
+	},
+	"good night": {
+		"ja": "おやすみなさい", "es": "buenas noches", "fr": "bonne nuit",
+		"de": "gute Nacht", "it": "buonanotte", "pt": "boa noite", "ru": "спокойной ночи",
+	},
+	"goodbye": {
+		"ja": "さようなら", "es": "adiós", "fr": "au revoir",
+		"de": "auf Wiedersehen", "it": "arrivederci", "pt": "adeus", "ru": "до свидания",
+	},
+	"please": {
+		"ja": "お願いします", "es": "por favor", "fr": "s'il vous plaît",
+		"de": "bitte", "it": "per favore", "pt": "por favor", "ru": "пожалуйста",
+	},
+	"yes": {
+		"ja": "はい", "es": "sí", "fr": "oui",
+		"de": "ja", "it": "sì", "pt": "sim", "ru": "да",
+	},
+	"no": {
+		"ja": "いいえ", "es": "no", "fr": "non",
+		"de": "nein", "it": "no", "pt": "não", "ru": "нет",
+	},
+	"how are you": {
+		"ja": "お元気ですか", "es": "¿cómo estás?", "fr": "comment allez-vous?",
+		"de": "wie geht es Ihnen?", "it": "come stai?", "pt": "como vai?", "ru": "как дела?",
+	},
+	"i love you": {
+		"ja": "愛してる", "es": "te quiero", "fr": "je t'aime",
+		"de": "ich liebe dich", "it": "ti amo", "pt": "eu te amo", "ru": "я тебя люблю",
+	},
+	"sorry": {
+		"ja": "すみません", "es": "lo siento", "fr": "désolé",
+		"de": "Entschuldigung", "it": "mi dispiace", "pt": "desculpe", "ru": "извините",
+	},
+	"where is": {
+		"ja": "どこですか", "es": "¿dónde está?", "fr": "où est?",
+		"de": "wo ist?", "it": "dove è?", "pt": "onde está?", "ru": "где?",
+	},
+	"help": {
+		"ja": "助けて", "es": "ayuda", "fr": "aide",
+		"de": "Hilfe", "it": "aiuto", "pt": "ajuda", "ru": "помощь",
+	},
+	"water": {
+		"ja": "水", "es": "agua", "fr": "eau",
+		"de": "Wasser", "it": "acqua", "pt": "água", "ru": "вода",
+	},
+	"food": {
+		"ja": "食べ物", "es": "comida", "fr": "nourriture",
+		"de": "Essen", "it": "cibo", "pt": "comida", "ru": "еда",
 	},
 }
 

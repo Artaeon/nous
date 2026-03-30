@@ -152,6 +152,7 @@ type Phase struct {
 	Tasks       []Task      `json:"tasks"`
 	DependsOn   []int       `json:"depends_on,omitempty"` // phase indices that must complete first
 	Status      PhaseStatus `json:"status"`
+	Retried     int         `json:"retried,omitempty"` // how many times this phase was retried (max 1)
 }
 
 // Plan represents a decomposed goal with phases, tasks, and dependencies.

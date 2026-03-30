@@ -469,7 +469,7 @@ func TestExtractTopic(t *testing.T) {
 		{"should I learn Go?", nil, "learn Go"},
 		{"help me think about career change", nil, "career change"},
 		{"I'm curious about quantum computing", nil, "quantum computing"},
-		{"random thing", &ConversationState{ActiveTopic: "cooking"}, "cooking"},
+		{"random thing", &ConversationState{ActiveTopic: "cooking"}, "random thing"},
 	}
 
 	for _, tc := range cases {

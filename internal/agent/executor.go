@@ -163,7 +163,12 @@ func (e *Executor) executeCognitiveStep(tool string, args, context map[string]st
 		if query == "" {
 			return "", fmt.Errorf("_think: no query provided")
 		}
-		result := e.Brain.Think(query)
+		// Use topic-filtered thinking to prevent knowledge graph contamination
+		topic := args["topic"]
+		if topic == "" {
+			topic = query
+		}
+		result := e.Brain.ThinkAbout(topic, query)
 		if result != "" {
 			return result, nil
 		}

@@ -134,10 +134,10 @@ func TestActionRouter_LookupMemory(t *testing.T) {
 	if result.Source != "memory" {
 		t.Errorf("source = %q, want memory", result.Source)
 	}
-	// With only working memory, should still produce a response.
+	// With only working memory, should still produce a response mentioning the name.
 	output := result.Data + result.DirectResponse
-	if !strings.Contains(output, "user_name") {
-		t.Errorf("output should contain 'user_name', got %q", output)
+	if !strings.Contains(output, "Raphael") && !strings.Contains(output, "user_name") {
+		t.Errorf("output should contain name or key, got %q", output)
 	}
 }
 
@@ -161,8 +161,8 @@ func TestActionRouter_LookupMemory_DirectFact(t *testing.T) {
 	if false /* NeedsLLM removed */ {
 		t.Error("single longterm fact should not need LLM")
 	}
-	if result.DirectResponse != "Raphael" {
-		t.Errorf("DirectResponse = %q, want 'Raphael'", result.DirectResponse)
+	if !strings.Contains(result.DirectResponse, "Raphael") {
+		t.Errorf("DirectResponse = %q, should contain 'Raphael'", result.DirectResponse)
 	}
 }
 

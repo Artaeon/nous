@@ -60,16 +60,21 @@ func (rg *ResponseGate) Check(query, response, source string) *GateVerdict {
 		return v
 	}
 
-	// 4. Parroting — response echoes too much of the user's input
-	if isParroting(query, response) {
+	// 4. Parroting — response echoes too much of the user's input.
+	// Skip for tool sources — tools naturally echo the input
+	// (calculator echoes the expression, translate echoes the source text).
+	if !isToolSource(source) && isParroting(query, response) {
 		v.Pass = false
 		v.Violations = append(v.Violations, "parroting")
 		// Don't repair parroting — let it through but flag it.
 		// The caller should try a different generation strategy.
 	}
 
-	// 4. Sub-minimum length on non-trivial turns
-	if isSubstantiveTurn(query) && len(strings.Fields(response)) < 8 && !isAcceptableShort(response) {
+	// 5. Sub-minimum length on non-trivial turns.
+	// Skip for tool sources — tools produce intentionally short, factual answers
+	// (e.g. "0.25*480 = 120", "Password: xK9#mP2q", "hello → bonjour").
+	if isSubstantiveTurn(query) && len(strings.Fields(response)) < 8 &&
+		!isAcceptableShort(response) && !isToolSource(source) {
 		v.Pass = false
 		v.Violations = append(v.Violations, "too_short")
 	}
@@ -199,6 +204,23 @@ func isAcceptableShort(response string) bool {
 	if strings.HasPrefix(lower, "done") || strings.HasPrefix(lower, "saved") ||
 		strings.HasPrefix(lower, "set ") || strings.HasPrefix(lower, "created") ||
 		strings.HasPrefix(lower, "deleted") || strings.HasPrefix(lower, "updated") {
+		return true
+	}
+	return false
+}
+
+// isToolSource returns true if the source indicates the response came from
+// a direct tool execution. Tool outputs are intentionally short and factual
+// (calculator, translate, password, timer, weather, etc.) and should not
+// be rejected by the length gate.
+func isToolSource(source string) bool {
+	switch source {
+	case "calculator", "translate", "password", "timer", "weather",
+		"sysinfo", "clipboard", "notes", "todos", "bookmark", "journal",
+		"habit", "expense", "convert", "reminder", "hash", "dict",
+		"volume", "brightness", "app", "process", "network",
+		"qrcode", "archive", "disk_usage", "calendar", "screenshot",
+		"news", "find_files", "run_code":
 		return true
 	}
 	return false

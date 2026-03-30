@@ -337,6 +337,22 @@ func (a *Agent) run() {
 
 		if phaseComplete {
 			a.report(a.Reporter.PhaseReport(phase))
+
+			// Adaptive replanning: evaluate the completed phase
+			a.State.mu.RLock()
+			completedPhaseIdx := a.State.Phase
+			a.State.mu.RUnlock()
+
+			eval := a.evaluatePhase(completedPhaseIdx)
+			a.applyEvaluation(completedPhaseIdx, eval)
+
+			// If the phase was retried, don't advance — re-execute it
+			a.State.mu.RLock()
+			wasRetried := a.State.Plan.Phases[completedPhaseIdx].Status == PhasePending
+			a.State.mu.RUnlock()
+			if wasRetried {
+				continue // re-enter the loop to execute the retried phase
+			}
 		}
 
 		if !a.State.Advance() {
@@ -446,6 +462,66 @@ func (a *Agent) pause(task *Task) {
 
 	case <-a.stopCh:
 		return
+	}
+}
+
+// applyEvaluation acts on the results of a phase evaluation:
+// retry with new queries, inject tasks into the next phase, or skip phases.
+func (a *Agent) applyEvaluation(phaseIdx int, eval *PhaseEvaluation) {
+	if eval == nil || eval.QualitySufficient {
+		if eval != nil && eval.SkipNextPhase {
+			a.State.mu.Lock()
+			nextIdx := phaseIdx + 1
+			if nextIdx < len(a.State.Plan.Phases) {
+				a.State.Plan.Phases[nextIdx].Status = PhaseCompleted
+				a.report(fmt.Sprintf("[ADAPTIVE] Skipping phase %q — %s",
+					a.State.Plan.Phases[nextIdx].Name, eval.SuggestedAdjustments[0]))
+			}
+			a.State.mu.Unlock()
+		}
+		return
+	}
+
+	a.report(fmt.Sprintf("[ADAPTIVE] Phase evaluation: %s", eval.Reason))
+
+	// Quality insufficient — check if we can retry
+	a.State.mu.Lock()
+	phase := &a.State.Plan.Phases[phaseIdx]
+	canRetry := phase.Retried < 1
+	a.State.mu.Unlock()
+
+	if len(eval.NeedsMoreData) > 0 {
+		if canRetry {
+			// Retry: reset the phase, inject new search tasks, and re-execute
+			a.State.mu.Lock()
+			phase.Retried++
+			phase.Status = PhasePending
+			// Reset all task statuses so they can re-run
+			for i := range phase.Tasks {
+				phase.Tasks[i].Status = TaskPending
+				phase.Tasks[i].Error = ""
+				phase.Tasks[i].Result = ""
+			}
+			// Inject new search tasks at the front of the phase
+			injectSearchTasks(phase, eval.NeedsMoreData, fmt.Sprintf("phase%d", phaseIdx))
+			// Reset the task pointer to the start of this phase
+			a.State.Task = 0
+			a.State.mu.Unlock()
+
+			a.report(fmt.Sprintf("[ADAPTIVE] Retrying phase %q with %d new search queries: %s",
+				phase.Name, len(eval.NeedsMoreData), strings.Join(eval.NeedsMoreData, ", ")))
+		} else {
+			// Already retried once — inject the queries into the NEXT phase instead
+			a.State.mu.Lock()
+			nextIdx := phaseIdx + 1
+			if nextIdx < len(a.State.Plan.Phases) {
+				injectSearchTasks(&a.State.Plan.Phases[nextIdx], eval.NeedsMoreData,
+					fmt.Sprintf("phase%d-sup", nextIdx))
+				a.report(fmt.Sprintf("[ADAPTIVE] Injecting %d extra searches into phase %q",
+					len(eval.NeedsMoreData), a.State.Plan.Phases[nextIdx].Name))
+			}
+			a.State.mu.Unlock()
+		}
 	}
 }
 

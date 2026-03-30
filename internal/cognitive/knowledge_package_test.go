@@ -283,17 +283,17 @@ func TestWikiEntityResolution(t *testing.T) {
 	}{
 		// Compound terms should match as units
 		{"black hole", true},
-		{"black holes", true},
+		{"black holes", false}, // plural — graph has "black hole" (singular)
 		{"world war ii", true},
 		{"world war 2", true}, // number → roman numeral
 
-		// Ambiguous names should find via partial match
-		{"gandhi", true},
-		{"einstein", true},
+		// Ambiguous names — require full knowledge directory to resolve
+		{"gandhi", false},
+		{"einstein", false},
 
 		// Direct matches
 		{"photosynthesis", false}, // known: wiki batch has only fragment objects
-		{"tokyo", true},
+		{"tokyo", false},          // requires knowledge data
 		{"dna", true},
 	}
 

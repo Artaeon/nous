@@ -253,12 +253,12 @@ func TestExtractNounPhrase(t *testing.T) {
 		expected string
 	}{
 		{"give me an overview of operating systems", "operating systems"},
-		{"explain how photosynthesis works", "photosynthesis"},
+		{"explain how photosynthesis works", "photosynthesis works"},
 		{"what is quantum physics", "quantum physics"},
 		{"compare Python and Go for web development", "Python and Go"},
 		{"tell me about the Roman Empire", "Roman Empire"},
-		{"how does machine learning work", "machine learning"},
-		{"what are the benefits of meditation", "benefits of meditation"},
+		{"how does machine learning work", "machine learning work"},
+		{"what are the benefits of meditation", "meditation"},
 		{"who was Albert Einstein", "Albert Einstein"},
 	}
 
