@@ -31,7 +31,10 @@ func (a *Agent) evaluatePhase(phaseIdx int) *PhaseEvaluation {
 	goal := a.State.CurrentGoal
 	a.State.mu.RUnlock()
 
-	// Gather all content produced by this phase's tasks
+	// Gather all content produced by this phase's tasks.
+	// Check both task.Result AND the results map — task.Result for
+	// multi-step chains is the LAST step (often "wrote to file"),
+	// while the actual content is stored in the results map.
 	var phaseContent strings.Builder
 	completedTasks := 0
 	failedTasks := 0
@@ -39,7 +42,11 @@ func (a *Agent) evaluatePhase(phaseIdx int) *PhaseEvaluation {
 		switch task.Status {
 		case TaskCompleted:
 			completedTasks++
-			if task.Result != "" {
+			// Use the stored result from the results map first (has actual content)
+			if stored, ok := results[task.ID]; ok && stored != "" {
+				phaseContent.WriteString(stored)
+				phaseContent.WriteString("\n")
+			} else if task.Result != "" {
 				phaseContent.WriteString(task.Result)
 				phaseContent.WriteString("\n")
 			}
@@ -203,7 +210,7 @@ func injectSearchTasks(phase *Phase, queries []string, baseID string) {
 }
 
 // countContentWords counts non-trivial words in text, skipping URLs,
-// tool output markers, and short fragments.
+// tool output markers, markdown headers, and short fragments.
 func countContentWords(text string) int {
 	count := 0
 	for _, line := range strings.Split(text, "\n") {
@@ -218,9 +225,16 @@ func countContentWords(text string) int {
 		if strings.HasPrefix(line, "---") || strings.HasPrefix(line, "===") {
 			continue
 		}
+		// Skip markdown headers (## Section) — they're structure, not content
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		// Skip "wrote N bytes to" patterns
+		if strings.Contains(line, "bytes to ") {
+			continue
+		}
 		words := strings.Fields(line)
 		for _, w := range words {
-			// Skip very short tokens and numbers-only
 			if len(w) <= 1 {
 				continue
 			}

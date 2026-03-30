@@ -119,80 +119,453 @@ func (cb *CognitiveBridge) Compose(query string) string {
 // -----------------------------------------------------------------------
 
 // SmartSynthesize merges web search results and knowledge graph content
-// into a coherent, topic-filtered synthesis. This is the core function
-// that transforms the agent from a tool runner into a thinking worker.
+// into a structured, readable report. This is the core function that
+// transforms the agent from a link dumper into an analyst.
 //
 // Pipeline:
-//  1. Extract key sentences from each web result
-//  2. Extract key sentences from knowledge graph
-//  3. Filter out sentences unrelated to the topic
-//  4. Remove near-duplicate sentences (Jaccard > 0.5)
-//  5. Order semantically: definition → history → properties → applications → outlook
-//  6. Join into coherent paragraphs with connectors
+//  1. CLEAN raw search output (strip URLs, numbering, truncation markers)
+//  2. EXTRACT content sentences (claims, facts, data points)
+//  3. FILTER for topic relevance
+//  4. DEDUPLICATE near-identical sentences
+//  5. CLUSTER by subtopic (group related sentences)
+//  6. FORMAT as structured markdown with section headers
 func (cb *CognitiveBridge) SmartSynthesize(topic string, webResults []string, graphFacts []string) string {
-	if cb == nil {
-		return joinNonEmpty(append(webResults, graphFacts...))
-	}
+	// 1. Clean and extract content from raw search results
+	var extracted []extractedFact
+	var sources []string
 
-	// 1. Extract key sentences from each source
-	var allSentences []string
-
-	for _, result := range webResults {
-		if result == "" {
+	for _, raw := range webResults {
+		if raw == "" {
 			continue
 		}
-		// Extract top 3 sentences per web result
-		summary := cb.Summarize(result, 3)
-		for _, s := range splitSentences(summary) {
-			s = strings.TrimSpace(s)
-			if len(s) > 20 { // skip tiny fragments
-				allSentences = append(allSentences, s)
-			}
-		}
+		facts, srcs := extractFromSearchResult(raw)
+		extracted = append(extracted, facts...)
+		sources = append(sources, srcs...)
 	}
 
+	// Add knowledge graph content
 	for _, fact := range graphFacts {
-		if fact == "" {
-			continue
-		}
 		for _, s := range splitSentences(fact) {
 			s = strings.TrimSpace(s)
-			if len(s) > 20 {
-				allSentences = append(allSentences, s)
+			if len(s) > 25 {
+				extracted = append(extracted, extractedFact{text: s, theme: classifyTheme(s)})
 			}
 		}
 	}
 
-	if len(allSentences) == 0 {
+	if len(extracted) == 0 {
 		return "No relevant information found for: " + topic
 	}
 
-	// 2. Topic-relevance filter: drop sentences that share no content words with the topic
+	// 2. Filter for topic relevance
 	topicWords := contentWordSet(topic)
-	var relevant []string
-	for _, s := range allSentences {
-		if isRelevantToTopic(s, topicWords) {
-			relevant = append(relevant, s)
+	var relevant []extractedFact
+	for _, f := range extracted {
+		if isRelevantToTopic(f.text, topicWords) {
+			relevant = append(relevant, f)
+		}
+	}
+	if len(relevant) == 0 {
+		relevant = extracted
+	}
+
+	// 3. Deduplicate
+	relevant = deduplicateFacts(relevant, 0.5)
+
+	// 4. Cluster by theme
+	clusters := clusterByTheme(relevant)
+
+	// 5. Format as structured markdown
+	return formatAsReport(topic, clusters, sources)
+}
+
+// extractedFact is a single content claim extracted from search results.
+type extractedFact struct {
+	text  string // the actual content sentence
+	theme string // "overview", "strategy", "data", "challenge", "trend", "example"
+}
+
+// extractFromSearchResult cleans a raw DuckDuckGo search result and
+// extracts content sentences. Strips URLs, numbering, title lines.
+func extractFromSearchResult(raw string) ([]extractedFact, []string) {
+	var facts []extractedFact
+	var sources []string
+
+	lines := strings.Split(raw, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		// Extract source URLs for citation
+		if strings.HasPrefix(line, "http") || strings.HasPrefix(line, "   http") {
+			url := strings.TrimSpace(line)
+			if url != "" {
+				// Extract domain for citation
+				domain := extractDomain(url)
+				if domain != "" && !containsString(sources, domain) {
+					sources = append(sources, domain)
+				}
+			}
+			continue
+		}
+
+		// Strip numbered prefix: "1. ", "2. ", etc.
+		cleaned := line
+		if len(cleaned) > 3 && cleaned[0] >= '0' && cleaned[0] <= '9' {
+			dotIdx := strings.Index(cleaned, ". ")
+			if dotIdx >= 0 && dotIdx <= 3 {
+				cleaned = strings.TrimSpace(cleaned[dotIdx+2:])
+			}
+		}
+
+		// Strip leading whitespace (indented snippets)
+		cleaned = strings.TrimSpace(cleaned)
+
+		// Skip if it's just a title (short, no period, title-case)
+		if len(cleaned) < 40 && !strings.Contains(cleaned, ".") {
+			continue
+		}
+
+		// Skip truncated snippets ending in "..."
+		if strings.HasSuffix(cleaned, "...") {
+			cleaned = strings.TrimSuffix(cleaned, "...")
+			// Only keep if substantial
+			if len(cleaned) < 30 {
+				continue
+			}
+		}
+
+		// Skip very short fragments
+		if len(cleaned) < 25 {
+			continue
+		}
+
+		// Skip article titles masquerading as content
+		if isArticleTitle(cleaned) {
+			continue
+		}
+
+		// Skip author bylines: "Author Name N min read · Date"
+		if strings.Contains(cleaned, "min read") || strings.Contains(cleaned, "· ") {
+			continue
+		}
+
+		// Skip sentences that end abruptly (truncated snippets)
+		if !strings.HasSuffix(cleaned, ".") && !strings.HasSuffix(cleaned, "!") &&
+			!strings.HasSuffix(cleaned, "?") && !strings.HasSuffix(cleaned, ":") {
+			// Check if it looks like a truncated sentence
+			words := strings.Fields(cleaned)
+			lastWord := ""
+			if len(words) > 0 {
+				lastWord = strings.ToLower(words[len(words)-1])
+			}
+			// Articles, prepositions, conjunctions at the end = truncated
+			truncMarkers := map[string]bool{
+				"the": true, "a": true, "an": true, "and": true, "or": true,
+				"but": true, "that": true, "which": true, "many": true,
+				"with": true, "for": true, "from": true, "into": true,
+			}
+			if truncMarkers[lastWord] {
+				continue
+			}
+		}
+
+		// Split into sentences and classify each
+		for _, sent := range splitSentences(cleaned) {
+			sent = strings.TrimSpace(sent)
+			if len(sent) < 25 {
+				continue
+			}
+			if isMetaSentence(sent) {
+				continue
+			}
+			if isArticleTitle(sent) {
+				continue
+			}
+			facts = append(facts, extractedFact{
+				text:  sent,
+				theme: classifyTheme(sent),
+			})
 		}
 	}
 
-	// If filtering killed everything, be less strict — keep sentences with ANY overlap
-	if len(relevant) == 0 {
-		relevant = allSentences
-	}
-
-	// 3. Dedup: remove near-duplicate sentences (Jaccard > 0.5)
-	deduped := deduplicateSentences(relevant, 0.5)
-
-	// 4. Semantic ordering: definition → history → properties → applications → outlook
-	ordered := semanticOrder(deduped)
-
-	// 5. Join into paragraphs with connectors
-	return joinWithConnectors(topic, ordered)
+	return facts, sources
 }
 
-// SynthesizeResults takes raw tool outputs and produces a coherent summary.
-// This replaces the old cascade approach with SmartSynthesize.
+// classifyTheme determines what kind of content a sentence represents.
+func classifyTheme(s string) string {
+	lower := strings.ToLower(s)
+
+	// Data/statistics
+	for _, sig := range []string{"billion", "million", "percent", "%", "revenue", "market", "growth", "projected", "forecast", "cagr"} {
+		if strings.Contains(lower, sig) {
+			return "data"
+		}
+	}
+
+	// Strategies/approaches
+	for _, sig := range []string{"strategy", "model", "approach", "method", "way to", "option", "path", "pricing", "monetiz", "license", "freemium", "subscription", "open core", "dual licens", "support contract"} {
+		if strings.Contains(lower, sig) {
+			return "strategy"
+		}
+	}
+
+	// Challenges/problems
+	for _, sig := range []string{"challenge", "problem", "risk", "difficult", "struggle", "threat", "concern", "drawback", "disadvantage", "limitation"} {
+		if strings.Contains(lower, sig) {
+			return "challenge"
+		}
+	}
+
+	// Trends/future
+	for _, sig := range []string{"trend", "future", "emerging", "growing", "2025", "2026", "2027", "2028", "2030", "increasingly", "shift"} {
+		if strings.Contains(lower, sig) {
+			return "trend"
+		}
+	}
+
+	// Examples/case studies
+	for _, sig := range []string{"example", "such as", "like ", "including", "case study", "for instance"} {
+		if strings.Contains(lower, sig) {
+			return "example"
+		}
+	}
+
+	// Definitions/overview
+	for _, sig := range []string{" is a ", " is an ", " are a ", " refers to", " means ", " defined as"} {
+		if strings.Contains(lower, sig) {
+			return "overview"
+		}
+	}
+
+	return "overview" // default
+}
+
+// isMetaSentence returns true for sentences about the article, not the topic.
+func isMetaSentence(s string) bool {
+	lower := strings.ToLower(s)
+	meta := []string{
+		"in this article", "in this post", "in this blog", "in this guide",
+		"read more", "click here", "subscribe", "sign up", "learn more",
+		"table of contents", "share this", "related articles",
+		"we will explore", "we'll cover", "let's look at", "let's dive",
+		"this article", "this post", "this guide", "this report",
+		"in the following sections", "you can find the", "for more insights",
+		"explore the ", "what specifically about",
+		"no results found for:", "what angle are you",
+		"min read", "would you like to explore",
+		"let me share what i know", "context really matters",
+		"that's an interesting area",
+	}
+	for _, m := range meta {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// isArticleTitle returns true for lines that are article titles, not content.
+func isArticleTitle(s string) bool {
+	lower := strings.ToLower(s)
+
+	// Site name patterns anywhere: "- Medium", "| Forbes", "- GitHub Blog"
+	sitePatterns := []string{
+		" - medium", " | medium", " - github", " | github",
+		" - forbes", " | forbes", "- the github blog", " - dev.to",
+		" - reviews", " - comparison", "| forecast", "| trends",
+		" - sourceforge", " - wikipedia", ": the complete guide",
+		": a comprehensive guide", ": practical tools",
+	}
+	for _, p := range sitePatterns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+
+	// Promotional/CTA starts
+	promoStarts := []string{
+		"discover the", "explore the", "learn how", "find out how",
+		"find the highest", "see the key", "see how",
+	}
+	for _, p := range promoStarts {
+		if strings.HasPrefix(lower, p) {
+			return true
+		}
+	}
+
+	// Title-case heuristic: if most words are capitalized and no period, likely a title
+	words := strings.Fields(s)
+	if len(words) >= 3 && len(words) <= 15 && !strings.Contains(s, ".") {
+		capCount := 0
+		for _, w := range words {
+			if len(w) > 0 && w[0] >= 'A' && w[0] <= 'Z' {
+				capCount++
+			}
+		}
+		// If >60% of words start with uppercase, it's a title
+		if float64(capCount)/float64(len(words)) > 0.6 {
+			return true
+		}
+	}
+
+	return false
+}
+
+// deduplicateFacts removes near-duplicate extracted facts.
+func deduplicateFacts(facts []extractedFact, threshold float64) []extractedFact {
+	var result []extractedFact
+	for _, f := range facts {
+		dup := false
+		for _, kept := range result {
+			if jaccardSimilarity(f.text, kept.text) > threshold {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			result = append(result, f)
+		}
+	}
+	return result
+}
+
+// clusterByTheme groups facts by their theme.
+func clusterByTheme(facts []extractedFact) map[string][]string {
+	clusters := make(map[string][]string)
+	for _, f := range facts {
+		clusters[f.theme] = append(clusters[f.theme], f.text)
+	}
+	return clusters
+}
+
+// formatAsReport builds a structured markdown report from clustered facts.
+func formatAsReport(topic string, clusters map[string][]string, sources []string) string {
+	var b strings.Builder
+
+	// Title
+	fmt.Fprintf(&b, "# %s\n\n", capitalizeTitle(topic))
+
+	// Executive summary — first 2-3 overview sentences
+	if overview, ok := clusters["overview"]; ok && len(overview) > 0 {
+		fmt.Fprintf(&b, "## Overview\n\n")
+		max := 3
+		if len(overview) < max {
+			max = len(overview)
+		}
+		for _, s := range overview[:max] {
+			fmt.Fprintf(&b, "%s ", s)
+		}
+		fmt.Fprintf(&b, "\n\n")
+	}
+
+	// Strategies/approaches
+	if strategies, ok := clusters["strategy"]; ok && len(strategies) > 0 {
+		fmt.Fprintf(&b, "## Key Findings\n\n")
+		for _, s := range strategies {
+			fmt.Fprintf(&b, "- %s\n", s)
+		}
+		fmt.Fprintf(&b, "\n")
+	}
+
+	// Data/statistics
+	if data, ok := clusters["data"]; ok && len(data) > 0 {
+		fmt.Fprintf(&b, "## Market Data\n\n")
+		for _, s := range data {
+			fmt.Fprintf(&b, "- %s\n", s)
+		}
+		fmt.Fprintf(&b, "\n")
+	}
+
+	// Trends
+	if trends, ok := clusters["trend"]; ok && len(trends) > 0 {
+		fmt.Fprintf(&b, "## Trends\n\n")
+		for _, s := range trends {
+			fmt.Fprintf(&b, "%s ", s)
+		}
+		fmt.Fprintf(&b, "\n\n")
+	}
+
+	// Challenges
+	if challenges, ok := clusters["challenge"]; ok && len(challenges) > 0 {
+		fmt.Fprintf(&b, "## Challenges\n\n")
+		for _, s := range challenges {
+			fmt.Fprintf(&b, "- %s\n", s)
+		}
+		fmt.Fprintf(&b, "\n")
+	}
+
+	// Examples
+	if examples, ok := clusters["example"]; ok && len(examples) > 0 {
+		fmt.Fprintf(&b, "## Examples\n\n")
+		for _, s := range examples {
+			fmt.Fprintf(&b, "- %s\n", s)
+		}
+		fmt.Fprintf(&b, "\n")
+	}
+
+	// Sources — deduplicated
+	if len(sources) > 0 {
+		seen := make(map[string]bool)
+		var uniqueSources []string
+		for _, s := range sources {
+			if !seen[s] {
+				seen[s] = true
+				uniqueSources = append(uniqueSources, s)
+			}
+		}
+		fmt.Fprintf(&b, "## Sources\n\n")
+		for _, s := range uniqueSources {
+			fmt.Fprintf(&b, "- %s\n", s)
+		}
+		fmt.Fprintf(&b, "\n")
+	}
+
+	result := b.String()
+	if strings.Count(result, "\n") <= 3 {
+		return "No substantial content found for: " + topic
+	}
+	return result
+}
+
+// extractDomain extracts the domain name from a URL for citation.
+func extractDomain(url string) string {
+	// Strip protocol
+	u := url
+	for _, prefix := range []string{"https://", "http://", "www."} {
+		u = strings.TrimPrefix(u, prefix)
+	}
+	// Take just the domain
+	if idx := strings.IndexByte(u, '/'); idx > 0 {
+		u = u[:idx]
+	}
+	return strings.TrimSpace(u)
+}
+
+// containsString checks if a slice contains a string.
+func containsString(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// capitalizeTitle capitalizes each word in a title.
+func capitalizeTitle(s string) string {
+	words := strings.Fields(s)
+	for i, w := range words {
+		if len(w) > 0 {
+			words[i] = strings.ToUpper(w[:1]) + w[1:]
+		}
+	}
+	return strings.Join(words, " ")
+}
+
+// SynthesizeResults takes raw tool outputs and produces a structured report.
 func (cb *CognitiveBridge) SynthesizeResults(goal string, results map[string]string) string {
 	if cb == nil {
 		return concatenateResults(results)
@@ -200,7 +573,7 @@ func (cb *CognitiveBridge) SynthesizeResults(goal string, results map[string]str
 
 	topic := extractSynthesisTopic(goal)
 
-	// Separate web results from other outputs
+	// Collect all raw results
 	var webResults []string
 	for _, v := range results {
 		if v == "" {
@@ -224,11 +597,23 @@ func (cb *CognitiveBridge) SynthesizeResults(goal string, results map[string]str
 
 // WriteReport generates a full document from accumulated results.
 func (cb *CognitiveBridge) WriteReport(topic, style string, results map[string]string) string {
+	// Try DocumentGenerator first (knowledge graph content)
 	doc := cb.GenerateDocument(topic, style)
+
+	// Try synthesis from web results
+	synth := cb.SynthesizeResults("write a "+style+" about "+topic, results)
+
+	// Merge: if both produced content, combine them
+	if doc != "" && synth != "" && len(synth) > 100 {
+		return doc + "\n\n---\n\n## Web Research Findings\n\n" + synth
+	}
 	if doc != "" {
 		return doc
 	}
-	return cb.SynthesizeResults("write a "+style+" about "+topic, results)
+	if synth != "" {
+		return synth
+	}
+	return "Report generation pending — insufficient data for: " + topic
 }
 
 // queryGraphFacts retrieves relevant knowledge paragraphs from the cognitive graph.
