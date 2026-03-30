@@ -1,131 +1,118 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
-  <title id="title">Nous banner</title>
-  <desc id="desc">A local-first cognitive engine banner showing deterministic reasoning, memory, and tool orchestration.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" role="img" aria-labelledby="title desc">
+  <title id="title">Nous — Autonomous AI Agent</title>
+  <desc id="desc">Fully local autonomous AI agent. 52 tools, 680+ topics, zero dependencies.</desc>
   <defs>
     <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#09141c"/>
-      <stop offset="45%" stop-color="#102433"/>
-      <stop offset="100%" stop-color="#071018"/>
-    </linearGradient>
-    <radialGradient id="auroraLeft" cx="25%" cy="25%" r="55%">
-      <stop offset="0%" stop-color="#19d3c5" stop-opacity="0.28"/>
-      <stop offset="100%" stop-color="#19d3c5" stop-opacity="0"/>
-    </radialGradient>
-    <radialGradient id="auroraRight" cx="78%" cy="38%" r="45%">
-      <stop offset="0%" stop-color="#ff8a3d" stop-opacity="0.24"/>
-      <stop offset="100%" stop-color="#ff8a3d" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="panelStroke" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#59f0e3" stop-opacity="0.65"/>
-      <stop offset="100%" stop-color="#ff9f5c" stop-opacity="0.45"/>
+      <stop offset="0%" style="stop-color:#0f172a"/>
+      <stop offset="100%" style="stop-color:#1e293b"/>
     </linearGradient>
     <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#59f0e3"/>
-      <stop offset="55%" stop-color="#b2fff5"/>
-      <stop offset="100%" stop-color="#ff9f5c"/>
+      <stop offset="0%" style="stop-color:#06b6d4"/>
+      <stop offset="100%" style="stop-color:#8b5cf6"/>
     </linearGradient>
-    <filter id="softGlow" x="-40%" y="-40%" width="180%" height="180%">
-      <feGaussianBlur stdDeviation="12" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
-    <filter id="textGlow" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur stdDeviation="3" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
-    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
-      <path d="M 32 0 L 0 0 0 32" fill="none" stroke="#8ecfc9" stroke-opacity="0.08" stroke-width="1"/>
-    </pattern>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#06b6d4;stop-opacity:0.3"/>
+      <stop offset="50%" style="stop-color:#8b5cf6;stop-opacity:0.15"/>
+      <stop offset="100%" style="stop-color:#06b6d4;stop-opacity:0"/>
+    </linearGradient>
   </defs>
 
-  <rect width="1200" height="420" rx="28" fill="url(#bg)"/>
-  <rect width="1200" height="420" rx="28" fill="url(#grid)"/>
-  <rect width="1200" height="420" rx="28" fill="url(#auroraLeft)"/>
-  <rect width="1200" height="420" rx="28" fill="url(#auroraRight)"/>
+  <!-- Background -->
+  <rect width="1200" height="300" fill="url(#bg)" rx="12"/>
 
-  <g opacity="0.12">
-    <path d="M0 322 C175 274 275 358 426 296 C575 236 718 332 874 280 C980 246 1076 255 1200 212" fill="none" stroke="#59f0e3" stroke-width="2"/>
-    <path d="M0 350 C142 312 259 391 415 338 C571 286 721 380 876 336 C1010 298 1088 327 1200 291" fill="none" stroke="#ff9f5c" stroke-width="2"/>
+  <!-- Subtle grid -->
+  <g opacity="0.04" stroke="#94a3b8" stroke-width="0.5">
+    <line x1="0" y1="60" x2="1200" y2="60"/>
+    <line x1="0" y1="120" x2="1200" y2="120"/>
+    <line x1="0" y1="180" x2="1200" y2="180"/>
+    <line x1="0" y1="240" x2="1200" y2="240"/>
+    <line x1="200" y1="0" x2="200" y2="300"/>
+    <line x1="400" y1="0" x2="400" y2="300"/>
+    <line x1="600" y1="0" x2="600" y2="300"/>
+    <line x1="800" y1="0" x2="800" y2="300"/>
+    <line x1="1000" y1="0" x2="1000" y2="300"/>
   </g>
 
-  <g transform="translate(72 56)">
-    <rect x="0" y="0" width="112" height="30" rx="15" fill="#0f2731" stroke="#59f0e3" stroke-opacity="0.35"/>
-    <text x="56" y="20" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="2" fill="#b9fff7">LOCAL-FIRST AI</text>
+  <!-- Glow behind title -->
+  <ellipse cx="350" cy="130" rx="250" ry="80" fill="url(#glow)"/>
 
-    <text x="0" y="108" font-family="Segoe UI, Arial, sans-serif" font-size="88" font-weight="800" letter-spacing="10" fill="#f5fffd" filter="url(#textGlow)">NOUS</text>
-    <rect x="2" y="126" width="420" height="5" rx="2.5" fill="url(#accent)"/>
-
-    <text x="0" y="170" font-family="Segoe UI, Arial, sans-serif" font-size="26" font-weight="700" fill="#d9f8f4">Deterministic cognition for reasoning, memory, and action.</text>
-    <text x="0" y="206" font-family="Segoe UI, Arial, sans-serif" font-size="19" fill="#b7d3d1">No cloud dependency. No model downloads. No wrapper theater.</text>
-    <text x="0" y="236" font-family="Segoe UI, Arial, sans-serif" font-size="19" fill="#b7d3d1">Just a native cognitive stack built in Go and shaped for daily use.</text>
-
-    <g transform="translate(0 274)">
-      <rect x="0" y="0" width="156" height="48" rx="12" fill="#102833" stroke="#59f0e3" stroke-opacity="0.28"/>
-      <rect x="170" y="0" width="156" height="48" rx="12" fill="#102833" stroke="#59f0e3" stroke-opacity="0.28"/>
-      <rect x="340" y="0" width="156" height="48" rx="12" fill="#102833" stroke="#ff9f5c" stroke-opacity="0.32"/>
-      <text x="78" y="20" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="1.4" fill="#8cf5ea">THINKING ENGINE</text>
-      <text x="78" y="35" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#d6efec">intent -> frame -> generate</text>
-      <text x="248" y="20" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="1.4" fill="#8cf5ea">MEMORY SYSTEM</text>
-      <text x="248" y="35" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#d6efec">working -> episodic -> project</text>
-      <text x="418" y="20" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="1.4" fill="#ffc397">ACTION LAYER</text>
-      <text x="418" y="35" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#d6efec">51 built-in tools, local routing</text>
-    </g>
+  <!-- Node graph icon -->
+  <g transform="translate(120, 100)" opacity="0.9">
+    <circle cx="0" cy="0" r="8" fill="#06b6d4"/>
+    <circle cx="35" cy="-20" r="5" fill="#8b5cf6"/>
+    <circle cx="-30" cy="-25" r="4" fill="#06b6d4" opacity="0.7"/>
+    <circle cx="25" cy="30" r="5" fill="#8b5cf6" opacity="0.8"/>
+    <circle cx="-35" cy="20" r="4" fill="#06b6d4" opacity="0.6"/>
+    <circle cx="0" cy="-40" r="3" fill="#8b5cf6" opacity="0.5"/>
+    <circle cx="40" cy="10" r="3" fill="#06b6d4" opacity="0.5"/>
+    <line x1="0" y1="0" x2="35" y2="-20" stroke="#06b6d4" stroke-width="1" opacity="0.3"/>
+    <line x1="0" y1="0" x2="-30" y2="-25" stroke="#8b5cf6" stroke-width="1" opacity="0.3"/>
+    <line x1="0" y1="0" x2="25" y2="30" stroke="#06b6d4" stroke-width="1" opacity="0.3"/>
+    <line x1="0" y1="0" x2="-35" y2="20" stroke="#8b5cf6" stroke-width="1" opacity="0.3"/>
+    <line x1="0" y1="0" x2="0" y2="-40" stroke="#06b6d4" stroke-width="1" opacity="0.3"/>
+    <line x1="0" y1="0" x2="40" y2="10" stroke="#8b5cf6" stroke-width="1" opacity="0.3"/>
+    <line x1="35" y1="-20" x2="0" y2="-40" stroke="#06b6d4" stroke-width="0.5" opacity="0.2"/>
+    <line x1="25" y1="30" x2="40" y2="10" stroke="#8b5cf6" stroke-width="0.5" opacity="0.2"/>
+    <line x1="-30" y1="-25" x2="-35" y2="20" stroke="#06b6d4" stroke-width="0.5" opacity="0.2"/>
   </g>
 
-  <g transform="translate(676 48)">
-    <rect x="0" y="0" width="450" height="324" rx="24" fill="#0d1d29" fill-opacity="0.78" stroke="url(#panelStroke)" stroke-width="1.4"/>
+  <!-- Title -->
+  <text x="190" y="145" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="72" font-weight="700" fill="white" letter-spacing="-2">nous</text>
 
-    <g transform="translate(34 30)">
-      <text x="0" y="0" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="2.4" fill="#93efe6">INNOVATION SURFACE</text>
-      <text x="0" y="34" font-family="Segoe UI, Arial, sans-serif" font-size="34" font-weight="700" fill="#f4fffe">Built like a cognitive system,</text>
-      <text x="0" y="70" font-family="Segoe UI, Arial, sans-serif" font-size="34" font-weight="700" fill="#f4fffe">not an API shell.</text>
+  <!-- Accent line -->
+  <rect x="190" y="160" width="120" height="3" rx="1.5" fill="url(#accent)"/>
 
-      <g transform="translate(0 102)">
-        <rect x="0" y="0" width="184" height="72" rx="16" fill="#112a35"/>
-        <rect x="198" y="0" width="184" height="72" rx="16" fill="#112a35"/>
-        <rect x="0" y="88" width="184" height="72" rx="16" fill="#112a35"/>
-        <rect x="198" y="88" width="184" height="72" rx="16" fill="#112a35"/>
+  <!-- Tagline -->
+  <text x="190" y="190" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="18" fill="#94a3b8" font-weight="400">Autonomous AI agent. Fully local. Zero dependencies.</text>
 
-        <text x="18" y="24" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" fill="#8cf5ea">DISCOURSE PLANNING</text>
-        <text x="18" y="45" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#d7ebea">RST schemas organize prose</text>
-        <text x="18" y="61" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#d7ebea">before generation starts.</text>
+  <!-- Stats pills -->
+  <g transform="translate(190, 220)">
+    <rect x="0" y="0" width="80" height="26" rx="13" fill="#06b6d4" opacity="0.15"/>
+    <text x="40" y="17" font-family="system-ui, sans-serif" font-size="11" fill="#06b6d4" text-anchor="middle" font-weight="600">52 tools</text>
 
-        <text x="216" y="24" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" fill="#8cf5ea">KNOWLEDGE GRAPH</text>
-        <text x="216" y="45" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#d7ebea">Multi-hop retrieval, causal</text>
-        <text x="216" y="61" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#d7ebea">links, and semantic relations.</text>
+    <rect x="90" y="0" width="88" height="26" rx="13" fill="#8b5cf6" opacity="0.15"/>
+    <text x="134" y="17" font-family="system-ui, sans-serif" font-size="11" fill="#8b5cf6" text-anchor="middle" font-weight="600">680+ topics</text>
 
-        <text x="18" y="112" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" fill="#ffc397">PROGRESSIVE COMPILATION</text>
-        <text x="18" y="133" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#d7ebea">Crystals, caches, and recipes</text>
-        <text x="18" y="149" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#d7ebea">make repeated work faster.</text>
+    <rect x="188" y="0" width="72" height="26" rx="13" fill="#06b6d4" opacity="0.15"/>
+    <text x="224" y="17" font-family="system-ui, sans-serif" font-size="11" fill="#06b6d4" text-anchor="middle" font-weight="600">&lt;50ms</text>
 
-        <text x="216" y="112" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" fill="#ffc397">TOOL-NATIVE ORCHESTRATION</text>
-        <text x="216" y="133" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#d7ebea">The assistant reasons directly</text>
-        <text x="216" y="149" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#d7ebea">over local tools and memory.</text>
-      </g>
-    </g>
+    <rect x="270" y="0" width="88" height="26" rx="13" fill="#8b5cf6" opacity="0.15"/>
+    <text x="314" y="17" font-family="system-ui, sans-serif" font-size="11" fill="#8b5cf6" text-anchor="middle" font-weight="600">~50MB RAM</text>
+
+    <rect x="368" y="0" width="64" height="26" rx="13" fill="#06b6d4" opacity="0.15"/>
+    <text x="400" y="17" font-family="system-ui, sans-serif" font-size="11" fill="#06b6d4" text-anchor="middle" font-weight="600">0 deps</text>
+
+    <rect x="442" y="0" width="100" height="26" rx="13" fill="#8b5cf6" opacity="0.15"/>
+    <text x="492" y="17" font-family="system-ui, sans-serif" font-size="11" fill="#8b5cf6" text-anchor="middle" font-weight="600">autonomous</text>
   </g>
 
-  <g transform="translate(614 211)">
-    <circle cx="0" cy="0" r="78" fill="#1ee3d1" fill-opacity="0.08" filter="url(#softGlow)"/>
-    <circle cx="0" cy="0" r="52" fill="#102c36" stroke="#6ff3e6" stroke-opacity="0.7"/>
-    <circle cx="0" cy="0" r="34" fill="#123744" stroke="#dffffc" stroke-opacity="0.7"/>
-    <circle cx="0" cy="0" r="8" fill="#fff3e7"/>
-    <circle cx="0" cy="0" r="96" fill="none" stroke="#59f0e3" stroke-opacity="0.18" stroke-width="1.5"/>
-    <circle cx="0" cy="0" r="124" fill="none" stroke="#ff9f5c" stroke-opacity="0.18" stroke-width="1.5"/>
-    <circle cx="-94" cy="-22" r="7" fill="#59f0e3"/>
-    <circle cx="98" cy="26" r="7" fill="#ff9f5c"/>
-    <circle cx="24" cy="-122" r="6" fill="#c1fff8"/>
-    <circle cx="-38" cy="118" r="6" fill="#ffd1ac"/>
-    <path d="M-94 -22 C-58 -30 -36 -14 -18 -4" fill="none" stroke="#59f0e3" stroke-opacity="0.38" stroke-width="2"/>
-    <path d="M24 -122 C18 -78 12 -48 6 -32" fill="none" stroke="#c1fff8" stroke-opacity="0.3" stroke-width="2"/>
-    <path d="M98 26 C64 19 40 11 20 5" fill="none" stroke="#ff9f5c" stroke-opacity="0.38" stroke-width="2"/>
-    <path d="M-38 118 C-28 76 -18 44 -8 22" fill="none" stroke="#ffd1ac" stroke-opacity="0.3" stroke-width="2"/>
-  </g>
+  <!-- Terminal preview -->
+  <g transform="translate(700, 45)">
+    <rect x="0" y="0" width="440" height="210" rx="8" fill="#0c0c0c" stroke="#334155" stroke-width="1"/>
+    <rect x="0" y="0" width="440" height="28" rx="8" fill="#1a1a2e"/>
+    <rect x="0" y="20" width="440" height="8" fill="#1a1a2e"/>
+    <circle cx="16" cy="14" r="5" fill="#ef4444" opacity="0.8"/>
+    <circle cx="32" cy="14" r="5" fill="#eab308" opacity="0.8"/>
+    <circle cx="48" cy="14" r="5" fill="#22c55e" opacity="0.8"/>
+    <text x="220" y="18" font-family="monospace" font-size="10" fill="#64748b" text-anchor="middle">nous</text>
 
-  <rect x="28" y="28" width="1144" height="364" rx="24" fill="none" stroke="#d7fffb" stroke-opacity="0.08"/>
+    <text x="12" y="52" font-family="'JetBrains Mono', 'Fira Code', monospace" font-size="11" fill="#06b6d4">nous &gt;</text>
+    <text x="68" y="52" font-family="'JetBrains Mono', 'Fira Code', monospace" font-size="11" fill="#e2e8f0">what is stoicism</text>
+    <text x="12" y="72" font-family="'JetBrains Mono', 'Fira Code', monospace" font-size="10" fill="#94a3b8">Stoicism was a Hellenistic philosophical</text>
+    <text x="12" y="86" font-family="'JetBrains Mono', 'Fira Code', monospace" font-size="10" fill="#94a3b8">school founded by Zeno of Citium around</text>
+    <text x="12" y="100" font-family="'JetBrains Mono', 'Fira Code', monospace" font-size="10" fill="#94a3b8">300 BCE in Athens...</text>
+
+    <text x="12" y="124" font-family="'JetBrains Mono', 'Fira Code', monospace" font-size="11" fill="#06b6d4">nous &gt;</text>
+    <text x="68" y="124" font-family="'JetBrains Mono', 'Fira Code', monospace" font-size="11" fill="#e2e8f0">set a timer for 25 min</text>
+    <text x="12" y="144" font-family="'JetBrains Mono', 'Fira Code', monospace" font-size="10" fill="#22c55e">Timer started: 25m0s</text>
+
+    <text x="12" y="168" font-family="'JetBrains Mono', 'Fira Code', monospace" font-size="11" fill="#06b6d4">nous &gt;</text>
+    <text x="68" y="168" font-family="'JetBrains Mono', 'Fira Code', monospace" font-size="11" fill="#e2e8f0">whats 25% of 480</text>
+    <text x="12" y="188" font-family="'JetBrains Mono', 'Fira Code', monospace" font-size="10" fill="#22c55e">0.25*480 = 120</text>
+
+    <text x="12" y="208" font-family="'JetBrains Mono', 'Fira Code', monospace" font-size="11" fill="#06b6d4">nous &gt;</text>
+    <rect x="68" y="199" width="8" height="12" fill="#06b6d4" opacity="0.7">
+      <animate attributeName="opacity" values="0.7;0;0.7" dur="1.2s" repeatCount="indefinite"/>
+    </rect>
+  </g>
 </svg>
