@@ -206,6 +206,14 @@ func isAcceptableShort(response string) bool {
 		strings.HasPrefix(lower, "deleted") || strings.HasPrefix(lower, "updated") {
 		return true
 	}
+	// Greetings are intentionally short — "Hey Rrl.", "Good morning."
+	greetingMarkers := []string{"hey ", "hi ", "hello", "good morning", "good afternoon",
+		"good evening", "morning", "afternoon", "evening", "yo ", "sup "}
+	for _, g := range greetingMarkers {
+		if strings.HasPrefix(lower, g) {
+			return true
+		}
+	}
 	return false
 }
 

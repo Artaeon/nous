@@ -442,6 +442,7 @@ func classifySentence(s string) int {
 }
 
 // joinWithConnectors assembles ordered sentences into coherent paragraphs.
+// Groups sentences by semantic category, adds connectors only between groups.
 func joinWithConnectors(topic string, sentences []string) string {
 	if len(sentences) == 0 {
 		return ""
@@ -450,66 +451,67 @@ func joinWithConnectors(topic string, sentences []string) string {
 		return sentences[0]
 	}
 
-	var b strings.Builder
-	lastCategory := -1
-
-	for i, s := range sentences {
-		category := classifySentence(s)
-
-		if i == 0 {
-			b.WriteString(s)
-			lastCategory = category
-			continue
+	// Group sentences by category
+	type group struct {
+		category  int
+		sentences []string
+	}
+	var groups []group
+	lastCat := -1
+	for _, s := range sentences {
+		cat := classifySentence(s)
+		if cat != lastCat || len(groups) == 0 {
+			groups = append(groups, group{category: cat})
+			lastCat = cat
 		}
-
-		// New paragraph when category changes
-		if category != lastCategory {
-			b.WriteString("\n\n")
-			lastCategory = category
-		} else {
-			b.WriteString(" ")
-		}
-
-		// Add a connector if we're continuing in the same category
-		if category == lastCategory && i > 0 {
-			s = addConnector(s, i)
-		}
-
-		b.WriteString(s)
+		groups[len(groups)-1].sentences = append(groups[len(groups)-1].sentences, s)
 	}
 
-	return b.String()
+	// Build paragraphs — one per group
+	var paragraphs []string
+	for gi, g := range groups {
+		var para strings.Builder
+		for si, s := range g.sentences {
+			if si > 0 {
+				para.WriteString(" ")
+			}
+			para.WriteString(s)
+		}
+
+		text := para.String()
+
+		// Add a transition only at the start of a NEW group (not every sentence)
+		if gi > 0 {
+			text = addGroupTransition(g.category, text)
+		}
+
+		paragraphs = append(paragraphs, text)
+	}
+
+	return strings.Join(paragraphs, "\n\n")
 }
 
-// addConnector prepends a transitional word to a sentence when appropriate.
-func addConnector(s string, position int) string {
-	lower := strings.ToLower(s)
-
-	// Don't add connectors if sentence already starts with one
-	startsWithConnector := false
-	connectorStarts := []string{"additionally", "furthermore", "moreover", "also", "in addition", "however", "meanwhile", "specifically", "notably"}
-	for _, c := range connectorStarts {
-		if strings.HasPrefix(lower, c) {
-			startsWithConnector = true
-			break
-		}
-	}
-	if startsWithConnector {
-		return s
-	}
-
-	// Pick connector based on position (vary to avoid repetition)
-	connectors := []string{"Additionally, ", "Furthermore, ", "Moreover, ", ""}
-	connector := connectors[position%len(connectors)]
-	if connector == "" {
-		return s
+// addGroupTransition prepends a category-appropriate transition to a paragraph.
+func addGroupTransition(category int, text string) string {
+	var prefix string
+	switch category {
+	case 1: // history
+		prefix = "Historically, "
+	case 2: // properties
+		prefix = "In terms of key characteristics, "
+	case 3: // applications
+		prefix = "In practice, "
+	case 4: // outlook
+		prefix = "Looking ahead, "
+	default:
+		return text
 	}
 
-	// Lowercase the first letter of the original sentence after connector
-	if len(s) > 0 && unicode.IsUpper(rune(s[0])) {
-		s = string(unicode.ToLower(rune(s[0]))) + s[1:]
+	// Lowercase the first char of the original text
+	if len(text) > 0 && unicode.IsUpper(rune(text[0])) {
+		text = string(unicode.ToLower(rune(text[0]))) + text[1:]
 	}
-	return connector + s
+	return prefix + text
 }
 
 // extractSynthesisTopic extracts the core topic from a synthesis goal string.

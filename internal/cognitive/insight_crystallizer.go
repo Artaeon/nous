@@ -823,11 +823,38 @@ func findSharedKeywords(a, b map[string]int) []string {
 	var shared []string
 	for kw := range a {
 		if _, ok := b[kw]; ok {
+			// Skip date/number-only connections — they create noise
+			// like "blockchain connects to Bitcoin" through "2009"
+			if isDateOrNumberKeyword(kw) {
+				continue
+			}
 			shared = append(shared, kw)
 		}
 	}
 	sort.Strings(shared)
 	return shared
+}
+
+// isDateOrNumberKeyword returns true if a keyword is just a date or number.
+func isDateOrNumberKeyword(kw string) bool {
+	// Pure numbers: "2009", "100", "1956"
+	allDigit := true
+	for _, r := range kw {
+		if r < '0' || r > '9' {
+			allDigit = false
+			break
+		}
+	}
+	if allDigit && len(kw) > 0 {
+		return true
+	}
+	// Month names, ordinals
+	months := map[string]bool{
+		"january": true, "february": true, "march": true, "april": true,
+		"may": true, "june": true, "july": true, "august": true,
+		"september": true, "october": true, "november": true, "december": true,
+	}
+	return months[strings.ToLower(kw)]
 }
 
 // joinTopKeywords returns the top-N keywords from a frequency map as a string.

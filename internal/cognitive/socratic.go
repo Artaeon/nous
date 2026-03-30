@@ -531,6 +531,31 @@ func extractTopic(query string, state *ConversationState) string {
 }
 
 // extractSocraticEntity gets the most relevant entity from state or query.
+// shortenSocraticEntity replaces long query text with a short description
+// so Socratic questions read naturally ("this decision" instead of
+// "quit my job to start a business").
+func shortenSocraticEntity(entity string) string {
+	lower := strings.ToLower(entity)
+	// Detect the domain and use a short label
+	if strings.Contains(lower, "job") || strings.Contains(lower, "career") || strings.Contains(lower, "quit") {
+		return "this career decision"
+	}
+	if strings.Contains(lower, "business") || strings.Contains(lower, "startup") || strings.Contains(lower, "company") {
+		return "this business decision"
+	}
+	if strings.Contains(lower, "move") || strings.Contains(lower, "relocat") {
+		return "this move"
+	}
+	if strings.Contains(lower, "relationship") || strings.Contains(lower, "partner") || strings.Contains(lower, "marry") {
+		return "this relationship"
+	}
+	if strings.Contains(lower, "school") || strings.Contains(lower, "degree") || strings.Contains(lower, "study") {
+		return "this educational path"
+	}
+	// Generic fallback
+	return "this"
+}
+
 func extractSocraticEntity(query string, state *ConversationState) string {
 	// Priority 1: extract from the current query
 	lower := strings.ToLower(strings.TrimSpace(query))
@@ -745,10 +770,16 @@ func (se *SocraticEngine) pickQuestions(topic, entity string, categories []strin
 		idx := (seed + i) % len(eligible)
 		tmpl := eligible[idx]
 
-		// Inject topic — use entity if it's more specific
+		// Inject topic — use entity if it's more specific.
+		// For long topics (>30 chars), use a short description to avoid
+		// awkward questions like "What prompted your interest in quit my
+		// job to start a business at this moment?"
 		inject := topic
 		if entity != "" && entity != topic && len(entity) < len(topic) {
 			inject = entity
+		}
+		if len(inject) > 30 {
+			inject = shortenSocraticEntity(inject)
 		}
 
 		questions = append(questions, SocraticQuestion{

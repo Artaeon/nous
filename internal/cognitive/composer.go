@@ -4156,9 +4156,29 @@ func capitalizeFirst(s string) string {
 	if s == "" {
 		return s
 	}
+	// Preserve casing for known acronyms and all-caps terms
+	if isAcronym(s) {
+		return strings.ToUpper(s)
+	}
 	runes := []rune(s)
 	runes[0] = unicode.ToUpper(runes[0])
 	return string(runes)
+}
+
+// isAcronym returns true if the string should be displayed in all-caps.
+func isAcronym(s string) bool {
+	upper := strings.ToUpper(s)
+	known := map[string]bool{
+		"DNA": true, "RNA": true, "AI": true, "MRI": true, "HTTP": true,
+		"SQL": true, "HTML": true, "CSS": true, "API": true, "URL": true,
+		"CPU": true, "GPU": true, "RAM": true, "SSD": true, "USB": true,
+		"LED": true, "LCD": true, "NASA": true, "NATO": true, "CERN": true,
+		"GDP": true, "CEO": true, "CTO": true, "PhD": true, "MIT": true,
+		"UCLA": true, "IBM": true, "BMW": true, "NLP": true, "ML": true,
+		"IoT": true, "VR": true, "AR": true, "5G": true, "TCP": true,
+		"IP": true, "OS": true, "UI": true, "UX": true, "PR": true,
+	}
+	return known[upper]
 }
 
 // NodeLabel returns the display label for a node ID.

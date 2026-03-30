@@ -1552,6 +1552,19 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 // neural and pattern classifiers can make. These are semantic corrections
 // based on query structure, not hardcoded word lists.
 func (n *NLU) postClassifyCorrections(lower string, r *NLUResult) {
+	// Short informal greetings: "hey whats up", "hi there", "yo", "sup"
+	// must route to greeting regardless of what the classifier thinks.
+	words := strings.Fields(lower)
+	if len(words) <= 4 {
+		greetStarts := []string{"hey", "hi", "hello", "yo", "sup", "hiya", "howdy", "hola"}
+		for _, g := range greetStarts {
+			if words[0] == g {
+				r.Intent = "greeting"
+				return
+			}
+		}
+	}
+
 	// "time in [PLACE]" is a world clock query, not sysinfo
 	if r.Intent == "sysinfo" && strings.Contains(lower, " in ") &&
 		(strings.Contains(lower, "time") || strings.Contains(lower, "clock")) {

@@ -498,8 +498,10 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 	// Response Quality Gate — last line of defense before the user
 	// sees the response. Catches tool error leaks, low-value acks
 	// on substantive turns, and parroting.
+	// Skip for greetings/farewells — these are intentionally short.
 	// ---------------------------------------------------------------
-	if result != nil && result.DirectResponse != "" {
+	gateSkip := nlu.Intent == "greeting" || nlu.Intent == "farewell" || nlu.Intent == "affirmation"
+	if result != nil && result.DirectResponse != "" && !gateSkip {
 		gate := &ResponseGate{}
 		verdict := gate.Check(nlu.Raw, result.DirectResponse, result.Source)
 		if !verdict.Pass {

@@ -133,16 +133,19 @@ func (dg *DocumentGenerator) generateOverview(topic string) *GeneratedDocument {
 
 // generateReport builds a formal report:
 // Executive Summary, Background, Analysis, Findings, Recommendations.
+// Uses sentence deduplication to ensure no content appears in multiple sections.
 func (dg *DocumentGenerator) generateReport(topic string) *GeneratedDocument {
 	doc := &GeneratedDocument{
 		Title: "Report: " + capitalizeFirstDoc(topic),
 	}
 
+	used := make(map[string]bool) // tracks used sentences across sections
 	mainPara := dg.findParagraph(topic)
 
-	// Executive Summary — concise version of the main paragraph.
+	// Executive Summary — first 3 sentences of the main paragraph.
 	if mainPara != "" {
 		summary := firstSentencesOf(mainPara, 3)
+		markUsed(used, summary)
 		doc.Sections = append(doc.Sections, DocumentSection{
 			Heading: "Executive Summary",
 			Content: summary,
@@ -150,35 +153,50 @@ func (dg *DocumentGenerator) generateReport(topic string) *GeneratedDocument {
 	} else {
 		desc := dg.descriptionFromGraph(topic)
 		if desc != "" {
+			summary := firstSentencesOf(desc, 3)
+			markUsed(used, summary)
 			doc.Sections = append(doc.Sections, DocumentSection{
 				Heading: "Executive Summary",
-				Content: firstSentencesOf(desc, 3),
+				Content: summary,
 			})
 		}
 	}
 
-	// Background — origin and history.
+	// Background — origin/history facts. If no history edges exist, use
+	// the REMAINING sentences of the main paragraph (not the whole thing).
 	background := dg.buildBackgroundSection(topic)
 	if background == "" && mainPara != "" {
-		background = mainPara
+		sentences := splitSentencesDoc(mainPara)
+		var remaining []string
+		for _, s := range sentences {
+			if !used[normalizeForDedup(s)] {
+				remaining = append(remaining, s)
+			}
+		}
+		if len(remaining) > 0 {
+			background = strings.Join(remaining, " ")
+		}
 	}
+	background = removeUsedSentences(used, background)
 	if background != "" {
+		markUsed(used, background)
 		doc.Sections = append(doc.Sections, DocumentSection{
 			Heading: "Background",
 			Content: background,
 		})
 	}
 
-	// Analysis — related concepts expanded.
-	analysis := dg.buildKeyConceptsSection(topic)
+	// Analysis — related concepts expanded, deduped against what's already used.
+	analysis := removeUsedSentences(used, dg.buildKeyConceptsSection(topic))
 	if analysis != "" {
+		markUsed(used, analysis)
 		doc.Sections = append(doc.Sections, DocumentSection{
 			Heading: "Analysis",
 			Content: analysis,
 		})
 	}
 
-	// Findings — structured facts from the graph.
+	// Findings — structured facts from the graph (bullet points, less likely to repeat).
 	findings := dg.buildFindingsSection(topic)
 	if findings != "" {
 		doc.Sections = append(doc.Sections, DocumentSection{
@@ -198,6 +216,42 @@ func (dg *DocumentGenerator) generateReport(topic string) *GeneratedDocument {
 
 	doc.WordCount = countDocWords(doc)
 	return doc
+}
+
+// markUsed adds all sentences from text to the used set.
+func markUsed(used map[string]bool, text string) {
+	for _, s := range splitSentencesDoc(text) {
+		used[normalizeForDedup(s)] = true
+	}
+}
+
+// removeUsedSentences strips sentences that already appear in an earlier section.
+func removeUsedSentences(used map[string]bool, text string) string {
+	if text == "" || len(used) == 0 {
+		return text
+	}
+
+	// Handle paragraph-separated text (from buildKeyConceptsSection)
+	paragraphs := strings.Split(text, "\n\n")
+	var keptParagraphs []string
+	for _, para := range paragraphs {
+		sentences := splitSentencesDoc(para)
+		var kept []string
+		for _, s := range sentences {
+			if !used[normalizeForDedup(s)] {
+				kept = append(kept, s)
+			}
+		}
+		if len(kept) > 0 {
+			keptParagraphs = append(keptParagraphs, strings.Join(kept, " "))
+		}
+	}
+	return strings.Join(keptParagraphs, "\n\n")
+}
+
+// normalizeForDedup lowercases and trims a sentence for dedup comparison.
+func normalizeForDedup(s string) string {
+	return strings.ToLower(strings.TrimRight(strings.TrimSpace(s), ".!? "))
 }
 
 // generateEssay builds an essay structure:
