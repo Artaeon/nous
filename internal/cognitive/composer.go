@@ -734,8 +734,13 @@ func (c *Composer) composeFactual(query string) *ComposedResponse {
 
 	// Clean factual output: description + structured realization.
 	var parts []string
-	if desc := c.Graph.LookupDescription(topic); len(desc) >= 40 {
+	desc := c.Graph.LookupDescription(topic)
+	if len(desc) >= 40 {
 		parts = append(parts, desc)
+	}
+	// Filter out facts already covered by the description to avoid duplication.
+	if desc != "" {
+		facts = filterRedundantFacts(facts, desc)
 	}
 	if len(facts) > 0 {
 		// For rich topics (4+ facts), use discourse planner for paragraph structure
@@ -764,6 +769,22 @@ func (c *Composer) composeFactual(query string) *ComposedResponse {
 		Sources: uniqueStrings(sources),
 		Type:    RespFactual,
 	}
+}
+
+// filterRedundantFacts removes facts whose object is already mentioned
+// in a pre-written description, avoiding duplicated information.
+func filterRedundantFacts(facts []edgeFact, description string) []edgeFact {
+	lower := strings.ToLower(description)
+	var filtered []edgeFact
+	for _, f := range facts {
+		objLower := strings.ToLower(f.Object)
+		// Skip if the object is already mentioned in the description
+		if strings.Contains(lower, objLower) {
+			continue
+		}
+		filtered = append(filtered, f)
+	}
+	return filtered
 }
 
 // gatherFacts extracts typed facts from the graph for a query.
