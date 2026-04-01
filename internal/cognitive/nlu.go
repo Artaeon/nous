@@ -679,6 +679,10 @@ func (n *NLU) Understand(input string) *NLUResult {
 	// regardless of whether neural or pattern classifier produced them.
 	n.postClassifyCorrections(lower, result)
 
+	// Phase 2.7: Extract specific entity types (location, time, amount, etc.)
+	// Additive — enriches Entities without overwriting existing keys.
+	extractSpecificEntities(lower, result)
+
 	// Phase 3: Map intent + entities to action
 	n.mapAction(lower, result)
 
@@ -723,6 +727,138 @@ func (n *NLU) extractEntities(raw, lower string, r *NLUResult) {
 		r.Entities["date"] = m
 	} else if m := n.dateFormalRe.FindString(raw); m != "" {
 		r.Entities["date"] = m
+	}
+}
+
+// extractSpecificEntities enriches the NLUResult.Entities map with structured
+// entity types: location, time, amount, target_lang, and from/to values.
+// This is additive — it never overwrites existing keys.
+func extractSpecificEntities(lower string, r *NLUResult) {
+	// 1. Location: after "in", "at", "from", "near" → extract as "location"
+	//    Skip if location is already set (e.g., weather handler sets it).
+	if _, has := r.Entities["location"]; !has {
+		locPreps := []string{" in ", " at ", " from ", " near "}
+		for _, prep := range locPreps {
+			idx := strings.LastIndex(lower, prep)
+			if idx < 0 {
+				continue
+			}
+			after := strings.TrimSpace(lower[idx+len(prep):])
+			after = strings.TrimRight(after, "?!.")
+			after = strings.TrimSpace(after)
+			if after == "" {
+				continue
+			}
+			// Skip if the "location" is a common non-location word
+			nonLocWords := map[string]bool{
+				"general": true, "detail": true, "details": true, "brief": true,
+				"order": true, "total": true, "english": true, "french": true,
+				"spanish": true, "german": true, "japanese": true, "chinese": true,
+				"the morning": true, "the evening": true, "the afternoon": true,
+			}
+			if nonLocWords[after] {
+				continue
+			}
+			// For "in" preposition, also check topic doesn't already contain
+			// the entire phrase (avoid extracting "paris" from topic "weather in paris"
+			// while also keeping topic "weather in paris" — we SPLIT it instead).
+			r.Entities["location"] = after
+
+			// Refine topic: strip the location phrase from topic if present
+			if topic, ok := r.Entities["topic"]; ok {
+				trimmed := strings.TrimRight(strings.TrimSpace(
+					strings.Replace(topic, prep[1:]+after, "", 1)), "?!. ")
+				if trimmed != "" && trimmed != topic {
+					r.Entities["topic"] = trimmed
+				}
+			}
+			break
+		}
+	}
+
+	// 2. Time expressions: after "at", "by", "before", "after" + time indicators
+	if _, has := r.Entities["time"]; !has {
+		timePreps := []string{" at ", " by ", " before ", " after "}
+		timeIndicators := []string{"am", "pm", "o'clock", "oclock", "noon", "midnight", "morning", "evening", "night"}
+		for _, prep := range timePreps {
+			idx := strings.Index(lower, prep)
+			if idx < 0 {
+				continue
+			}
+			after := strings.TrimSpace(lower[idx+len(prep):])
+			after = strings.TrimRight(after, "?!.")
+			for _, ti := range timeIndicators {
+				if strings.Contains(after, ti) {
+					r.Entities["time"] = strings.TrimSpace(after)
+					break
+				}
+			}
+			if _, has := r.Entities["time"]; has {
+				break
+			}
+		}
+	}
+
+	// 3. Amount: numbers + units (USD, EUR, kg, miles, etc.)
+	if _, has := r.Entities["amount"]; !has {
+		amountRe := regexp.MustCompile(`(?i)(\$\s*[\d,.]+|[\d,.]+\s*(?:usd|eur|gbp|jpy|cad|aud|kg|lb|lbs|km|miles?|meters?|ft|feet|inches?|cm|mm|liters?|gallons?|oz|ounces?|celsius|fahrenheit|°[cf]))\b`)
+		if m := amountRe.FindString(lower); m != "" {
+			r.Entities["amount"] = strings.TrimSpace(m)
+		}
+	}
+
+	// 4. Target language: after "to" + language name in translate queries
+	if r.Intent == "translate" {
+		if _, has := r.Entities["target_lang"]; !has {
+			langs := []string{
+				"english", "french", "spanish", "german", "italian", "portuguese",
+				"japanese", "chinese", "korean", "russian", "arabic", "hindi",
+				"dutch", "swedish", "norwegian", "danish", "finnish", "polish",
+				"turkish", "greek", "hebrew", "thai", "vietnamese", "indonesian",
+				"malay", "tagalog", "swahili", "latin",
+			}
+			// Look for "to <language>" or "into <language>"
+			for _, prep := range []string{" to ", " into "} {
+				idx := strings.LastIndex(lower, prep)
+				if idx < 0 {
+					continue
+				}
+				after := strings.TrimSpace(lower[idx+len(prep):])
+				after = strings.TrimRight(after, "?!.")
+				afterLow := strings.ToLower(after)
+				for _, lang := range langs {
+					if strings.HasPrefix(afterLow, lang) {
+						r.Entities["target_lang"] = lang
+						break
+					}
+				}
+				if _, has := r.Entities["target_lang"]; has {
+					break
+				}
+			}
+		}
+	}
+
+	// 5. Source/destination: for convert queries, extract "from" and "to" values
+	if r.Intent == "convert" || r.Intent == "compute" {
+		if _, has := r.Entities["from_unit"]; !has {
+			// Pattern: "<amount> <from> to <to>"
+			toIdx := strings.Index(lower, " to ")
+			if toIdx > 0 {
+				before := strings.TrimSpace(lower[:toIdx])
+				after := strings.TrimSpace(lower[toIdx+4:])
+				after = strings.TrimRight(after, "?!.")
+
+				// Extract the unit from the "before" part (last word or last two words)
+				words := strings.Fields(before)
+				if len(words) >= 2 {
+					r.Entities["from_unit"] = words[len(words)-1]
+				}
+				if after != "" {
+					r.Entities["to_unit"] = strings.Fields(after)[0]
+				}
+			}
+		}
 	}
 }
 
