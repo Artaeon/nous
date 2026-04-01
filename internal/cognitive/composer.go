@@ -1261,16 +1261,21 @@ func (c *Composer) flowingRealization(facts []edgeFact) string {
 }
 
 // structuredRealization: one fact per sentence with varied templates.
-// taggedSentence pairs a rendered sentence with its source relation type.
+// taggedSentence pairs a rendered sentence with its source relation type
+// and the original subject/object for sentence fusion.
 type taggedSentence struct {
 	Text     string
 	Relation RelType
+	Subject  string // original subject from the edgeFact
+	Object   string // original object from the edgeFact
 }
 
 func (c *Composer) structuredRealization(facts []edgeFact) string {
 	if len(facts) == 0 {
 		return ""
 	}
+
+	facts = c.varyOpening(facts)
 
 	var tagged []taggedSentence
 	subject := facts[0].Subject
@@ -1290,11 +1295,165 @@ func (c *Composer) structuredRealization(facts []edgeFact) string {
 		}
 		sentence := c.edgeToSentence(displaySubj, f.Relation, f.Object, f.Inferred)
 		if sentence != "" {
-			tagged = append(tagged, taggedSentence{Text: sentence, Relation: f.Relation})
+			tagged = append(tagged, taggedSentence{
+				Text:     sentence,
+				Relation: f.Relation,
+				Subject:  f.Subject,
+				Object:   f.Object,
+			})
 		}
 	}
 
+	tagged = c.fuseSentences(tagged)
 	return c.combineTaggedWithFlow(tagged)
+}
+
+// varyOpening occasionally reorders facts so that the response does not
+// always begin with "X is a Y." (RelIsA). About 40% of the time it will
+// lead with the most specific or interesting fact instead — a feature
+// (RelHas), a purpose (RelUsedFor), or an origin fact (RelFoundedBy,
+// RelCreatedBy). The identity fact is not removed, just repositioned.
+func (c *Composer) varyOpening(facts []edgeFact) []edgeFact {
+	if len(facts) < 3 {
+		return facts // too few to meaningfully reorder
+	}
+	// Only reorder when the first fact is an identity fact.
+	if facts[0].Relation != RelIsA {
+		return facts
+	}
+	// 60% of the time, keep the default identity-first ordering.
+	if c.rng.Intn(5) < 3 {
+		return facts
+	}
+
+	// Find a more interesting lead fact: prefer has/used_for/founded_by/created_by.
+	interestingRels := map[RelType]bool{
+		RelHas:       true,
+		RelUsedFor:   true,
+		RelFoundedBy: true,
+		RelCreatedBy: true,
+		RelKnownFor:  true,
+	}
+	leadIdx := -1
+	for i := 1; i < len(facts); i++ {
+		if interestingRels[facts[i].Relation] {
+			leadIdx = i
+			break
+		}
+	}
+	if leadIdx < 0 {
+		return facts // nothing interesting to promote
+	}
+
+	// Move the interesting fact to position 0, shift identity to position 1.
+	reordered := make([]edgeFact, 0, len(facts))
+	reordered = append(reordered, facts[leadIdx])
+	for i, f := range facts {
+		if i != leadIdx {
+			reordered = append(reordered, f)
+		}
+	}
+	return reordered
+}
+
+// fuseSentences combines consecutive same-subject, same-relation facts
+// into compound sentences joined by "and" or relative clauses. This avoids
+// the mechanical one-fact-per-sentence cadence.
+//
+// Before: "Python has readable syntax. Python has an extensive standard library."
+// After:  "Python has readable syntax and an extensive standard library."
+//
+// Before: "DNA is a molecule. DNA is used for encoding genetic information."
+// After:  "DNA is a molecule used for encoding genetic information."
+func (c *Composer) fuseSentences(tagged []taggedSentence) []taggedSentence {
+	if len(tagged) <= 1 {
+		return tagged
+	}
+
+	var result []taggedSentence
+	i := 0
+	for i < len(tagged) {
+		// Try to fuse a run of consecutive same-subject, same-relation facts.
+		j := i + 1
+		for j < len(tagged) && j-i < 3 &&
+			strings.EqualFold(tagged[j].Subject, tagged[i].Subject) &&
+			tagged[j].Relation == tagged[i].Relation {
+			j++
+		}
+
+		if j-i >= 2 {
+			// We have 2-3 facts to fuse.
+			fused := c.fuseRun(tagged[i:j])
+			result = append(result, fused)
+		} else if j-i == 1 && i+1 < len(tagged) &&
+			strings.EqualFold(tagged[i+1].Subject, tagged[i].Subject) &&
+			tagged[i].Relation == RelIsA && tagged[i+1].Relation == RelUsedFor {
+			// Fuse "X is a Y" + "X is used for Z" → "X is a Y used for Z"
+			fused := c.fuseIsAWithUsedFor(tagged[i], tagged[i+1])
+			result = append(result, fused)
+			i = i + 2
+			continue
+		} else {
+			result = append(result, tagged[i])
+		}
+		i = j
+	}
+	return result
+}
+
+// fuseRun combines 2-3 facts with the same subject and relation into one
+// compound sentence using "and".
+//
+// Strategy: take the first sentence, strip its period, then append the
+// objects of the subsequent facts joined by "and".
+func (c *Composer) fuseRun(run []taggedSentence) taggedSentence {
+	if len(run) < 2 {
+		return run[0]
+	}
+
+	base := strings.TrimRight(run[0].Text, ".")
+	objects := make([]string, 0, len(run)-1)
+	for _, ts := range run[1:] {
+		obj := strings.TrimSpace(ts.Object)
+		if obj != "" {
+			objects = append(objects, obj)
+		}
+	}
+
+	if len(objects) == 0 {
+		return run[0]
+	}
+
+	var tail string
+	if len(objects) == 1 {
+		tail = " and " + objects[0]
+	} else {
+		tail = ", " + strings.Join(objects[:len(objects)-1], ", ") +
+			", and " + objects[len(objects)-1]
+	}
+
+	return taggedSentence{
+		Text:     base + tail + ".",
+		Relation: run[0].Relation,
+		Subject:  run[0].Subject,
+		Object:   run[0].Object,
+	}
+}
+
+// fuseIsAWithUsedFor combines "X is a Y." + "X is used for Z." into
+// "X is a Y used for Z." using a reduced relative clause.
+func (c *Composer) fuseIsAWithUsedFor(identity, purpose taggedSentence) taggedSentence {
+	base := strings.TrimRight(identity.Text, ".")
+	obj := strings.TrimSpace(purpose.Object)
+	if obj == "" {
+		return identity
+	}
+	return taggedSentence{
+		Text:     base + " used for " + obj + ".",
+		Relation: identity.Relation,
+		Subject:  identity.Subject,
+		Object:   identity.Object,
+	}
 }
 
 // combineTaggedWithFlow joins sentences using relation-aware connectors.
@@ -1306,13 +1465,49 @@ func (c *Composer) combineTaggedWithFlow(tagged []taggedSentence) string {
 		return tagged[0].Text
 	}
 
+	// Anti-repetition: track connectors used within this response so
+	// the same non-empty connector is not repeated within a 3-sentence window.
+	recentConnectors := make([]string, 0, len(tagged))
+
 	var b strings.Builder
 	b.WriteString(tagged[0].Text)
 	for i := 1; i < len(tagged); i++ {
-		connector := c.connectorBetween(tagged[i-1].Relation, tagged[i].Relation)
-		b.WriteString(" " + connector + " " + connectorLowerFirst(tagged[i].Text))
+		connector := c.connectorBetweenAvoid(
+			tagged[i-1].Relation, tagged[i].Relation, recentConnectors,
+		)
+		recentConnectors = append(recentConnectors, connector)
+		if connector == "" {
+			b.WriteString(" " + tagged[i].Text)
+		} else {
+			b.WriteString(" " + connector + " " + connectorLowerFirst(tagged[i].Text))
+		}
 	}
 	return b.String()
+}
+
+// connectorBetweenAvoid picks a connector like connectorBetween but avoids
+// any non-empty connector that appeared in the last 3 entries of recent.
+func (c *Composer) connectorBetweenAvoid(prev, cur RelType, recent []string) string {
+	const maxRetries = 4
+	avoid := make(map[string]bool)
+	start := len(recent) - 3
+	if start < 0 {
+		start = 0
+	}
+	for _, r := range recent[start:] {
+		if r != "" {
+			avoid[r] = true
+		}
+	}
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		candidate := c.connectorBetween(prev, cur)
+		if candidate == "" || !avoid[candidate] {
+			return candidate
+		}
+	}
+	// After retries, fall back to no connector for natural flow.
+	return ""
 }
 
 // realizePlan renders a discourse plan into paragraphed text.
@@ -3027,7 +3222,11 @@ func (c *Composer) flowConnectors(sentences []string) string {
 	b.WriteString(sentences[0])
 	for i := 1; i < len(sentences); i++ {
 		connector := c.pick(allConnectors)
-		b.WriteString(" " + connector + " " + connectorLowerFirst(sentences[i]))
+		if connector == "" {
+			b.WriteString(" " + sentences[i])
+		} else {
+			b.WriteString(" " + connector + " " + connectorLowerFirst(sentences[i]))
+		}
 	}
 	return b.String()
 }
@@ -3044,7 +3243,11 @@ func (c *Composer) flowMixed(sentences []string) string {
 	for i := 1; i < len(sentences); i++ {
 		if i%2 == 1 {
 			connector := c.pick(allConnectors)
-			b.WriteString(" " + connector + " " + connectorLowerFirst(sentences[i]))
+			if connector == "" {
+				b.WriteString(" " + sentences[i])
+			} else {
+				b.WriteString(" " + connector + " " + connectorLowerFirst(sentences[i]))
+			}
 		} else {
 			b.WriteString(" " + sentences[i])
 		}
@@ -3463,14 +3666,28 @@ var inferredPrefixes = []string{
 }
 
 var allConnectors = []string{
-	"Additionally,", "Also,", "Moreover,",
-	"Furthermore,", "Beyond that,",
-	"Notably,",
+	"",  // no connector — just continue naturally
+	"",  // doubled to increase probability of clean flow
+	"In addition,",
+	"What stands out is that",
+	"It is worth mentioning that",
+	"Interestingly,",
+	"On a related note,",
+	"Looking deeper,",
+	"Equally important,",
+	"Also,",
+	"Moreover,",
 }
 
 var contrastConnectors = []string{
-	"That said,", "However,",
-	"At the same time,", "Meanwhile,",
+	"That said,",
+	"However,",
+	"At the same time,",
+	"Meanwhile,",
+	"On the other hand,",
+	"Then again,",
+	"Even so,",
+	"Still,",
 	"In contrast,",
 }
 
@@ -3482,36 +3699,36 @@ var contrastConnectors = []string{
 var semanticConnectors = map[RelType]map[RelType][]string{
 	// After identity → explaining properties/location/origin
 	RelIsA: {
-		RelLocatedIn:   {"Geographically,", "In terms of location,"},
-		RelFoundedIn:   {"Historically,", "In terms of origins,"},
-		RelFoundedBy:   {"In terms of its creation,", "Regarding its origins,"},
-		RelHas:         {"Among its characteristics,", "Notably,"},
-		RelUsedFor:     {"In practice,", "On the applied side,"},
-		RelDescribedAs: {"More specifically,", "In particular,"},
+		RelLocatedIn:   {"", "Geographically,", "In terms of location,", "As for where it sits,"},
+		RelFoundedIn:   {"", "Historically,", "Looking back,", "Going back in time,"},
+		RelFoundedBy:   {"", "In terms of its creation,", "Behind the scenes,", "As for who started it,"},
+		RelHas:         {"", "Among its characteristics,", "One thing that stands out:", "It comes with"},
+		RelUsedFor:     {"", "In practice,", "When put to use,", "On the practical side,"},
+		RelDescribedAs: {"", "More specifically,", "In particular,", "To be more precise,"},
 	},
 	// After origin → properties/purpose
 	RelFoundedIn: {
-		RelFoundedBy: {"Regarding its creation,", "On the founding side,"},
-		RelHas:       {"Among its features,", "Notably,"},
-		RelUsedFor:   {"In practice,", "On the applied side,"},
-		RelIsA:       {"At its core,", "Fundamentally,"},
+		RelFoundedBy: {"", "Regarding its creation,", "As for who was behind it,"},
+		RelHas:       {"", "Among its features,", "It brings with it", "One notable aspect:"},
+		RelUsedFor:   {"", "In practice,", "When put to use,"},
+		RelIsA:       {"", "At its core,", "Fundamentally,"},
 	},
 	RelFoundedBy: {
-		RelFoundedIn: {"Historically,", "In terms of timing,"},
-		RelHas:       {"Among its features,", "Notably,"},
-		RelUsedFor:   {"In practice,", "On the applied side,"},
+		RelFoundedIn: {"", "Historically,", "In terms of timing,", "Looking at the timeline,"},
+		RelHas:       {"", "Among its features,", "It offers", "One notable aspect:"},
+		RelUsedFor:   {"", "In practice,", "When put to use,"},
 	},
 	// After features → more features or purpose
 	RelHas: {
-		RelHas:     {"In addition,", "Beyond that,"},
-		RelUsedFor: {"In practice,", "On the applied side,"},
-		RelOffers:  {"Additionally,", "Beyond that,"},
+		RelHas:     {"", "", "It also has", "Another aspect is", "On top of that,"},
+		RelUsedFor: {"", "In practice,", "When put to use,", "This makes it useful for"},
+		RelOffers:  {"", "It also provides", "Along with that,"},
 	},
 	// After purpose → related concepts
 	RelUsedFor: {
-		RelUsedFor:   {"Beyond that,", "In addition,"},
-		RelRelatedTo: {"On a related note,", "Connected to this,"},
-		RelHas:       {"Worth noting,", "Additionally,"},
+		RelUsedFor:   {"", "", "It also serves", "Another use is"},
+		RelRelatedTo: {"", "On a related note,", "Connected to this,", "This ties into"},
+		RelHas:       {"", "It also features", "Alongside that,"},
 	},
 }
 
@@ -3524,9 +3741,9 @@ func (c *Composer) connectorBetween(prev, cur RelType) string {
 			return c.pick(conns)
 		}
 	}
-	// Same relation type → "Similarly," / "Likewise,"
+	// Same relation type → sometimes no connector, sometimes explicit parallel
 	if prev == cur {
-		return c.pick([]string{"Similarly,", "Likewise,", "Along the same lines,"})
+		return c.pick([]string{"", "", "Similarly,", "Likewise,", "Along the same lines,", "In much the same way,"})
 	}
 	// Contrast relations
 	if cur == RelContradicts {
