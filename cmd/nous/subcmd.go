@@ -186,9 +186,89 @@ func splitSentences(text string) []string {
 	return sentences
 }
 
-// Subcommand stubs — each is implemented in subsequent commits.
+// --- reason subcommand ---
 
-func runReason(_ []string, _ *cognitive.ActionRouter) bool     { return true }
+// reasonResult is the JSON output for "nous reason".
+type reasonResult struct {
+	Question   string   `json:"question"`
+	Analysis   []string `json:"analysis"`
+	Conclusion string   `json:"conclusion"`
+	Confidence float64  `json:"confidence"`
+}
+
+func runReason(args []string, actions *cognitive.ActionRouter) bool {
+	// Collect input: positional args or stdin
+	text := strings.Join(args, " ")
+	if text == "" {
+		text = readStdin()
+	}
+	if text == "" {
+		fmt.Fprintln(os.Stderr, "usage: nous reason <question>")
+		os.Exit(1)
+	}
+
+	out := reasonResult{
+		Question: text,
+	}
+
+	// Run the full reasoning pipeline if available
+	if actions.Pipeline != nil {
+		result := actions.Pipeline.Process(text)
+		if result != nil {
+			// Gather analysis points from all engines that contributed
+			for _, fact := range result.DirectFacts {
+				if fact != "" {
+					out.Analysis = append(out.Analysis, fact)
+				}
+			}
+			for _, fact := range result.InferredFacts {
+				if fact != "" {
+					out.Analysis = append(out.Analysis, fact)
+				}
+			}
+			if result.ReasoningTrace != "" {
+				out.Analysis = append(out.Analysis, result.ReasoningTrace)
+			}
+			if result.CausalTrace != "" {
+				out.Analysis = append(out.Analysis, result.CausalTrace)
+			}
+			if result.AnalogyTrace != "" {
+				out.Analysis = append(out.Analysis, result.AnalogyTrace)
+			}
+			out.Confidence = result.Confidence
+
+			// Use the composed response as the conclusion
+			conclusion := actions.Pipeline.ComposeResponse(text, result)
+			if conclusion != "" {
+				out.Conclusion = conclusion
+			}
+		}
+	}
+
+	// Fallback: use the Composer for a factual response
+	if out.Conclusion == "" && actions.Composer != nil {
+		ctx := actions.BuildComposeContext()
+		resp := actions.Composer.Compose(text, cognitive.RespFactual, ctx)
+		if resp != nil && resp.Text != "" {
+			out.Conclusion = resp.Text
+		}
+	}
+
+	if out.Analysis == nil {
+		out.Analysis = []string{}
+	}
+	if out.Conclusion == "" {
+		out.Conclusion = "Insufficient knowledge to draw a conclusion."
+	}
+
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	enc.Encode(out)
+	return true
+}
+
+// Subcommand stub — implemented in subsequent commit.
+
 func runRemember(_ []string, _ *memory.LongTermMemory) bool    { return true }
 
 // readStdin reads all of stdin when data is piped in.
