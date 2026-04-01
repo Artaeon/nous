@@ -234,3 +234,260 @@ func TestExplainCamelToWords(t *testing.T) {
 		}
 	}
 }
+
+func TestExplainCompositeHTTPServer(t *testing.T) {
+	ce := NewCodeExplainer()
+	src := `package main
+
+import (
+	"log"
+	"net/http"
+)
+
+func main() {
+	http.HandleFunc("/", handleIndex)
+	http.HandleFunc("/health", handleHealth)
+	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+`
+	results, err := ce.ExplainSource(src)
+	if err != nil {
+		t.Fatalf("ExplainSource: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 function, got %d", len(results))
+	}
+	r := results[0]
+	compositeStr := strings.Join(r.Composite, " | ")
+	if !strings.Contains(compositeStr, "HTTP server") {
+		t.Errorf("should detect HTTP server composite pattern, got: %v", r.Composite)
+	}
+}
+
+func TestExplainCompositeMutex(t *testing.T) {
+	ce := NewCodeExplainer()
+	src := `package main
+
+import "sync"
+
+var mu sync.Mutex
+var count int
+
+func increment() {
+	mu.Lock()
+	defer mu.Unlock()
+	count++
+}
+`
+	results, err := ce.ExplainSource(src)
+	if err != nil {
+		t.Fatalf("ExplainSource: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 function, got %d", len(results))
+	}
+	compositeStr := strings.Join(results[0].Composite, " | ")
+	if !strings.Contains(compositeStr, "mutex") && !strings.Contains(compositeStr, "Thread-safe") {
+		t.Errorf("should detect mutex composite, got: %v", results[0].Composite)
+	}
+}
+
+func TestExplainCompositeTimeoutContext(t *testing.T) {
+	ce := NewCodeExplainer()
+	src := `package main
+
+import (
+	"context"
+	"time"
+)
+
+func doWork() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = ctx
+}
+`
+	results, err := ce.ExplainSource(src)
+	if err != nil {
+		t.Fatalf("ExplainSource: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 function, got %d", len(results))
+	}
+	compositeStr := strings.Join(results[0].Composite, " | ")
+	if !strings.Contains(compositeStr, "timeout") && !strings.Contains(compositeStr, "context") {
+		t.Errorf("should detect timeout context composite, got: %v", results[0].Composite)
+	}
+}
+
+func TestExplainDataFlowBasic(t *testing.T) {
+	ce := NewCodeExplainer()
+	src := `package main
+
+import "os"
+
+func readConfig(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+`
+	results, err := ce.ExplainSource(src)
+	if err != nil {
+		t.Fatalf("ExplainSource: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 function, got %d", len(results))
+	}
+	r := results[0]
+	if r.DataFlow == "" {
+		t.Error("DataFlow should not be empty for readConfig")
+	}
+	// Should mention "Takes" and "returns"
+	if !strings.Contains(r.DataFlow, "Takes") {
+		t.Errorf("DataFlow should start with 'Takes', got: %s", r.DataFlow)
+	}
+	if !strings.Contains(r.DataFlow, "returns") {
+		t.Errorf("DataFlow should mention returns, got: %s", r.DataFlow)
+	}
+}
+
+func TestExplainDataFlowWithTransform(t *testing.T) {
+	ce := NewCodeExplainer()
+	src := `package main
+
+import (
+	"encoding/json"
+	"os"
+)
+
+func loadJSON(path string) (map[string]interface{}, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]interface{}
+	err = json.Unmarshal(data, &result)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+`
+	results, err := ce.ExplainSource(src)
+	if err != nil {
+		t.Fatalf("ExplainSource: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 function, got %d", len(results))
+	}
+	r := results[0]
+	if r.DataFlow == "" {
+		t.Error("DataFlow should describe the transformation pipeline")
+	}
+	// Should mention the file reading and JSON parsing steps
+	lower := strings.ToLower(r.DataFlow)
+	if !strings.Contains(lower, "file") && !strings.Contains(lower, "read") {
+		t.Errorf("DataFlow should mention file reading, got: %s", r.DataFlow)
+	}
+}
+
+func TestExplainCompositeWaitGroup(t *testing.T) {
+	ce := NewCodeExplainer()
+	src := `package main
+
+import "sync"
+
+func processAll(items []string) {
+	var wg sync.WaitGroup
+	for _, item := range items {
+		wg.Add(1)
+		go func(s string) {
+			defer wg.Done()
+			process(s)
+		}(item)
+	}
+	wg.Wait()
+}
+`
+	results, err := ce.ExplainSource(src)
+	if err != nil {
+		t.Fatalf("ExplainSource: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 function, got %d", len(results))
+	}
+	compositeStr := strings.Join(results[0].Composite, " | ")
+	if !strings.Contains(compositeStr, "WaitGroup") && !strings.Contains(compositeStr, "concurrent") {
+		t.Errorf("should detect WaitGroup composite, got: %v", results[0].Composite)
+	}
+}
+
+func TestExplainFullSummaryWithComposite(t *testing.T) {
+	ce := NewCodeExplainer()
+	src := `package main
+
+import (
+	"encoding/json"
+	"log"
+	"net/http"
+)
+
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func main() {
+	http.HandleFunc("/health", handleHealth)
+	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+`
+	results, err := ce.ExplainSource(src)
+	if err != nil {
+		t.Fatalf("ExplainSource: %v", err)
+	}
+	// The main function should have a composite pattern about HTTP server
+	for _, r := range results {
+		if r.Name == "main" {
+			if len(r.Composite) == 0 {
+				t.Error("main should have composite patterns")
+			}
+			// Summary should incorporate composite patterns
+			if !strings.Contains(r.Summary, "HTTP") {
+				t.Errorf("main summary should mention HTTP, got: %s", r.Summary)
+			}
+		}
+	}
+}
+
+func TestExplainCompositeTimeMeasurement(t *testing.T) {
+	ce := NewCodeExplainer()
+	src := `package main
+
+import (
+	"fmt"
+	"time"
+)
+
+func benchmark() {
+	start := time.Now()
+	doWork()
+	elapsed := time.Since(start)
+	fmt.Println(elapsed)
+}
+`
+	results, err := ce.ExplainSource(src)
+	if err != nil {
+		t.Fatalf("ExplainSource: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 function, got %d", len(results))
+	}
+	compositeStr := strings.Join(results[0].Composite, " | ")
+	if !strings.Contains(compositeStr, "execution time") && !strings.Contains(compositeStr, "Measures") {
+		t.Errorf("should detect time measurement composite, got: %v", results[0].Composite)
+	}
+}

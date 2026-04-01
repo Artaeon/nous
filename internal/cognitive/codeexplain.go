@@ -571,14 +571,26 @@ func (ce *CodeExplainer) explainFuncDecl(fd *ast.FuncDecl) ExplainedFunc {
 	name := fd.Name.Name
 	sig := ce.formatSignature(fd)
 	patterns := ce.analyzeBody(fd)
+	composite := ce.detectCompositePatterns(fd)
+	dataFlow := ce.summarizeDataFlow(fd)
 
 	ef := ExplainedFunc{
 		Name:      name,
 		Signature: sig,
 		Patterns:  patterns,
+		Composite: composite,
+		DataFlow:  dataFlow,
 	}
 
-	ef.Summary = ce.generateSummary(name, patterns, sig)
+	// Merge composite patterns into the pattern list for summary
+	allPatterns := make([]string, 0, len(patterns)+len(composite))
+	allPatterns = append(allPatterns, composite...) // composite first — higher-level
+	allPatterns = append(allPatterns, patterns...)
+
+	ef.Summary = ce.generateSummary(name, allPatterns, sig)
+	if dataFlow != "" {
+		ef.Summary += " " + dataFlow
+	}
 	return ef
 }
 
@@ -1205,6 +1217,459 @@ func camelToWords(s string) string {
 		buf.WriteRune(r)
 	}
 	return buf.String()
+}
+
+// -----------------------------------------------------------------------
+// Composite pattern detection
+// -----------------------------------------------------------------------
+
+// compositeRule describes a higher-level pattern recognized from a
+// combination of calls/constructs in the function body.
+type compositeRule struct {
+	name     string   // human description
+	requires []string // call names or keywords that must ALL be present
+}
+
+// compositeRules lists patterns detected from combinations of calls.
+var compositeRules = []compositeRule{
+	{
+		name:     "Thread-safe with mutex protection",
+		requires: []string{"Lock", "Unlock"},
+	},
+	{
+		name:     "Sets up an HTTP server with route handlers",
+		requires: []string{"HandleFunc", "ListenAndServe"},
+	},
+	{
+		name:     "Sets up an HTTPS server with route handlers",
+		requires: []string{"HandleFunc", "ListenAndServeTLS"},
+	},
+	{
+		name:     "Reads and parses JSON from request body",
+		requires: []string{"NewDecoder", "Decode"},
+	},
+	{
+		name:     "Serializes and writes JSON response",
+		requires: []string{"NewEncoder", "Encode"},
+	},
+	{
+		name:     "Reads a file line by line",
+		requires: []string{"Open", "Scanner"},
+	},
+	{
+		name:     "Opens database, queries, and cleans up",
+		requires: []string{"sql.Open", "Query", "Close"},
+	},
+	{
+		name:     "Executes a database transaction",
+		requires: []string{"Begin", "Commit"},
+	},
+	{
+		name:     "Uses timeout-protected context",
+		requires: []string{"WithTimeout", "cancel"},
+	},
+	{
+		name:     "Uses cancellable context",
+		requires: []string{"WithCancel", "cancel"},
+	},
+	{
+		name:     "Coordinates concurrent work with WaitGroup",
+		requires: []string{"Add", "Done", "Wait"},
+	},
+	{
+		name:     "Processes items from a channel",
+		requires: []string{"range", "chan"},
+	},
+	{
+		name:     "Implements graceful shutdown",
+		requires: []string{"signal.Notify", "Shutdown"},
+	},
+	{
+		name:     "Streams JSON data to the response",
+		requires: []string{"NewEncoder", "Header", "Encode"},
+	},
+	{
+		name:     "Parses command-line flags and arguments",
+		requires: []string{"flag.Parse", "flag."},
+	},
+	{
+		name:     "Executes an external command and captures output",
+		requires: []string{"exec.Command", "Output"},
+	},
+	{
+		name:     "Renders a template with data",
+		requires: []string{"template.", "Execute"},
+	},
+	{
+		name:     "Hashes data for integrity verification",
+		requires: []string{"sha256.", "Sum"},
+	},
+	{
+		name:     "Measures execution time",
+		requires: []string{"time.Now", "time.Since"},
+	},
+	{
+		name:     "Retries an operation on failure",
+		requires: []string{"for", "err", "Sleep"},
+	},
+	{
+		name:     "Walks a directory tree processing files",
+		requires: []string{"Walk", "filepath"},
+	},
+	{
+		name:     "Reads entire file contents",
+		requires: []string{"ReadFile"},
+	},
+	{
+		name:     "Creates and writes to a new file",
+		requires: []string{"Create", "Write"},
+	},
+}
+
+// detectCompositePatterns scans the function body for combinations of
+// calls/constructs that indicate a higher-level pattern.
+func (ce *CodeExplainer) detectCompositePatterns(fd *ast.FuncDecl) []string {
+	if fd.Body == nil {
+		return nil
+	}
+
+	// Collect all call names and keywords present in the body.
+	tokens := make(map[string]bool)
+
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.CallExpr:
+			name := ce.callExprName(node)
+			if name != "" {
+				tokens[name] = true
+				// Also store sub-parts for flexible matching
+				if dot := strings.LastIndex(name, "."); dot > 0 {
+					tokens[name[dot+1:]] = true // method name
+					tokens[name[:dot]+"."] = true // "pkg." prefix
+				}
+			}
+		case *ast.GoStmt:
+			tokens["go"] = true
+		case *ast.DeferStmt:
+			callName := ce.callExprName(node.Call)
+			if callName != "" {
+				tokens["defer:"+callName] = true
+				if dot := strings.LastIndex(callName, "."); dot > 0 {
+					tokens[callName[dot+1:]] = true
+				}
+			}
+		case *ast.RangeStmt:
+			tokens["range"] = true
+			target := ce.exprString(node.X)
+			if strings.Contains(target, "chan") {
+				tokens["chan"] = true
+			}
+		case *ast.ForStmt:
+			tokens["for"] = true
+		case *ast.Ident:
+			if node.Name == "cancel" {
+				tokens["cancel"] = true
+			}
+		case *ast.AssignStmt:
+			for _, lhs := range node.Lhs {
+				if id, ok := lhs.(*ast.Ident); ok {
+					if id.Name == "cancel" {
+						tokens["cancel"] = true
+					}
+					if id.Name == "err" {
+						tokens["err"] = true
+					}
+				}
+			}
+		case *ast.UnaryExpr:
+			// Detect channel receive in range
+			if node.Op.String() == "<-" {
+				tokens["chan"] = true
+			}
+		}
+		return true
+	})
+
+	var matched []string
+	seen := make(map[string]bool)
+
+	for _, rule := range compositeRules {
+		allFound := true
+		for _, req := range rule.requires {
+			if !tokens[req] {
+				// Try prefix matching for things like "flag."
+				found := false
+				for tok := range tokens {
+					if strings.Contains(tok, req) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					allFound = false
+					break
+				}
+			}
+		}
+		if allFound && !seen[rule.name] {
+			seen[rule.name] = true
+			matched = append(matched, rule.name)
+		}
+	}
+
+	return matched
+}
+
+// -----------------------------------------------------------------------
+// Data flow summary
+// -----------------------------------------------------------------------
+
+// summarizeDataFlow traces the rough input -> transformation -> output
+// pipeline of a function by inspecting parameters, assignments, and
+// return statements.
+func (ce *CodeExplainer) summarizeDataFlow(fd *ast.FuncDecl) string {
+	if fd.Body == nil {
+		return ""
+	}
+
+	// 1. Identify main input (first non-context, non-error parameter).
+	input := ce.mainInput(fd)
+
+	// 2. Collect transformation steps from assignments and calls.
+	transforms := ce.collectTransforms(fd)
+
+	// 3. Identify output from return type.
+	output := ce.mainOutput(fd)
+
+	// Build the flow string only if we have meaningful information.
+	if input == "" && output == "" {
+		return ""
+	}
+	if len(transforms) == 0 && input == "" {
+		return ""
+	}
+
+	var parts []string
+	if input != "" {
+		parts = append(parts, "Takes "+input)
+	}
+	for _, t := range transforms {
+		parts = append(parts, t)
+	}
+	if output != "" {
+		parts = append(parts, "returns "+output)
+	}
+
+	if len(parts) <= 1 {
+		return ""
+	}
+
+	return strings.Join(parts, " -> ") + "."
+}
+
+// mainInput returns a description of the function's primary input parameter.
+func (ce *CodeExplainer) mainInput(fd *ast.FuncDecl) string {
+	if fd.Type.Params == nil {
+		return ""
+	}
+	for _, field := range fd.Type.Params.List {
+		typeStr := ce.nodeString(field.Type)
+		// Skip context, error, and common infrastructure types
+		if strings.Contains(typeStr, "context.Context") ||
+			strings.Contains(typeStr, "http.ResponseWriter") ||
+			strings.Contains(typeStr, "http.Request") ||
+			strings.Contains(typeStr, "testing.T") ||
+			strings.Contains(typeStr, "testing.B") {
+			continue
+		}
+		for _, n := range field.Names {
+			name := n.Name
+			return ce.describeParam(name, typeStr)
+		}
+	}
+	return ""
+}
+
+// describeParam produces a human-readable description of a parameter.
+func (ce *CodeExplainer) describeParam(name, typeStr string) string {
+	// Map common parameter names to descriptions
+	lower := strings.ToLower(name)
+	switch {
+	case lower == "id" || strings.HasSuffix(lower, "id"):
+		return "an " + camelToReadable(name)
+	case lower == "path" || lower == "filepath" || lower == "filename":
+		return "a file path"
+	case lower == "url" || lower == "uri":
+		return "a URL"
+	case lower == "query" || lower == "q":
+		return "a query"
+	case lower == "data" || lower == "payload":
+		return "input data"
+	case lower == "key":
+		return "a key"
+	case lower == "name":
+		return "a name"
+	case lower == "src" || lower == "source":
+		return "source data"
+	case lower == "dst" || lower == "dest" || lower == "target":
+		return "a destination"
+	case lower == "msg" || lower == "message":
+		return "a message"
+	case lower == "cfg" || lower == "config" || lower == "conf":
+		return "a configuration"
+	case lower == "opts" || lower == "options":
+		return "options"
+	case lower == "db":
+		return "a database connection"
+	case lower == "conn":
+		return "a connection"
+	case lower == "ctx":
+		return "a context"
+	case lower == "buf" || lower == "buffer":
+		return "a buffer"
+	case lower == "token":
+		return "a token"
+	case lower == "input":
+		return "input"
+	case lower == "output":
+		return "output"
+	}
+
+	// Fall back to type-based description
+	switch {
+	case typeStr == "string":
+		return "a " + camelToReadable(name) + " string"
+	case typeStr == "int" || typeStr == "int64" || typeStr == "int32":
+		return "a " + camelToReadable(name) + " integer"
+	case typeStr == "bool":
+		return "a " + camelToReadable(name) + " flag"
+	case typeStr == "[]byte":
+		return camelToReadable(name) + " bytes"
+	case strings.HasPrefix(typeStr, "[]"):
+		inner := typeStr[2:]
+		return "a slice of " + inner
+	case strings.HasPrefix(typeStr, "map["):
+		return "a " + camelToReadable(name) + " map"
+	case strings.HasPrefix(typeStr, "*"):
+		inner := typeStr[1:]
+		return "a " + inner
+	}
+	return camelToReadable(name)
+}
+
+// mainOutput returns a description of the function's primary return value.
+func (ce *CodeExplainer) mainOutput(fd *ast.FuncDecl) string {
+	if fd.Type.Results == nil {
+		return ""
+	}
+	var resultTypes []string
+	for _, field := range fd.Type.Results.List {
+		typeStr := ce.nodeString(field.Type)
+		if typeStr == "error" {
+			continue // skip error returns
+		}
+		for _, n := range field.Names {
+			resultTypes = append(resultTypes, ce.describeReturnType(n.Name, typeStr))
+		}
+		if len(field.Names) == 0 {
+			resultTypes = append(resultTypes, ce.describeReturnType("", typeStr))
+		}
+	}
+	if len(resultTypes) == 0 {
+		return ""
+	}
+	return strings.Join(resultTypes, " and ")
+}
+
+// describeReturnType produces a readable return type description.
+func (ce *CodeExplainer) describeReturnType(name, typeStr string) string {
+	if name != "" {
+		return camelToReadable(name)
+	}
+	switch {
+	case typeStr == "string":
+		return "a string"
+	case typeStr == "int" || typeStr == "int64":
+		return "an integer"
+	case typeStr == "bool":
+		return "a boolean"
+	case typeStr == "[]byte":
+		return "bytes"
+	case strings.HasPrefix(typeStr, "[]"):
+		inner := typeStr[2:]
+		return "a slice of " + inner
+	case strings.HasPrefix(typeStr, "map["):
+		return "a map"
+	case strings.HasPrefix(typeStr, "*"):
+		return "a " + typeStr[1:]
+	}
+	return typeStr
+}
+
+// collectTransforms extracts the key transformation steps from the
+// function body by looking at assignments whose RHS are call expressions
+// that appear in knownFunctions.
+func (ce *CodeExplainer) collectTransforms(fd *ast.FuncDecl) []string {
+	if fd.Body == nil {
+		return nil
+	}
+
+	var transforms []string
+	seen := make(map[string]bool)
+
+	// Walk top-level statements only (not deeply nested) for the main
+	// pipeline. This keeps the data flow summary at a high level.
+	for _, stmt := range fd.Body.List {
+		switch s := stmt.(type) {
+		case *ast.AssignStmt:
+			for _, rhs := range s.Rhs {
+				if call, ok := rhs.(*ast.CallExpr); ok {
+					name := ce.callExprName(call)
+					if desc, ok := knownFunctions[name]; ok && !seen[desc] {
+						seen[desc] = true
+						transforms = append(transforms, desc)
+					}
+				}
+			}
+		case *ast.ExprStmt:
+			if call, ok := s.X.(*ast.CallExpr); ok {
+				name := ce.callExprName(call)
+				if desc, ok := knownFunctions[name]; ok && !seen[desc] {
+					seen[desc] = true
+					transforms = append(transforms, desc)
+				}
+			}
+		case *ast.IfStmt:
+			// Check init statement (if err := foo(); err != nil)
+			if s.Init != nil {
+				if assign, ok := s.Init.(*ast.AssignStmt); ok {
+					for _, rhs := range assign.Rhs {
+						if call, ok := rhs.(*ast.CallExpr); ok {
+							name := ce.callExprName(call)
+							if desc, ok := knownFunctions[name]; ok && !seen[desc] {
+								seen[desc] = true
+								transforms = append(transforms, desc)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Limit to 5 steps to keep it readable.
+	if len(transforms) > 5 {
+		transforms = transforms[:5]
+	}
+
+	return transforms
+}
+
+// camelToReadable converts "tokenID" to "token ID", "userName" to
+// "user name", etc.
+func camelToReadable(s string) string {
+	words := camelToWords(s)
+	return strings.ToLower(words)
 }
 
 // -----------------------------------------------------------------------
