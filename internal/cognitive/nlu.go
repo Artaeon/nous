@@ -785,6 +785,14 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 				r.Action = "" // let mapAction set it
 			}
 
+			// Post-check: "time in [PLACE]" misclassified as translate → should be question/worldclock
+			if r.Intent == "translate" && strings.Contains(lower, " in ") &&
+				(strings.Contains(lower, "time") || strings.Contains(lower, "clock") ||
+					strings.Contains(lower, "hour")) {
+				r.Intent = "question"
+				r.Action = ""
+			}
+
 			return
 		}
 	}
@@ -1569,6 +1577,14 @@ func (n *NLU) postClassifyCorrections(lower string, r *NLUResult) {
 	if r.Intent == "sysinfo" && strings.Contains(lower, " in ") &&
 		(strings.Contains(lower, "time") || strings.Contains(lower, "clock")) {
 		r.Intent = "question"
+	}
+
+	// "time in [PLACE]" misclassified as translate → should be question/worldclock
+	if r.Intent == "translate" && strings.Contains(lower, " in ") &&
+		(strings.Contains(lower, "time") || strings.Contains(lower, "clock") ||
+			strings.Contains(lower, "hour")) {
+		r.Intent = "question"
+		r.Action = ""
 	}
 
 	// "creative" with knowledge signals → explain
