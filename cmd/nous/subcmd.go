@@ -6,6 +6,8 @@ import (
 	goflag "flag"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/artaeon/nous/internal/cognitive"
@@ -35,6 +37,8 @@ func SubcommandRouter(args []string, nlu *cognitive.NLU, actions *cognitive.Acti
 		return runTransform(args[1:])
 	case "draft":
 		return runDraft(args[1:])
+	case "code":
+		return runCode(args[1:])
 	default:
 		return false
 	}
@@ -483,5 +487,325 @@ func runDraft(args []string) bool {
 
 	result := dc.Draft(params)
 	fmt.Println(result)
+	return true
+}
+
+// --- code subcommand ---
+
+func runCode(args []string) bool {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, `Usage: nous code <command> [args]
+
+Commands:
+  explain <file>[:<func|line>]   Explain Go source code
+  review <file|dir>              Find code issues (static analysis)
+  generate <type> [flags]        Generate code boilerplate
+    handler --name <Name> [--method POST] [--path /api/x]
+    test    --file <file.go>
+    struct  --name <Name> --fields "name:type,name:type"`)
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "explain":
+		return runCodeExplain(args[1:])
+	case "review":
+		return runCodeReview(args[1:])
+	case "generate":
+		return runCodeGenerate(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown code command: %s\n", args[0])
+		os.Exit(1)
+	}
+	return true
+}
+
+func runCodeExplain(args []string) bool {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: nous code explain <file>[:<func|line>]")
+		os.Exit(1)
+	}
+
+	jsonOut := false
+	target := ""
+	for _, a := range args {
+		if a == "--json" || a == "-j" {
+			jsonOut = true
+		} else if target == "" {
+			target = a
+		}
+	}
+
+	explainer := &cognitive.CodeExplainer{}
+	file, selector := target, ""
+	if idx := strings.LastIndex(target, ":"); idx > 0 {
+		file = target[:idx]
+		selector = target[idx+1:]
+	}
+
+	var result string
+	var err error
+
+	switch {
+	case selector == "":
+		result, err = explainer.ExplainFile(file)
+	case isDigit(selector):
+		line, _ := strconv.Atoi(selector)
+		result, err = explainer.ExplainLine(file, line)
+	default:
+		result, err = explainer.ExplainFunction(file, selector)
+	}
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		enc.Encode(map[string]string{"explanation": result})
+	} else {
+		fmt.Println(result)
+	}
+	return true
+}
+
+func isDigit(s string) bool {
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return len(s) > 0
+}
+
+func runCodeReview(args []string) bool {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: nous code review <file|dir>")
+		os.Exit(1)
+	}
+
+	jsonOut := false
+	target := ""
+	for _, a := range args {
+		if a == "--json" || a == "-j" {
+			jsonOut = true
+		} else if target == "" {
+			target = a
+		}
+	}
+
+	reviewer := &cognitive.CodeReviewer{}
+	var findings []cognitive.ReviewResult
+	var err error
+
+	info, statErr := os.Stat(target)
+	if statErr != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", statErr)
+		os.Exit(1)
+	}
+
+	if info.IsDir() {
+		findings, err = reviewer.ReviewDir(target)
+	} else {
+		findings, err = reviewer.ReviewFile(target)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		enc.Encode(findings)
+	} else if len(findings) == 0 {
+		fmt.Println("no issues found")
+	} else {
+		for _, f := range findings {
+			sev := "[" + f.Severity + "]"
+			fmt.Printf("  %-40s %-10s %-22s %s\n",
+				fmt.Sprintf("%s:%d", f.File, f.Line), sev, f.Rule+":", f.Message)
+		}
+		fmt.Printf("\n  %d issue(s) found\n", len(findings))
+	}
+	return true
+}
+
+func runCodeGenerate(args []string) bool {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: nous code generate handler|test|struct [flags]")
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "handler":
+		return genHandler(args[1:])
+	case "test":
+		return genTest(args[1:])
+	case "struct":
+		return genStruct(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown generate type: %s\n", args[0])
+		os.Exit(1)
+	}
+	return true
+}
+
+func genHandler(args []string) bool {
+	fs := goflag.NewFlagSet("handler", goflag.ContinueOnError)
+	name := fs.String("name", "Handler", "Handler function name")
+	method := fs.String("method", "GET", "HTTP method")
+	path := fs.String("path", "/api/endpoint", "URL path")
+	fs.Parse(args)
+
+	fmt.Printf(`// %sHandler handles %s %s requests.
+func %sHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "%s" {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// TODO: implement %s logic
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+`, *name, *method, *path, *name, *method, *name)
+	return true
+}
+
+func genTest(args []string) bool {
+	fs := goflag.NewFlagSet("test", goflag.ContinueOnError)
+	file := fs.String("file", "", "Source file to generate tests for")
+	fs.Parse(args)
+
+	if *file == "" {
+		fmt.Fprintln(os.Stderr, "usage: nous code generate test --file <file.go>")
+		os.Exit(1)
+	}
+
+	// Parse the file to find exported functions
+	explainer := &cognitive.CodeExplainer{}
+	explanation, err := explainer.ExplainFile(*file)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error parsing %s: %v\n", *file, err)
+		os.Exit(1)
+	}
+
+	pkg := "main"
+	base := filepath.Base(*file)
+	testFile := strings.TrimSuffix(base, ".go") + "_test.go"
+
+	fmt.Printf("package %s\n\nimport \"testing\"\n\n// Tests for %s\n// Generated by: nous code generate test --file %s\n\n", pkg, base, *file)
+
+	// Simple: generate a test stub for each function mentioned
+	for _, line := range strings.Split(explanation, "\n") {
+		if strings.Contains(line, "func ") || strings.Contains(line, "Function:") {
+			// Extract function name
+			name := extractFuncName(line)
+			if name != "" && name[0] >= 'A' && name[0] <= 'Z' {
+				fmt.Printf(`func Test%s(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{name: "basic"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// TODO: implement test for %s
+		})
+	}
+}
+
+`, name, name)
+			}
+		}
+	}
+
+	_ = testFile
+	return true
+}
+
+func extractFuncName(line string) string {
+	// Try to find a function name in the line
+	if idx := strings.Index(line, "func "); idx >= 0 {
+		rest := line[idx+5:]
+		// Skip receiver
+		if strings.HasPrefix(rest, "(") {
+			end := strings.Index(rest, ")")
+			if end >= 0 {
+				rest = strings.TrimSpace(rest[end+1:])
+			}
+		}
+		end := strings.IndexAny(rest, "( ")
+		if end > 0 {
+			return rest[:end]
+		}
+	}
+	// Try "- FuncName" pattern
+	if idx := strings.Index(line, "- "); idx >= 0 {
+		rest := strings.TrimSpace(line[idx+2:])
+		end := strings.IndexAny(rest, " (")
+		if end > 0 {
+			name := rest[:end]
+			if len(name) > 0 && name[0] >= 'A' && name[0] <= 'Z' {
+				return name
+			}
+		}
+	}
+	return ""
+}
+
+func genStruct(args []string) bool {
+	fs := goflag.NewFlagSet("struct", goflag.ContinueOnError)
+	name := fs.String("name", "MyStruct", "Struct name")
+	fields := fs.String("fields", "", "Fields as name:type,name:type")
+	fs.Parse(args)
+
+	if *fields == "" {
+		fmt.Fprintln(os.Stderr, "usage: nous code generate struct --name Name --fields \"host:string,port:int\"")
+		os.Exit(1)
+	}
+
+	fmt.Printf("// %s holds configuration.\ntype %s struct {\n", *name, *name)
+
+	var fieldNames []string
+	var fieldTypes []string
+	for _, f := range strings.Split(*fields, ",") {
+		parts := strings.SplitN(strings.TrimSpace(f), ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		fname := strings.TrimSpace(parts[0])
+		ftype := strings.TrimSpace(parts[1])
+		// Capitalize field name
+		capName := strings.ToUpper(fname[:1]) + fname[1:]
+		fmt.Printf("\t%s %s\n", capName, ftype)
+		fieldNames = append(fieldNames, capName)
+		fieldTypes = append(fieldTypes, ftype)
+	}
+	fmt.Println("}")
+
+	// Constructor
+	fmt.Printf("\n// New%s creates a new %s.\nfunc New%s(", *name, *name, *name)
+	for i, fn := range fieldNames {
+		if i > 0 {
+			fmt.Print(", ")
+		}
+		// lowercase for param
+		paramName := strings.ToLower(fn[:1]) + fn[1:]
+		fmt.Printf("%s %s", paramName, fieldTypes[i])
+	}
+	fmt.Printf(") *%s {\n\treturn &%s{\n", *name, *name)
+	for _, fn := range fieldNames {
+		paramName := strings.ToLower(fn[:1]) + fn[1:]
+		fmt.Printf("\t\t%s: %s,\n", fn, paramName)
+	}
+	fmt.Println("\t}\n}")
+
 	return true
 }
