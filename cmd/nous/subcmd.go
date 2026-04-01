@@ -267,9 +267,78 @@ func runReason(args []string, actions *cognitive.ActionRouter) bool {
 	return true
 }
 
-// Subcommand stub — implemented in subsequent commit.
+// --- remember subcommand ---
 
-func runRemember(_ []string, _ *memory.LongTermMemory) bool    { return true }
+func runRemember(args []string, ltm *memory.LongTermMemory) bool {
+	fs := goflag.NewFlagSet("remember", goflag.ExitOnError)
+	list := fs.Bool("list", false, "List all stored key-value pairs")
+	fs.Parse(args)
+
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+
+	// --list mode: dump all entries
+	if *list {
+		entries := ltm.All()
+		type listEntry struct {
+			Key      string `json:"key"`
+			Value    string `json:"value"`
+			Category string `json:"category,omitempty"`
+		}
+		out := make([]listEntry, 0, len(entries))
+		for _, e := range entries {
+			out = append(out, listEntry{
+				Key:      e.Key,
+				Value:    e.Value,
+				Category: e.Category,
+			})
+		}
+		enc.Encode(out)
+		return true
+	}
+
+	remaining := fs.Args()
+
+	// Store mode: key + value
+	if len(remaining) >= 2 {
+		key := remaining[0]
+		value := strings.Join(remaining[1:], " ")
+		ltm.Store(key, value, "cli")
+
+		out := map[string]interface{}{
+			"key":    key,
+			"value":  value,
+			"stored": true,
+		}
+		enc.Encode(out)
+		return true
+	}
+
+	// Recall mode: key only
+	if len(remaining) == 1 {
+		key := remaining[0]
+		value, ok := ltm.Retrieve(key)
+		if !ok {
+			out := map[string]interface{}{
+				"key":   key,
+				"found": false,
+			}
+			enc.Encode(out)
+			os.Exit(1)
+		}
+		out := map[string]interface{}{
+			"key":   key,
+			"value": value,
+		}
+		enc.Encode(out)
+		return true
+	}
+
+	fmt.Fprintln(os.Stderr, "usage: nous remember <key> [value]")
+	fmt.Fprintln(os.Stderr, "       nous remember --list")
+	os.Exit(1)
+	return true
+}
 
 // readStdin reads all of stdin when data is piped in.
 // Returns an empty string if stdin is a terminal (not piped).
