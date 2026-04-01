@@ -1261,10 +1261,13 @@ func (c *Composer) flowingRealization(facts []edgeFact) string {
 }
 
 // structuredRealization: one fact per sentence with varied templates.
-// taggedSentence pairs a rendered sentence with its source relation type.
+// taggedSentence pairs a rendered sentence with its source relation type
+// and the original subject/object for sentence fusion.
 type taggedSentence struct {
 	Text     string
 	Relation RelType
+	Subject  string // original subject from the edgeFact
+	Object   string // original object from the edgeFact
 }
 
 func (c *Composer) structuredRealization(facts []edgeFact) string {
@@ -1290,11 +1293,117 @@ func (c *Composer) structuredRealization(facts []edgeFact) string {
 		}
 		sentence := c.edgeToSentence(displaySubj, f.Relation, f.Object, f.Inferred)
 		if sentence != "" {
-			tagged = append(tagged, taggedSentence{Text: sentence, Relation: f.Relation})
+			tagged = append(tagged, taggedSentence{
+				Text:     sentence,
+				Relation: f.Relation,
+				Subject:  f.Subject,
+				Object:   f.Object,
+			})
 		}
 	}
 
+	tagged = c.fuseSentences(tagged)
 	return c.combineTaggedWithFlow(tagged)
+}
+
+// fuseSentences combines consecutive same-subject, same-relation facts
+// into compound sentences joined by "and" or relative clauses. This avoids
+// the mechanical one-fact-per-sentence cadence.
+//
+// Before: "Python has readable syntax. Python has an extensive standard library."
+// After:  "Python has readable syntax and an extensive standard library."
+//
+// Before: "DNA is a molecule. DNA is used for encoding genetic information."
+// After:  "DNA is a molecule used for encoding genetic information."
+func (c *Composer) fuseSentences(tagged []taggedSentence) []taggedSentence {
+	if len(tagged) <= 1 {
+		return tagged
+	}
+
+	var result []taggedSentence
+	i := 0
+	for i < len(tagged) {
+		// Try to fuse a run of consecutive same-subject, same-relation facts.
+		j := i + 1
+		for j < len(tagged) && j-i < 3 &&
+			strings.EqualFold(tagged[j].Subject, tagged[i].Subject) &&
+			tagged[j].Relation == tagged[i].Relation {
+			j++
+		}
+
+		if j-i >= 2 {
+			// We have 2-3 facts to fuse.
+			fused := c.fuseRun(tagged[i:j])
+			result = append(result, fused)
+		} else if j-i == 1 && i+1 < len(tagged) &&
+			strings.EqualFold(tagged[i+1].Subject, tagged[i].Subject) &&
+			tagged[i].Relation == RelIsA && tagged[i+1].Relation == RelUsedFor {
+			// Fuse "X is a Y" + "X is used for Z" → "X is a Y used for Z"
+			fused := c.fuseIsAWithUsedFor(tagged[i], tagged[i+1])
+			result = append(result, fused)
+			i = i + 2
+			continue
+		} else {
+			result = append(result, tagged[i])
+		}
+		i = j
+	}
+	return result
+}
+
+// fuseRun combines 2-3 facts with the same subject and relation into one
+// compound sentence using "and".
+//
+// Strategy: take the first sentence, strip its period, then append the
+// objects of the subsequent facts joined by "and".
+func (c *Composer) fuseRun(run []taggedSentence) taggedSentence {
+	if len(run) < 2 {
+		return run[0]
+	}
+
+	base := strings.TrimRight(run[0].Text, ".")
+	objects := make([]string, 0, len(run)-1)
+	for _, ts := range run[1:] {
+		obj := strings.TrimSpace(ts.Object)
+		if obj != "" {
+			objects = append(objects, obj)
+		}
+	}
+
+	if len(objects) == 0 {
+		return run[0]
+	}
+
+	var tail string
+	if len(objects) == 1 {
+		tail = " and " + objects[0]
+	} else {
+		tail = ", " + strings.Join(objects[:len(objects)-1], ", ") +
+			", and " + objects[len(objects)-1]
+	}
+
+	return taggedSentence{
+		Text:     base + tail + ".",
+		Relation: run[0].Relation,
+		Subject:  run[0].Subject,
+		Object:   run[0].Object,
+	}
+}
+
+// fuseIsAWithUsedFor combines "X is a Y." + "X is used for Z." into
+// "X is a Y used for Z." using a reduced relative clause.
+func (c *Composer) fuseIsAWithUsedFor(identity, purpose taggedSentence) taggedSentence {
+	base := strings.TrimRight(identity.Text, ".")
+	obj := strings.TrimSpace(purpose.Object)
+	if obj == "" {
+		return identity
+	}
+	return taggedSentence{
+		Text:     base + " used for " + obj + ".",
+		Relation: identity.Relation,
+		Subject:  identity.Subject,
+		Object:   identity.Object,
+	}
 }
 
 // combineTaggedWithFlow joins sentences using relation-aware connectors.
