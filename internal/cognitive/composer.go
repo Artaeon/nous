@@ -1275,6 +1275,8 @@ func (c *Composer) structuredRealization(facts []edgeFact) string {
 		return ""
 	}
 
+	facts = c.varyOpening(facts)
+
 	var tagged []taggedSentence
 	subject := facts[0].Subject
 	mentionCount := 0
@@ -1304,6 +1306,54 @@ func (c *Composer) structuredRealization(facts []edgeFact) string {
 
 	tagged = c.fuseSentences(tagged)
 	return c.combineTaggedWithFlow(tagged)
+}
+
+// varyOpening occasionally reorders facts so that the response does not
+// always begin with "X is a Y." (RelIsA). About 40% of the time it will
+// lead with the most specific or interesting fact instead — a feature
+// (RelHas), a purpose (RelUsedFor), or an origin fact (RelFoundedBy,
+// RelCreatedBy). The identity fact is not removed, just repositioned.
+func (c *Composer) varyOpening(facts []edgeFact) []edgeFact {
+	if len(facts) < 3 {
+		return facts // too few to meaningfully reorder
+	}
+	// Only reorder when the first fact is an identity fact.
+	if facts[0].Relation != RelIsA {
+		return facts
+	}
+	// 60% of the time, keep the default identity-first ordering.
+	if c.rng.Intn(5) < 3 {
+		return facts
+	}
+
+	// Find a more interesting lead fact: prefer has/used_for/founded_by/created_by.
+	interestingRels := map[RelType]bool{
+		RelHas:       true,
+		RelUsedFor:   true,
+		RelFoundedBy: true,
+		RelCreatedBy: true,
+		RelKnownFor:  true,
+	}
+	leadIdx := -1
+	for i := 1; i < len(facts); i++ {
+		if interestingRels[facts[i].Relation] {
+			leadIdx = i
+			break
+		}
+	}
+	if leadIdx < 0 {
+		return facts // nothing interesting to promote
+	}
+
+	// Move the interesting fact to position 0, shift identity to position 1.
+	reordered := make([]edgeFact, 0, len(facts))
+	reordered = append(reordered, facts[leadIdx])
+	for i, f := range facts {
+		if i != leadIdx {
+			reordered = append(reordered, f)
+		}
+	}
+	return reordered
 }
 
 // fuseSentences combines consecutive same-subject, same-relation facts
@@ -1415,10 +1465,17 @@ func (c *Composer) combineTaggedWithFlow(tagged []taggedSentence) string {
 		return tagged[0].Text
 	}
 
+	// Anti-repetition: track connectors used within this response so
+	// the same non-empty connector is not repeated within a 3-sentence window.
+	recentConnectors := make([]string, 0, len(tagged))
+
 	var b strings.Builder
 	b.WriteString(tagged[0].Text)
 	for i := 1; i < len(tagged); i++ {
-		connector := c.connectorBetween(tagged[i-1].Relation, tagged[i].Relation)
+		connector := c.connectorBetweenAvoid(
+			tagged[i-1].Relation, tagged[i].Relation, recentConnectors,
+		)
+		recentConnectors = append(recentConnectors, connector)
 		if connector == "" {
 			b.WriteString(" " + tagged[i].Text)
 		} else {
@@ -1426,6 +1483,31 @@ func (c *Composer) combineTaggedWithFlow(tagged []taggedSentence) string {
 		}
 	}
 	return b.String()
+}
+
+// connectorBetweenAvoid picks a connector like connectorBetween but avoids
+// any non-empty connector that appeared in the last 3 entries of recent.
+func (c *Composer) connectorBetweenAvoid(prev, cur RelType, recent []string) string {
+	const maxRetries = 4
+	avoid := make(map[string]bool)
+	start := len(recent) - 3
+	if start < 0 {
+		start = 0
+	}
+	for _, r := range recent[start:] {
+		if r != "" {
+			avoid[r] = true
+		}
+	}
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		candidate := c.connectorBetween(prev, cur)
+		if candidate == "" || !avoid[candidate] {
+			return candidate
+		}
+	}
+	// After retries, fall back to no connector for natural flow.
+	return ""
 }
 
 // realizePlan renders a discourse plan into paragraphed text.
