@@ -31,6 +31,10 @@ func SubcommandRouter(args []string, nlu *cognitive.NLU, actions *cognitive.Acti
 		return runRemember(args[1:], ltm)
 	case "summarize":
 		return runSummarize(args[1:])
+	case "transform":
+		return runTransform(args[1:])
+	case "draft":
+		return runDraft(args[1:])
 	default:
 		return false
 	}
@@ -405,5 +409,79 @@ func runSummarize(args []string) bool {
 	} else {
 		fmt.Println(result)
 	}
+	return true
+}
+
+// --- transform subcommand ---
+
+func runTransform(args []string) bool {
+	fs := goflag.NewFlagSet("transform", goflag.ContinueOnError)
+	mode := fs.String("mode", "formal", "Transform mode: formal, casual, simple, short, bullet")
+	fs.StringVar(mode, "m", "formal", "Transform mode (short)")
+	fs.Parse(args)
+
+	text := strings.Join(fs.Args(), " ")
+	if text == "" {
+		text = readStdin()
+	}
+	if text == "" {
+		fmt.Fprintln(os.Stderr, "usage: nous transform --mode formal|casual|simple|short|bullet <text>")
+		os.Exit(1)
+	}
+
+	engine := cognitive.NewTextTransformEngine()
+	result := engine.Transform(text, *mode)
+	fmt.Println(result)
+	return true
+}
+
+// --- draft subcommand ---
+
+func runDraft(args []string) bool {
+	fs := goflag.NewFlagSet("draft", goflag.ContinueOnError)
+	to := fs.String("to", "", "Recipient")
+	about := fs.String("about", "", "Subject/topic")
+	tone := fs.String("tone", "formal", "Tone: formal, casual, friendly, urgent")
+	facts := fs.String("facts", "", "Key points (comma-separated)")
+	attendees := fs.String("attendees", "", "Meeting attendees (comma-separated)")
+	decisions := fs.String("decisions", "", "Decisions made (comma-separated)")
+	actions := fs.String("actions", "", "Action items (comma-separated)")
+	fs.Parse(args)
+
+	docType := ""
+	if len(fs.Args()) > 0 {
+		docType = fs.Args()[0]
+	}
+	if docType == "" {
+		fmt.Fprintln(os.Stderr, "usage: nous draft <type> [flags]")
+		fmt.Fprintln(os.Stderr, "types: email, report, meeting-notes, proposal, status")
+		os.Exit(1)
+	}
+
+	split := func(s string) []string {
+		if s == "" {
+			return nil
+		}
+		parts := strings.Split(s, ",")
+		for i := range parts {
+			parts[i] = strings.TrimSpace(parts[i])
+		}
+		return parts
+	}
+
+	dc := cognitive.NewDocComposer()
+	params := cognitive.DocParams{
+		Type:      docType,
+		To:        *to,
+		Subject:   *about,
+		Tone:      *tone,
+		Facts:     split(*facts),
+		Attendees: split(*attendees),
+		Decisions: split(*decisions),
+		Actions:   split(*actions),
+	}
+
+	result := dc.Draft(params)
+	fmt.Println(result)
 	return true
 }
