@@ -516,6 +516,16 @@ func extractTopicSummary(ep memory.Episode) string {
 			"about": true, "tell": true, "me": true, "you": true, "your": true,
 			"think": true, "know": true, "work": true, "explain": true,
 			"should": true, "would": true, "could": true, "will": true,
+			"meant": true, "mean": true, "meaning": true, "means": true,
+			"was": true, "were": true, "been": true, "being": true,
+			"that": true, "this": true, "these": true, "those": true,
+			"for": true, "with": true, "from": true, "into": true,
+			"like": true, "just": true, "some": true, "more": true,
+			"get": true, "got": true, "give": true, "make": true,
+			"who": true, "where": true, "when": true, "why": true,
+			"which": true, "whom": true, "has": true, "have": true,
+			"had": true, "not": true, "but": true, "and": true,
+			"its": true, "it": true, "they": true, "them": true,
 		}
 		var meaningful []string
 		for _, tag := range ep.Tags {
