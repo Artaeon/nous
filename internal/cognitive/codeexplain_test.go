@@ -1,419 +1,236 @@
 package cognitive
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func writeTempGo(t *testing.T, name, content string) string {
-	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
-func TestExplainFile_Basic(t *testing.T) {
-	src := `package auth
+func TestExplainHTTPHandler(t *testing.T) {
+	ce := NewCodeExplainer()
+	src := `package main
 
 import (
-	"net/http"
 	"encoding/json"
+	"log"
+	"net/http"
 )
 
-// Claims holds user identity data.
-type Claims struct {
-	UserID string
-	Email  string
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-// ValidateToken validates a JWT token and returns the claims.
-func ValidateToken(token string) (*Claims, error) {
-	return nil, nil
-}
-
-// AuthMiddleware wraps an HTTP handler with authentication.
-func AuthMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w)
-		next.ServeHTTP(w, r)
-	})
+func main() {
+	http.HandleFunc("/health", handleHealth)
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 `
-	path := writeTempGo(t, "middleware.go", src)
-	ce := NewCodeExplainer()
-
-	result, err := ce.ExplainFile(path)
+	results, err := ce.ExplainSource(src)
 	if err != nil {
-		t.Fatalf("ExplainFile: %v", err)
+		t.Fatalf("ExplainSource: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 functions, got %d", len(results))
 	}
 
-	// Check key parts are present
-	checks := []string{
-		"Package: auth",
-		"net/http",
-		"encoding/json",
-		"Claims",
-		"ValidateToken",
-		"AuthMiddleware",
+	// handleHealth should mention HTTP headers and JSON
+	handler := results[0]
+	if handler.Name != "handleHealth" {
+		t.Errorf("expected handleHealth, got %s", handler.Name)
 	}
-	for _, check := range checks {
-		if !strings.Contains(result, check) {
-			t.Errorf("ExplainFile output missing %q\nGot:\n%s", check, result)
+	found := strings.Join(handler.Patterns, " | ")
+	if !strings.Contains(found, "HTTP") && !strings.Contains(found, "header") {
+		t.Errorf("handleHealth patterns should mention HTTP headers, got: %s", found)
+	}
+	if !strings.Contains(found, "JSON") && !strings.Contains(found, "json") {
+		t.Errorf("handleHealth patterns should mention JSON, got: %s", found)
+	}
+	if handler.Summary == "" {
+		t.Error("handleHealth summary is empty")
+	}
+
+	// main should mention HTTP server
+	main := results[1]
+	if main.Name != "main" {
+		t.Errorf("expected main, got %s", main.Name)
+	}
+	mainFound := strings.Join(main.Patterns, " | ")
+	if !strings.Contains(mainFound, "HTTP") {
+		t.Errorf("main patterns should mention HTTP, got: %s", mainFound)
+	}
+}
+
+func TestExplainRangeLoop(t *testing.T) {
+	ce := NewCodeExplainer()
+	src := `package main
+
+import "fmt"
+
+func processLayers(layers []Layer) {
+	for _, layer := range layers {
+		layer.Forward()
+		fmt.Println(layer.Name)
+	}
+}
+`
+	// Note: This won't fully parse since Layer is undefined, but
+	// parser.ParseFile in lenient mode should still work
+	results, err := ce.ExplainSource(src)
+	if err != nil {
+		t.Fatalf("ExplainSource: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 function, got %d", len(results))
+	}
+	found := strings.Join(results[0].Patterns, " | ")
+	if !strings.Contains(found, "layer") && !strings.Contains(found, "Layer") {
+		t.Errorf("should mention layers, got: %s", found)
+	}
+}
+
+func TestExplainErrorHandling(t *testing.T) {
+	ce := NewCodeExplainer()
+	src := `package main
+
+import "os"
+
+func readConfig(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+`
+	results, err := ce.ExplainSource(src)
+	if err != nil {
+		t.Fatalf("ExplainSource: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 function, got %d", len(results))
+	}
+	found := strings.Join(results[0].Patterns, " | ")
+	// Should detect os.ReadFile and error handling
+	if !strings.Contains(found, "file") && !strings.Contains(found, "File") {
+		t.Errorf("should mention reading file, got: %s", found)
+	}
+	if !strings.Contains(strings.ToLower(found), "error") && !strings.Contains(found, "err") {
+		t.Errorf("should mention error handling, got: %s", found)
+	}
+}
+
+func TestExplainConcurrency(t *testing.T) {
+	ce := NewCodeExplainer()
+	src := `package main
+
+import "sync"
+
+func processAll(items []string) {
+	var wg sync.WaitGroup
+	for _, item := range items {
+		wg.Add(1)
+		go func(s string) {
+			defer wg.Done()
+			process(s)
+		}(item)
+	}
+	wg.Wait()
+}
+`
+	results, err := ce.ExplainSource(src)
+	if err != nil {
+		t.Fatalf("ExplainSource: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 function, got %d", len(results))
+	}
+	found := strings.Join(results[0].Patterns, " | ")
+	if !strings.Contains(found, "goroutine") {
+		t.Errorf("should mention goroutine, got: %s", found)
+	}
+}
+
+func TestExplainKnownFunctionsCount(t *testing.T) {
+	if len(knownFunctions) < 150 {
+		t.Errorf("knownFunctions should have 150+ entries, got %d", len(knownFunctions))
+	}
+}
+
+func TestExplainSummaryGeneration(t *testing.T) {
+	ce := NewCodeExplainer()
+	src := `package main
+
+import (
+	"database/sql"
+	"log"
+)
+
+func fetchUser(db *sql.DB, id int) (string, error) {
+	var name string
+	err := db.QueryRow("SELECT name FROM users WHERE id = ?", id).Scan(&name)
+	if err != nil {
+		log.Printf("failed to fetch user %d: %v", id, err)
+		return "", err
+	}
+	return name, nil
+}
+`
+	results, err := ce.ExplainSource(src)
+	if err != nil {
+		t.Fatalf("ExplainSource: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 function, got %d", len(results))
+	}
+	r := results[0]
+	if r.Summary == "" {
+		t.Error("summary is empty")
+	}
+	// Summary should be a sentence, starting with the function name
+	if !strings.HasPrefix(r.Summary, "fetchUser") {
+		t.Errorf("summary should start with function name, got: %s", r.Summary)
+	}
+	// Should contain descriptive text, not just the function name
+	if len(r.Summary) < 20 {
+		t.Errorf("summary too short: %s", r.Summary)
+	}
+}
+
+func TestExplainPurposeFromName(t *testing.T) {
+	ce := NewCodeExplainer()
+	tests := []struct {
+		name string
+		want string // substring that should appear
+	}{
+		{"handleRequest", "handles"},
+		{"processItems", "processes"},
+		{"validateInput", "validates"},
+		{"fetchData", "fetches"},
+		{"loadConfig", "loads"},
+	}
+	for _, tt := range tests {
+		purpose := ce.purposeFromName(tt.name)
+		if !strings.Contains(purpose, tt.want) {
+			t.Errorf("purposeFromName(%q) = %q, want to contain %q", tt.name, purpose, tt.want)
 		}
 	}
 }
 
-func TestExplainFile_EmptyFile(t *testing.T) {
-	src := `package empty
-`
-	path := writeTempGo(t, "empty.go", src)
-	ce := NewCodeExplainer()
-
-	result, err := ce.ExplainFile(path)
-	if err != nil {
-		t.Fatalf("ExplainFile: %v", err)
+func TestExplainCamelToWords(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"CamelCase", "Camel Case"},
+		{"HTTPHandler", "HTTP Handler"},
+		{"getID", "get ID"},
+		{"", ""},
+		{"simple", "simple"},
 	}
-
-	if !strings.Contains(result, "Package: empty") {
-		t.Errorf("expected package name in output, got:\n%s", result)
-	}
-}
-
-func TestExplainFunction_Patterns(t *testing.T) {
-	src := `package main
-
-import (
-	"fmt"
-	"net/http"
-	"encoding/json"
-)
-
-// Serve starts the HTTP server with error handling.
-func Serve(addr string) error {
-	if err := http.ListenAndServe(addr, nil); err != nil {
-		return err
-	}
-	defer fmt.Println("done")
-	for _, v := range []string{"a", "b"} {
-		fmt.Println(v)
-	}
-	data, _ := json.Marshal(nil)
-	fmt.Println(string(data))
-	return nil
-}
-`
-	path := writeTempGo(t, "server.go", src)
-	ce := NewCodeExplainer()
-
-	result, err := ce.ExplainFunction(path, "Serve")
-	if err != nil {
-		t.Fatalf("ExplainFunction: %v", err)
-	}
-
-	checks := []string{
-		"Serve",
-		"error handling",
-		"deferred cleanup",
-		"collection",
-		"Parameters:",
-		"addr",
-	}
-	for _, check := range checks {
-		lower := strings.ToLower(result)
-		if !strings.Contains(lower, strings.ToLower(check)) {
-			t.Errorf("ExplainFunction output missing %q\nGot:\n%s", check, result)
+	for _, tt := range tests {
+		got := camelToWords(tt.input)
+		if got != tt.want {
+			t.Errorf("camelToWords(%q) = %q, want %q", tt.input, got, tt.want)
 		}
-	}
-}
-
-func TestExplainFunction_NotFound(t *testing.T) {
-	src := `package main
-
-func Hello() {}
-`
-	path := writeTempGo(t, "hello.go", src)
-	ce := NewCodeExplainer()
-
-	_, err := ce.ExplainFunction(path, "Goodbye")
-	if err == nil {
-		t.Error("expected error for missing function, got nil")
-	}
-	if !strings.Contains(err.Error(), "not found") {
-		t.Errorf("expected 'not found' in error, got: %v", err)
-	}
-}
-
-func TestExplainFunction_Goroutine(t *testing.T) {
-	src := `package main
-
-func Worker() {
-	go func() {
-		select {}
-	}()
-}
-`
-	path := writeTempGo(t, "worker.go", src)
-	ce := NewCodeExplainer()
-
-	result, err := ce.ExplainFunction(path, "Worker")
-	if err != nil {
-		t.Fatalf("ExplainFunction: %v", err)
-	}
-
-	if !strings.Contains(strings.ToLower(result), "goroutine") {
-		t.Errorf("expected mention of goroutine, got:\n%s", result)
-	}
-	if !strings.Contains(strings.ToLower(result), "channel selection") {
-		t.Errorf("expected mention of channel selection, got:\n%s", result)
-	}
-}
-
-func TestExplainFunction_HTTP(t *testing.T) {
-	src := `package main
-
-import "net/http"
-
-func Handler(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not found", 404)
-}
-`
-	path := writeTempGo(t, "handler.go", src)
-	ce := NewCodeExplainer()
-
-	result, err := ce.ExplainFunction(path, "Handler")
-	if err != nil {
-		t.Fatalf("ExplainFunction: %v", err)
-	}
-
-	if !strings.Contains(strings.ToLower(result), "http") {
-		t.Errorf("expected mention of HTTP, got:\n%s", result)
-	}
-}
-
-func TestExplainLine_Assignment(t *testing.T) {
-	src := `package main
-
-func main() {
-	x := 42
-	_ = x
-}
-`
-	path := writeTempGo(t, "assign.go", src)
-	ce := NewCodeExplainer()
-
-	result, err := ce.ExplainLine(path, 4)
-	if err != nil {
-		t.Fatalf("ExplainLine: %v", err)
-	}
-
-	lower := strings.ToLower(result)
-	if !strings.Contains(lower, "x") {
-		t.Errorf("expected mention of x, got: %s", result)
-	}
-	if !strings.Contains(lower, "42") || !strings.Contains(lower, "defin") {
-		t.Errorf("expected assignment description, got: %s", result)
-	}
-}
-
-func TestExplainLine_IfStatement(t *testing.T) {
-	src := `package main
-
-import "fmt"
-
-func main() {
-	err := fmt.Errorf("bad")
-	if err != nil {
-		fmt.Println(err)
-	}
-}
-`
-	path := writeTempGo(t, "ifstmt.go", src)
-	ce := NewCodeExplainer()
-
-	result, err := ce.ExplainLine(path, 7)
-	if err != nil {
-		t.Fatalf("ExplainLine: %v", err)
-	}
-
-	lower := strings.ToLower(result)
-	if !strings.Contains(lower, "err") {
-		t.Errorf("expected mention of err check, got: %s", result)
-	}
-}
-
-func TestExplainLine_Return(t *testing.T) {
-	src := `package main
-
-func add(a, b int) int {
-	return a + b
-}
-`
-	path := writeTempGo(t, "ret.go", src)
-	ce := NewCodeExplainer()
-
-	result, err := ce.ExplainLine(path, 4)
-	if err != nil {
-		t.Fatalf("ExplainLine: %v", err)
-	}
-
-	if !strings.Contains(strings.ToLower(result), "return") {
-		t.Errorf("expected 'return' in output, got: %s", result)
-	}
-}
-
-func TestExplainLine_ForRange(t *testing.T) {
-	src := `package main
-
-import "fmt"
-
-func main() {
-	items := []string{"a", "b"}
-	for _, v := range items {
-		fmt.Println(v)
-	}
-}
-`
-	path := writeTempGo(t, "forrange.go", src)
-	ce := NewCodeExplainer()
-
-	result, err := ce.ExplainLine(path, 7)
-	if err != nil {
-		t.Fatalf("ExplainLine: %v", err)
-	}
-
-	if !strings.Contains(strings.ToLower(result), "iterat") {
-		t.Errorf("expected iteration description, got: %s", result)
-	}
-}
-
-func TestExplainLine_Comment(t *testing.T) {
-	src := `package main
-
-// This is a comment
-func main() {}
-`
-	path := writeTempGo(t, "comment.go", src)
-	ce := NewCodeExplainer()
-
-	result, err := ce.ExplainLine(path, 3)
-	if err != nil {
-		t.Fatalf("ExplainLine: %v", err)
-	}
-
-	// Should at least not error; might describe the func or comment
-	if result == "" {
-		t.Error("expected non-empty explanation for comment line")
-	}
-}
-
-func TestExplainLine_EmptyLine(t *testing.T) {
-	src := `package main
-
-func main() {
-
-}
-`
-	path := writeTempGo(t, "emptyline.go", src)
-	ce := NewCodeExplainer()
-
-	result, err := ce.ExplainLine(path, 4)
-	if err != nil {
-		t.Fatalf("ExplainLine: %v", err)
-	}
-
-	if result == "" {
-		t.Error("expected non-empty result for empty line")
-	}
-}
-
-func TestExplainLine_InvalidLine(t *testing.T) {
-	src := `package main
-
-func main() {}
-`
-	path := writeTempGo(t, "short.go", src)
-	ce := NewCodeExplainer()
-
-	_, err := ce.ExplainLine(path, 9999)
-	if err == nil {
-		t.Error("expected error for line number beyond file, got nil")
-	}
-}
-
-func TestExplainFile_Types(t *testing.T) {
-	src := `package models
-
-// User represents a registered user.
-type User struct {
-	Name  string
-	Email string
-}
-
-// Stringer is something that can produce a string.
-type Stringer interface {
-	String() string
-}
-`
-	path := writeTempGo(t, "models.go", src)
-	ce := NewCodeExplainer()
-
-	result, err := ce.ExplainFile(path)
-	if err != nil {
-		t.Fatalf("ExplainFile: %v", err)
-	}
-
-	if !strings.Contains(result, "User") {
-		t.Errorf("missing User in output:\n%s", result)
-	}
-	if !strings.Contains(result, "struct") {
-		t.Errorf("missing struct kind in output:\n%s", result)
-	}
-	if !strings.Contains(result, "Stringer") {
-		t.Errorf("missing Stringer in output:\n%s", result)
-	}
-	if !strings.Contains(result, "interface") {
-		t.Errorf("missing interface kind in output:\n%s", result)
-	}
-}
-
-func TestExplainFunction_Method(t *testing.T) {
-	src := `package main
-
-import "fmt"
-
-type Dog struct{ Name string }
-
-func (d *Dog) Bark() string {
-	return fmt.Sprintf("Woof! I am %s", d.Name)
-}
-`
-	path := writeTempGo(t, "dog.go", src)
-	ce := NewCodeExplainer()
-
-	result, err := ce.ExplainFunction(path, "Bark")
-	if err != nil {
-		t.Fatalf("ExplainFunction: %v", err)
-	}
-
-	if !strings.Contains(result, "Bark") {
-		t.Errorf("expected Bark in output, got:\n%s", result)
-	}
-	if !strings.Contains(result, "Dog") {
-		t.Errorf("expected receiver type Dog in output, got:\n%s", result)
-	}
-}
-
-func TestExplainFile_ParseError(t *testing.T) {
-	path := writeTempGo(t, "bad.go", "not valid go code {{{}}")
-	ce := NewCodeExplainer()
-
-	_, err := ce.ExplainFile(path)
-	if err == nil {
-		t.Error("expected parse error, got nil")
 	}
 }

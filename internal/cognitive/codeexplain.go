@@ -1,7 +1,14 @@
 package cognitive
 
 import (
+	"bytes"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/printer"
 	"go/token"
+	"strings"
+	"unicode"
 )
 
 // -----------------------------------------------------------------------
@@ -519,3 +526,700 @@ var knownFunctions = map[string]string{
 	"maps.Values":      "returns the values of a map",
 	"maps.Clone":       "shallow-clones a map",
 }
+
+// -----------------------------------------------------------------------
+// Public API
+// -----------------------------------------------------------------------
+
+// ExplainSource parses Go source code and returns explanations for every
+// top-level function and method declaration.
+func (ce *CodeExplainer) ExplainSource(src string) ([]ExplainedFunc, error) {
+	f, err := parser.ParseFile(ce.fset, "input.go", src, parser.ParseComments)
+	if err != nil {
+		return nil, fmt.Errorf("parse: %w", err)
+	}
+	var out []ExplainedFunc
+	for _, decl := range f.Decls {
+		fd, ok := decl.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+		out = append(out, ce.explainFuncDecl(fd))
+	}
+	return out, nil
+}
+
+// ExplainFunc parses source that contains a single function and
+// returns its explanation.
+func (ce *CodeExplainer) ExplainFunc(src string) (ExplainedFunc, error) {
+	all, err := ce.ExplainSource(src)
+	if err != nil {
+		return ExplainedFunc{}, err
+	}
+	if len(all) == 0 {
+		return ExplainedFunc{}, fmt.Errorf("no function declarations found")
+	}
+	return all[0], nil
+}
+
+// -----------------------------------------------------------------------
+// Core analysis
+// -----------------------------------------------------------------------
+
+// explainFuncDecl produces an ExplainedFunc for a single function decl.
+func (ce *CodeExplainer) explainFuncDecl(fd *ast.FuncDecl) ExplainedFunc {
+	name := fd.Name.Name
+	sig := ce.formatSignature(fd)
+	patterns := ce.analyzeBody(fd)
+
+	ef := ExplainedFunc{
+		Name:      name,
+		Signature: sig,
+		Patterns:  patterns,
+	}
+
+	ef.Summary = ce.generateSummary(name, patterns, sig)
+	return ef
+}
+
+// formatSignature produces a human-readable "params -> returns" string.
+func (ce *CodeExplainer) formatSignature(fd *ast.FuncDecl) string {
+	var params []string
+	if fd.Type.Params != nil {
+		for _, field := range fd.Type.Params.List {
+			typeStr := ce.nodeString(field.Type)
+			for _, n := range field.Names {
+				params = append(params, n.Name+" "+typeStr)
+			}
+			if len(field.Names) == 0 {
+				params = append(params, typeStr)
+			}
+		}
+	}
+
+	var results []string
+	if fd.Type.Results != nil {
+		for _, field := range fd.Type.Results.List {
+			typeStr := ce.nodeString(field.Type)
+			for _, n := range field.Names {
+				results = append(results, n.Name+" "+typeStr)
+			}
+			if len(field.Names) == 0 {
+				results = append(results, typeStr)
+			}
+		}
+	}
+
+	paramStr := strings.Join(params, ", ")
+	if len(results) == 0 {
+		return "(" + paramStr + ")"
+	}
+	return "(" + paramStr + ") -> (" + strings.Join(results, ", ") + ")"
+}
+
+// analyzeBody walks the function body AST and returns a list of
+// semantic pattern descriptions. This is the core method that replaces
+// shallow syntax-based detection with rich, contextual explanations.
+func (ce *CodeExplainer) analyzeBody(fd *ast.FuncDecl) []string {
+	if fd.Body == nil {
+		return []string{"Declares an interface method (no body)"}
+	}
+
+	var patterns []string
+	seen := make(map[string]bool) // deduplicate
+
+	add := func(s string) {
+		if s == "" || seen[s] {
+			return
+		}
+		seen[s] = true
+		patterns = append(patterns, s)
+	}
+
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		switch node := n.(type) {
+
+		// ---- Range loops: describe WHAT is iterated ----
+		case *ast.RangeStmt:
+			target := ce.exprString(node.X)
+			desc := ce.describeRangeTarget(target)
+			add(desc)
+
+		// ---- For loops ----
+		case *ast.ForStmt:
+			if node.Cond != nil {
+				cond := ce.exprString(node.Cond)
+				if strings.Contains(cond, "Next") || strings.Contains(cond, "Scan") {
+					add("Iterates by reading successive items")
+				} else {
+					add(fmt.Sprintf("Loops while %s", cond))
+				}
+			} else {
+				add("Runs an infinite loop")
+			}
+
+		// ---- Go statements ----
+		case *ast.GoStmt:
+			callName := ce.callExprName(node.Call)
+			if callName != "" {
+				add(fmt.Sprintf("Launches goroutine: %s", callName))
+			} else {
+				add("Launches a goroutine")
+			}
+
+		// ---- Defer ----
+		case *ast.DeferStmt:
+			callName := ce.callExprName(node.Call)
+			if desc, ok := knownFunctions[callName]; ok {
+				add(fmt.Sprintf("Defers: %s", desc))
+			} else if callName != "" {
+				add(fmt.Sprintf("Defers %s for cleanup", callName))
+			} else {
+				add("Defers a cleanup call")
+			}
+
+		// ---- Select ----
+		case *ast.SelectStmt:
+			n := len(node.Body.List)
+			add(fmt.Sprintf("Selects between %d channel operations", n))
+
+		// ---- Switch / type switch ----
+		case *ast.SwitchStmt:
+			if node.Tag != nil {
+				tag := ce.exprString(node.Tag)
+				add(fmt.Sprintf("Switches on %s", tag))
+			} else {
+				add("Uses a conditional switch")
+			}
+		case *ast.TypeSwitchStmt:
+			add("Performs a type switch")
+
+		// ---- Return with error check pattern ----
+		case *ast.IfStmt:
+			ce.analyzeIfStmt(node, add)
+
+		// ---- Function / method calls ----
+		case *ast.CallExpr:
+			ce.analyzeCallExpr(node, add)
+
+		// ---- Send on channel ----
+		case *ast.SendStmt:
+			ch := ce.exprString(node.Chan)
+			add(fmt.Sprintf("Sends a value on channel %s", ch))
+
+		// ---- Assignments that reveal intent ----
+		case *ast.AssignStmt:
+			ce.analyzeAssign(node, add)
+		}
+		return true
+	})
+
+	if len(patterns) == 0 {
+		add("Performs a simple operation")
+	}
+
+	return patterns
+}
+
+// describeRangeTarget produces a semantic description of what a range
+// loop iterates over, based on the expression name.
+func (ce *CodeExplainer) describeRangeTarget(target string) string {
+	lower := strings.ToLower(target)
+
+	// Well-known domain terms
+	domainPatterns := []struct {
+		substr string
+		desc   string
+	}{
+		{"layer", "Processes each layer sequentially"},
+		{"arg", "Processes command-line arguments"},
+		{"file", "Processes each file"},
+		{"row", "Iterates over database rows"},
+		{"record", "Iterates over records"},
+		{"item", "Processes each item"},
+		{"token", "Processes each token"},
+		{"node", "Traverses each node"},
+		{"child", "Iterates over child elements"},
+		{"result", "Iterates over results"},
+		{"route", "Iterates over routes"},
+		{"handler", "Iterates over handlers"},
+		{"header", "Iterates over headers"},
+		{"param", "Iterates over parameters"},
+		{"field", "Iterates over fields"},
+		{"key", "Iterates over keys"},
+		{"value", "Iterates over values"},
+		{"entry", "Iterates over entries"},
+		{"element", "Iterates over elements"},
+		{"line", "Processes each line"},
+		{"word", "Processes each word"},
+		{"byte", "Processes each byte"},
+		{"rune", "Processes each rune"},
+		{"char", "Processes each character"},
+		{"err", "Iterates over errors"},
+		{"test", "Iterates over test cases"},
+		{"case", "Iterates over cases"},
+		{"conn", "Iterates over connections"},
+		{"peer", "Iterates over peers"},
+		{"message", "Processes each message"},
+		{"event", "Processes each event"},
+		{"task", "Processes each task"},
+		{"job", "Processes each job"},
+		{"batch", "Processes each batch"},
+		{"chunk", "Processes each chunk"},
+		{"weight", "Iterates over weights"},
+		{"gradient", "Iterates over gradients"},
+		{"embed", "Iterates over embeddings"},
+	}
+
+	for _, dp := range domainPatterns {
+		if strings.Contains(lower, dp.substr) {
+			return dp.desc
+		}
+	}
+
+	// os.Args special case
+	if target == "os.Args" || target == "os.Args[1:]" {
+		return "Processes command-line arguments"
+	}
+
+	return fmt.Sprintf("Iterates over %s", target)
+}
+
+// analyzeIfStmt detects error handling patterns in if statements.
+func (ce *CodeExplainer) analyzeIfStmt(node *ast.IfStmt, add func(string)) {
+	// Detect: if err != nil { return ... }
+	cond := ce.exprString(node.Cond)
+	if strings.Contains(cond, "err") && strings.Contains(cond, "nil") {
+		// Check what the init does — often if err := foo(); err != nil
+		if node.Init != nil {
+			initStr := ce.stmtString(node.Init)
+			if initStr != "" {
+				// Extract the call from the init
+				if assign, ok := node.Init.(*ast.AssignStmt); ok {
+					for _, rhs := range assign.Rhs {
+						if call, ok := rhs.(*ast.CallExpr); ok {
+							name := ce.callExprName(call)
+							if desc, ok := knownFunctions[name]; ok {
+								add(fmt.Sprintf("Checks error after: %s", desc))
+								return
+							}
+						}
+					}
+				}
+			}
+		}
+		add("Handles errors")
+	}
+}
+
+// analyzeCallExpr looks up a function call in knownFunctions and adds
+// a semantic description.
+func (ce *CodeExplainer) analyzeCallExpr(node *ast.CallExpr, add func(string)) {
+	name := ce.callExprName(node)
+	if name == "" {
+		return
+	}
+
+	// Direct lookup
+	if desc, ok := knownFunctions[name]; ok {
+		add(ceCapitalize(desc))
+		return
+	}
+
+	// Try with common receiver name aliases. For instance, a call like
+	// "myDB.Query" should match "db.Query".
+	if dot := strings.LastIndex(name, "."); dot > 0 {
+		method := name[dot+1:]
+		receiver := name[:dot]
+
+		// Try common receiver aliases
+		aliases := ce.receiverAliases(receiver, method)
+		for _, alias := range aliases {
+			if desc, ok := knownFunctions[alias]; ok {
+				add(ceCapitalize(desc))
+				return
+			}
+		}
+
+		// If it is a known package call but not in our map, still note it
+		knownPkgs := map[string]string{
+			"http": "HTTP", "json": "JSON", "sql": "database",
+			"os": "OS", "io": "I/O", "fmt": "formatting",
+			"log": "logging", "sync": "synchronization",
+			"crypto": "cryptographic", "time": "time",
+			"strings": "string", "filepath": "file path",
+			"context": "context", "net": "network",
+			"regexp": "regex", "sort": "sorting",
+			"exec": "command execution", "flag": "flag parsing",
+			"template": "template", "reflect": "reflection",
+			"testing": "testing", "bufio": "buffered I/O",
+			"strconv": "string conversion", "errors": "error",
+			"encoding": "encoding", "xml": "XML",
+		}
+		if pkgDesc, ok := knownPkgs[receiver]; ok {
+			add(fmt.Sprintf("Calls %s %s operation: %s", pkgDesc, method, name))
+			return
+		}
+	}
+}
+
+// receiverAliases generates possible canonical receiver names for a given
+// receiver + method combination. For example, "myDB" -> "db", "mu" stays
+// as "mu", etc.
+func (ce *CodeExplainer) receiverAliases(receiver, method string) []string {
+	lower := strings.ToLower(receiver)
+	var aliases []string
+
+	// Map common variable name patterns to canonical receivers
+	canonicals := []struct {
+		contains string
+		alias    string
+	}{
+		{"db", "db"},
+		{"conn", "conn"},
+		{"client", "client"},
+		{"row", "rows"},
+		{"row", "row"},
+		{"stmt", "stmt"},
+		{"tx", "tx"},
+		{"mux", "mux"},
+		{"wg", "wg"},
+		{"mu", "mu"},
+		{"lock", "mu"},
+		{"once", "once"},
+		{"pool", "pool"},
+		{"cond", "cond"},
+		{"scanner", "scanner"},
+		{"reader", "reader"},
+		{"writer", "writer"},
+		{"ticker", "ticker"},
+		{"listener", "listener"},
+		{"enc", "enc"},
+		{"dec", "dec"},
+		{"cmd", "cmd"},
+		{"tmpl", "tmpl"},
+		{"re", "re"},
+		{"ctx", "ctx"},
+		{"resp", "resp"},
+	}
+
+	for _, c := range canonicals {
+		if strings.Contains(lower, c.contains) {
+			aliases = append(aliases, c.alias+"."+method)
+		}
+	}
+
+	// Also try the raw name + method
+	aliases = append(aliases, receiver+"."+method)
+
+	return aliases
+}
+
+// analyzeAssign checks assignments for patterns that reveal intent.
+func (ce *CodeExplainer) analyzeAssign(node *ast.AssignStmt, add func(string)) {
+	// Only handle short variable declarations (:=) for things like
+	// ctx, cancel := context.WithCancel(...)
+	if node.Tok.String() != ":=" {
+		return
+	}
+	// Check if any LHS name is "cancel" (context pattern)
+	for _, lhs := range node.Lhs {
+		if id, ok := lhs.(*ast.Ident); ok {
+			if id.Name == "cancel" {
+				add("Creates a cancellable context")
+				return
+			}
+		}
+	}
+}
+
+// -----------------------------------------------------------------------
+// AST helpers
+// -----------------------------------------------------------------------
+
+// callExprName returns a dotted name for a call expression.
+// For example: http.ListenAndServe, w.Write, db.Query, etc.
+func (ce *CodeExplainer) callExprName(call *ast.CallExpr) string {
+	switch fun := call.Fun.(type) {
+	case *ast.Ident:
+		return fun.Name
+	case *ast.SelectorExpr:
+		return ce.selectorName(fun)
+	}
+	return ""
+}
+
+// selectorName flattens a.b.c into "a.b.c".
+func (ce *CodeExplainer) selectorName(sel *ast.SelectorExpr) string {
+	switch x := sel.X.(type) {
+	case *ast.Ident:
+		return x.Name + "." + sel.Sel.Name
+	case *ast.SelectorExpr:
+		return ce.selectorName(x) + "." + sel.Sel.Name
+	}
+	return sel.Sel.Name
+}
+
+// exprString converts an AST expression to a source string.
+func (ce *CodeExplainer) exprString(expr ast.Expr) string {
+	if expr == nil {
+		return ""
+	}
+	var buf bytes.Buffer
+	if err := printer.Fprint(&buf, ce.fset, expr); err != nil {
+		return ""
+	}
+	return buf.String()
+}
+
+// stmtString converts an AST statement to a source string.
+func (ce *CodeExplainer) stmtString(stmt ast.Stmt) string {
+	if stmt == nil {
+		return ""
+	}
+	var buf bytes.Buffer
+	if err := printer.Fprint(&buf, ce.fset, stmt); err != nil {
+		return ""
+	}
+	return buf.String()
+}
+
+// nodeString converts any AST node to a source string.
+func (ce *CodeExplainer) nodeString(node ast.Node) string {
+	if node == nil {
+		return ""
+	}
+	var buf bytes.Buffer
+	if err := printer.Fprint(&buf, ce.fset, node); err != nil {
+		return ""
+	}
+	return buf.String()
+}
+
+// -----------------------------------------------------------------------
+// Summary generation
+// -----------------------------------------------------------------------
+
+// generateSummary produces a coherent paragraph from the function name,
+// detected patterns, and signature.
+func (ce *CodeExplainer) generateSummary(funcName string, patterns []string, sig string) string {
+	if len(patterns) == 0 {
+		return fmt.Sprintf("%s performs a simple operation.", funcName)
+	}
+
+	var sb strings.Builder
+
+	// Opening: derive purpose from function name
+	purpose := ce.purposeFromName(funcName)
+	if purpose != "" {
+		sb.WriteString(fmt.Sprintf("%s %s.", funcName, purpose))
+	} else {
+		sb.WriteString(fmt.Sprintf("%s %s.", funcName, lowerFirst(patterns[0])))
+	}
+
+	// Body: remaining patterns
+	remaining := patterns
+	if purpose != "" {
+		remaining = patterns
+	} else if len(patterns) > 1 {
+		remaining = patterns[1:]
+	} else {
+		return sb.String()
+	}
+
+	if len(remaining) > 0 {
+		sb.WriteString(" It ")
+		for i, p := range remaining {
+			lower := lowerFirst(p)
+			if i == 0 {
+				sb.WriteString(lower)
+			} else if i == len(remaining)-1 {
+				sb.WriteString(", and ")
+				sb.WriteString(lower)
+			} else {
+				sb.WriteString(", ")
+				sb.WriteString(lower)
+			}
+		}
+		sb.WriteString(".")
+	}
+
+	return sb.String()
+}
+
+// purposeFromName infers a verb phrase from common function name patterns.
+func (ce *CodeExplainer) purposeFromName(name string) string {
+	lower := strings.ToLower(name)
+
+	prefixes := []struct {
+		prefix string
+		verb   string
+	}{
+		{"handle", "handles"},
+		{"process", "processes"},
+		{"parse", "parses"},
+		{"validate", "validates"},
+		{"create", "creates"},
+		{"new", "creates a new"},
+		{"init", "initializes"},
+		{"setup", "sets up"},
+		{"build", "builds"},
+		{"make", "constructs"},
+		{"get", "retrieves"},
+		{"fetch", "fetches"},
+		{"load", "loads"},
+		{"read", "reads"},
+		{"write", "writes"},
+		{"save", "saves"},
+		{"store", "stores"},
+		{"delete", "deletes"},
+		{"remove", "removes"},
+		{"update", "updates"},
+		{"set", "sets"},
+		{"register", "registers"},
+		{"add", "adds"},
+		{"insert", "inserts"},
+		{"find", "finds"},
+		{"search", "searches for"},
+		{"lookup", "looks up"},
+		{"check", "checks"},
+		{"verify", "verifies"},
+		{"test", "tests"},
+		{"run", "runs"},
+		{"exec", "executes"},
+		{"start", "starts"},
+		{"stop", "stops"},
+		{"close", "closes"},
+		{"open", "opens"},
+		{"connect", "connects to"},
+		{"disconnect", "disconnects from"},
+		{"send", "sends"},
+		{"receive", "receives"},
+		{"publish", "publishes"},
+		{"subscribe", "subscribes to"},
+		{"listen", "listens for"},
+		{"serve", "serves"},
+		{"render", "renders"},
+		{"format", "formats"},
+		{"convert", "converts"},
+		{"transform", "transforms"},
+		{"encode", "encodes"},
+		{"decode", "decodes"},
+		{"marshal", "marshals"},
+		{"unmarshal", "unmarshals"},
+		{"serialize", "serializes"},
+		{"deserialize", "deserializes"},
+		{"compress", "compresses"},
+		{"decompress", "decompresses"},
+		{"encrypt", "encrypts"},
+		{"decrypt", "decrypts"},
+		{"hash", "hashes"},
+		{"sign", "signs"},
+		{"sort", "sorts"},
+		{"filter", "filters"},
+		{"map", "maps"},
+		{"reduce", "reduces"},
+		{"merge", "merges"},
+		{"split", "splits"},
+		{"join", "joins"},
+		{"count", "counts"},
+		{"sum", "sums"},
+		{"avg", "averages"},
+		{"compute", "computes"},
+		{"calculate", "calculates"},
+		{"measure", "measures"},
+		{"log", "logs"},
+		{"print", "prints"},
+		{"debug", "debugs"},
+		{"trace", "traces"},
+		{"notify", "notifies"},
+		{"alert", "alerts"},
+		{"emit", "emits"},
+		{"dispatch", "dispatches"},
+		{"forward", "forwards"},
+		{"retry", "retries"},
+		{"reset", "resets"},
+		{"clear", "clears"},
+		{"flush", "flushes"},
+		{"sync", "synchronizes"},
+		{"wait", "waits for"},
+		{"poll", "polls"},
+		{"watch", "watches"},
+		{"monitor", "monitors"},
+		{"scan", "scans"},
+		{"crawl", "crawls"},
+		{"index", "indexes"},
+		{"cache", "caches"},
+		{"refresh", "refreshes"},
+		{"clone", "clones"},
+		{"copy", "copies"},
+		{"backup", "backs up"},
+		{"restore", "restores"},
+		{"migrate", "migrates"},
+		{"compile", "compiles"},
+		{"generate", "generates"},
+		{"resolve", "resolves"},
+		{"extract", "extracts"},
+		{"collect", "collects"},
+		{"aggregate", "aggregates"},
+		{"apply", "applies"},
+		{"execute", "executes"},
+		{"perform", "performs"},
+		{"ensure", "ensures"},
+		{"assert", "asserts"},
+	}
+
+	for _, p := range prefixes {
+		if strings.HasPrefix(lower, p.prefix) {
+			rest := name[len(p.prefix):]
+			if rest == "" {
+				return p.verb
+			}
+			// Convert camelCase remainder to words
+			words := camelToWords(rest)
+			if words != "" {
+				return p.verb + " " + strings.ToLower(words)
+			}
+			return p.verb
+		}
+	}
+	return ""
+}
+
+// camelToWords splits "CamelCase" into "Camel Case".
+func camelToWords(s string) string {
+	if s == "" {
+		return ""
+	}
+	var buf strings.Builder
+	runes := []rune(s)
+	for i, r := range runes {
+		if i > 0 && unicode.IsUpper(r) {
+			// Don't split consecutive uppercase (acronyms)
+			if i+1 < len(runes) && unicode.IsLower(runes[i+1]) {
+				buf.WriteRune(' ')
+			} else if i > 0 && unicode.IsLower(runes[i-1]) {
+				buf.WriteRune(' ')
+			}
+		}
+		buf.WriteRune(r)
+	}
+	return buf.String()
+}
+
+// -----------------------------------------------------------------------
+// String helpers
+// -----------------------------------------------------------------------
+
+// ceCapitalize capitalizes the first letter without colliding with
+// the existing capitalizeFirst in composer.go.
+func ceCapitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	runes := []rune(s)
+	runes[0] = unicode.ToUpper(runes[0])
+	return string(runes)
+}
+
+// lowerFirst is defined in composer.go
