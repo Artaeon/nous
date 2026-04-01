@@ -744,6 +744,14 @@ func main() {
 		return false
 	}
 
+	// --- Subcommand Mode ---
+	// If the first positional arg is a recognized subcommand (understand,
+	// generate, reason, remember), execute it and exit immediately.
+	// This runs AFTER full cognitive init so all engines are available.
+	if SubcommandRouter(flag.Args(), nlu, actions, ltm) {
+		os.Exit(0)
+	}
+
 	// Spinner for LLM thinking time — stopped on first token
 	llmSpinner := cognitive.NewSpinner()
 	firstToken := true
