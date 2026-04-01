@@ -19,6 +19,9 @@ func GenerateTrainingPairs(knowledgeDir string) []TrainingExample {
 	// Add multi-sentence training pairs for richer generation
 	examples = append(examples, multiSentencePairs()...)
 
+	// Add clause-reordered variations to teach flexible word order
+	examples = append(examples, clauseReorderedPairs()...)
+
 	// Add pairs from knowledge text files
 	if knowledgeDir != "" {
 		examples = append(examples, extractFromKnowledge(knowledgeDir)...)
@@ -468,6 +471,209 @@ func multiSentencePairs() []TrainingExample {
 			Target: "Cryptography is the practice of securing information through encoding techniques. From ancient ciphers to modern public-key algorithms, it underpins digital security, banking, and private communications.",
 		},
 	}
+}
+
+// clauseReorderedPairs generates training pairs that express the same
+// fact with different clause orderings. This teaches the model that a
+// single triple can be rendered in multiple syntactic arrangements,
+// improving fluency and reducing template-sounding output.
+func clauseReorderedPairs() []TrainingExample {
+	// Each entry maps one input triple to several reworded targets.
+	type reorderGroup struct {
+		input    string
+		variants []string
+	}
+
+	groups := []reorderGroup{
+		{
+			input: "Python <sep> is_a <sep> programming language",
+			variants: []string{
+				"Python is a programming language.",
+				"A programming language, Python is widely used.",
+				"As a programming language, Python is versatile and popular.",
+				"Among programming languages, Python stands out.",
+			},
+		},
+		{
+			input: "Bitcoin <sep> created_by <sep> Satoshi Nakamoto",
+			variants: []string{
+				"Bitcoin was created by Satoshi Nakamoto.",
+				"Satoshi Nakamoto is the creator of Bitcoin.",
+				"It was Satoshi Nakamoto who created Bitcoin.",
+				"The creator behind Bitcoin is Satoshi Nakamoto.",
+			},
+		},
+		{
+			input: "Google <sep> founded_in <sep> 1998",
+			variants: []string{
+				"Google was founded in 1998.",
+				"In 1998, Google was founded.",
+				"The year 1998 saw the founding of Google.",
+				"Founded in 1998, Google has grown into a tech giant.",
+			},
+		},
+		{
+			input: "the solar system <sep> has <sep> eight planets",
+			variants: []string{
+				"The solar system has eight planets.",
+				"Eight planets make up the solar system.",
+				"Within the solar system, there are eight planets.",
+				"There are eight planets in the solar system.",
+			},
+		},
+		{
+			input: "machine learning <sep> used_for <sep> pattern recognition",
+			variants: []string{
+				"Machine learning is used for pattern recognition.",
+				"Pattern recognition is one application of machine learning.",
+				"For pattern recognition, machine learning is commonly employed.",
+				"One can apply machine learning to pattern recognition.",
+			},
+		},
+		{
+			input: "the Eiffel Tower <sep> located_in <sep> Paris",
+			variants: []string{
+				"The Eiffel Tower is located in Paris.",
+				"In Paris stands the Eiffel Tower.",
+				"Paris is home to the Eiffel Tower.",
+				"Located in Paris, the Eiffel Tower attracts millions of visitors.",
+			},
+		},
+		{
+			input: "Einstein <sep> known_for <sep> the theory of relativity",
+			variants: []string{
+				"Einstein is known for the theory of relativity.",
+				"The theory of relativity is the work of Einstein.",
+				"It is for the theory of relativity that Einstein is best known.",
+				"When people think of Einstein, they think of the theory of relativity.",
+			},
+		},
+		{
+			input: "the heart <sep> part_of <sep> the circulatory system",
+			variants: []string{
+				"The heart is part of the circulatory system.",
+				"The circulatory system includes the heart.",
+				"As a component of the circulatory system, the heart pumps blood.",
+				"Within the circulatory system, the heart plays a central role.",
+			},
+		},
+		{
+			input: "physics <sep> related_to <sep> mathematics",
+			variants: []string{
+				"Physics is related to mathematics.",
+				"Mathematics and physics are closely related.",
+				"There is a deep connection between physics and mathematics.",
+				"Physics and mathematics share a long intertwined history.",
+			},
+		},
+		{
+			input: "jazz <sep> influenced_by <sep> blues and ragtime",
+			variants: []string{
+				"Jazz was influenced by blues and ragtime.",
+				"Blues and ragtime were major influences on jazz.",
+				"The roots of jazz lie in blues and ragtime.",
+				"Without blues and ragtime, jazz would not exist as we know it.",
+			},
+		},
+		{
+			input: "Linux <sep> created_by <sep> Linus Torvalds",
+			variants: []string{
+				"Linux was created by Linus Torvalds.",
+				"Linus Torvalds is the creator of Linux.",
+				"It was Linus Torvalds who developed Linux.",
+				"The development of Linux began with Linus Torvalds.",
+			},
+		},
+		{
+			input: "DNA <sep> is_a <sep> molecule",
+			variants: []string{
+				"DNA is a molecule.",
+				"A molecule known as DNA carries genetic information.",
+				"As a molecule, DNA is essential to all known life.",
+				"Among biological molecules, DNA is perhaps the most important.",
+			},
+		},
+		{
+			input: "solar panels <sep> used_for <sep> generating electricity",
+			variants: []string{
+				"Solar panels are used for generating electricity.",
+				"Generating electricity is the primary purpose of solar panels.",
+				"For generating electricity, solar panels harness sunlight.",
+				"Electricity can be generated using solar panels.",
+			},
+		},
+		{
+			input: "Shakespeare <sep> known_for <sep> his plays and sonnets",
+			variants: []string{
+				"Shakespeare is known for his plays and sonnets.",
+				"The plays and sonnets of Shakespeare are celebrated worldwide.",
+				"It is his plays and sonnets that make Shakespeare immortal.",
+				"Among literary figures, Shakespeare is known for his plays and sonnets.",
+			},
+		},
+		{
+			input: "Mount Everest <sep> located_in <sep> the Himalayas",
+			variants: []string{
+				"Mount Everest is located in the Himalayas.",
+				"In the Himalayas rises Mount Everest.",
+				"The Himalayas are home to Mount Everest.",
+				"Towering above the Himalayas, Mount Everest is the tallest peak on Earth.",
+			},
+		},
+		{
+			input: "the human body <sep> has <sep> 206 bones",
+			variants: []string{
+				"The human body has 206 bones.",
+				"There are 206 bones in the human body.",
+				"A total of 206 bones compose the human body.",
+				"Within the human body, one finds 206 bones.",
+			},
+		},
+		{
+			input: "NASA <sep> founded_in <sep> 1958",
+			variants: []string{
+				"NASA was founded in 1958.",
+				"In 1958, NASA was established.",
+				"The founding of NASA took place in 1958.",
+				"Since its founding in 1958, NASA has led space exploration.",
+			},
+		},
+		{
+			input: "electrons <sep> part_of <sep> atoms",
+			variants: []string{
+				"Electrons are part of atoms.",
+				"Atoms contain electrons.",
+				"Among the constituents of atoms are electrons.",
+				"Every atom includes electrons orbiting its nucleus.",
+			},
+		},
+		{
+			input: "modern art <sep> influenced_by <sep> African sculpture",
+			variants: []string{
+				"Modern art was influenced by African sculpture.",
+				"African sculpture had a profound influence on modern art.",
+				"The influence of African sculpture reshaped modern art.",
+				"Without African sculpture, modern art would have developed very differently.",
+			},
+		},
+		{
+			input: "cryptography <sep> used_for <sep> securing communications",
+			variants: []string{
+				"Cryptography is used for securing communications.",
+				"Securing communications is a primary use of cryptography.",
+				"To secure communications, one relies on cryptography.",
+				"Communications are protected through the use of cryptography.",
+			},
+		},
+	}
+
+	var examples []TrainingExample
+	for _, g := range groups {
+		for _, v := range g.variants {
+			examples = append(examples, TrainingExample{Input: g.input, Target: v})
+		}
+	}
+	return examples
 }
 
 // extractFromKnowledge reads knowledge text files and extracts
