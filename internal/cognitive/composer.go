@@ -1408,6 +1408,20 @@ func (c *Composer) structuredRealization(facts []edgeFact) string {
 		return ""
 	}
 
+	// Deduplicate facts by (relation, lower(object)) to avoid repeating
+	// the same information with slightly different phrasing.
+	seen := make(map[string]bool)
+	var dedupFacts []edgeFact
+	for _, f := range facts {
+		key := string(f.Relation) + ":" + strings.ToLower(f.Object)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		dedupFacts = append(dedupFacts, f)
+	}
+	facts = dedupFacts
+
 	var tagged []taggedSentence
 	subject := facts[0].Subject
 	mentionCount := 0
