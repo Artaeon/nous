@@ -617,7 +617,7 @@ func (c *Composer) composeGreeting(ctx *ComposeContext) *ComposedResponse {
 		greeting = c.pick(eveningGreetings)
 	}
 
-	if ctx != nil && ctx.UserName != "" {
+	if ctx != nil && ctx.UserName != "" && looksLikeProperName(ctx.UserName) {
 		// Vary how the name is placed
 		switch c.rng.Intn(3) {
 		case 0:
@@ -2146,7 +2146,7 @@ func (c *Composer) composeBriefing(ctx *ComposeContext) *ComposedResponse {
 
 	hour := time.Now().Hour()
 	if hour < 12 {
-		if ctx != nil && ctx.UserName != "" {
+		if ctx != nil && ctx.UserName != "" && looksLikeProperName(ctx.UserName) {
 			parts = append(parts, fmt.Sprintf(c.pick(morningBriefingOpeners), ctx.UserName))
 		} else {
 			parts = append(parts, c.pick(briefingOpenersGeneric))
@@ -3066,7 +3066,7 @@ func (c *Composer) composeFarewell(ctx *ComposeContext) *ComposedResponse {
 	var parts []string
 
 	fare := c.pick(farewellPhrases)
-	if ctx != nil && ctx.UserName != "" {
+	if ctx != nil && ctx.UserName != "" && looksLikeProperName(ctx.UserName) {
 		fare = fmt.Sprintf(c.pick(farewellNamePhrases), ctx.UserName)
 	}
 	parts = append(parts, fare)
@@ -4441,6 +4441,8 @@ var empatheticSadWarm = []string{
 	"I'm really sorry you're going through this.",
 	"That must weigh on you. I wish I could do more.",
 	"Take your time with it. There's no rush to feel better.",
+	"That's tough. Stress is real — I hear you.",
+	"Sorry to hear that. You don't have to figure it all out right now.",
 }
 var empatheticSadDirect = []string{
 	"That's hard. What do you need right now?",
@@ -4479,6 +4481,9 @@ var empatheticActions = []string{
 	"I can check in with you later if you'd like.",
 	"I'm not going anywhere.",
 	"Whatever you need — I'm here.",
+	"Want to talk about what's on your mind, or would a quick distraction help?",
+	"Sometimes just naming it helps — what's the biggest thing weighing on you?",
+	"Would it help to make a quick to-do list to organize things, or do you just need to vent?",
 }
 
 // Mood-aware sad phrases
@@ -4556,10 +4561,14 @@ var farewellStreakPhrases = []string{
 
 // Thank you responses
 var thankYouResponses = []string{
-	"Anytime.", "Happy to help.", "You're welcome.",
-	"Of course.", "Glad I could help.",
-	"That's what I'm here for.", "No problem at all.",
-	"Anytime — seriously.", "My pleasure.",
+	"Happy to help — that's what I'm here for.",
+	"Glad I could be useful.",
+	"Anytime.",
+	"You're welcome — let me know if you need anything else.",
+	"No problem at all.",
+	"Of course, happy to help.",
+	"Anytime — seriously.",
+	"My pleasure.",
 	"Don't mention it. I'm here whenever you need me.",
 }
 
@@ -4583,6 +4592,30 @@ func lowerFirst(s string) string {
 		return s
 	}
 	return strings.ToLower(s[:1]) + s[1:]
+}
+
+// looksLikeProperName returns true if the name looks like a real human name
+// rather than a unix login (e.g. "rrl", "admin", "root"). A proper name is
+// capitalised, may contain spaces, and doesn't look like a short all-lowercase
+// system identifier.
+func looksLikeProperName(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	// Names with spaces are almost certainly real names ("Raphael Lugmayr").
+	if strings.Contains(name, " ") {
+		return true
+	}
+	// All-lowercase short tokens look like unix usernames (rrl, admin, root).
+	if name == strings.ToLower(name) {
+		return false
+	}
+	// Single capitalised word ≥ 2 chars is plausible ("Raphael", "Alice").
+	if len(name) >= 2 && name[0] >= 'A' && name[0] <= 'Z' {
+		return true
+	}
+	return false
 }
 
 // connectorLowerFirst lowercases the first letter of a sentence that follows

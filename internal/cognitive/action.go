@@ -238,8 +238,11 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 	// BEFORE empathy/subtext so coaching and decision queries get
 	// Socratic questions, not empathetic platitudes.
 	// ---------------------------------------------------------------
+	// Don't Socratic-question casual recommendations (food, entertainment, shopping)
+	// or straightforward questions — just answer them directly.
+	socraticExcluded := nlu.Intent == "recommendation" || nlu.Intent == "question"
 	socraticEligible := nlu.Action == "respond" || nlu.Action == "llm_chat" || nlu.Action == "" || nlu.Action == "lookup_knowledge"
-	if !taskPinned && ar.Socratic != nil && socraticEligible {
+	if !taskPinned && !socraticExcluded && ar.Socratic != nil && socraticEligible {
 		mode := ar.Socratic.DetectMode(nlu.Raw, ar.ConvState)
 		if mode != SocraticNone {
 			resp := ar.Socratic.Generate(nlu.Raw, mode, ar.ConvState)
@@ -407,7 +410,7 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 	// This is the "I know that I know nothing" fallback — ask questions
 	// rather than generating generic filler text.
 	if (result == nil || result.DirectResponse == "" || isLowInformationConversational(result.DirectResponse)) &&
-		!taskPinned && ar.Socratic != nil {
+		!taskPinned && !socraticExcluded && ar.Socratic != nil {
 		mode := ar.Socratic.DetectMode(nlu.Raw, ar.ConvState)
 		if mode == SocraticNone {
 			// No Socratic mode detected — try generic exploration
