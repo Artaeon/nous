@@ -3987,6 +3987,8 @@ var empatheticSadWarm = []string{
 	"I'm really sorry you're going through this.",
 	"That must weigh on you. I wish I could do more.",
 	"Take your time with it. There's no rush to feel better.",
+	"That's tough. Stress is real — I hear you.",
+	"Sorry to hear that. You don't have to figure it all out right now.",
 }
 var empatheticSadDirect = []string{
 	"That's hard. What do you need right now?",
@@ -4025,6 +4027,9 @@ var empatheticActions = []string{
 	"I can check in with you later if you'd like.",
 	"I'm not going anywhere.",
 	"Whatever you need — I'm here.",
+	"Want to talk about what's on your mind, or would a quick distraction help?",
+	"Sometimes just naming it helps — what's the biggest thing weighing on you?",
+	"Would it help to make a quick to-do list to organize things, or do you just need to vent?",
 }
 
 // Mood-aware sad phrases
@@ -4102,10 +4107,14 @@ var farewellStreakPhrases = []string{
 
 // Thank you responses
 var thankYouResponses = []string{
-	"Anytime.", "Happy to help.", "You're welcome.",
-	"Of course.", "Glad I could help.",
-	"That's what I'm here for.", "No problem at all.",
-	"Anytime — seriously.", "My pleasure.",
+	"Happy to help — that's what I'm here for.",
+	"Glad I could be useful.",
+	"Anytime.",
+	"You're welcome — let me know if you need anything else.",
+	"No problem at all.",
+	"Of course, happy to help.",
+	"Anytime — seriously.",
+	"My pleasure.",
 	"Don't mention it. I'm here whenever you need me.",
 }
 
