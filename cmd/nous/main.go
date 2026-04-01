@@ -22,6 +22,7 @@ import (
 	"github.com/artaeon/nous/internal/blackboard"
 	"github.com/artaeon/nous/internal/cognitive"
 	"github.com/artaeon/nous/internal/compress"
+	"github.com/artaeon/nous/internal/federation"
 	"github.com/artaeon/nous/internal/hands"
 	"github.com/artaeon/nous/internal/index"
 	"github.com/artaeon/nous/internal/memory"
@@ -1061,6 +1062,10 @@ func main() {
 		return
 	}
 
+	// --- Federation registry — shared crystal exchange between Nous instances ---
+	fedPath := filepath.Join(nousDir, "federation")
+	fedRegistry, _ := federation.NewRegistry(fedPath)
+
 	// --- First-run onboarding or welcome-back ---
 	if !cognitive.RunOnboarding(os.Stdin, ltm, wm) {
 		cognitive.WelcomeBack(ltm)
@@ -1133,7 +1138,7 @@ func main() {
 				}
 				continue
 			}
-			if handleCommand(input, board, model, toolReg, wm, ltm, projMem, undoStack, sessionStore, currentSession, reasoner, learner, projectInfo, episodic, collector, autoTuner, assistantStore, handManager, autonomousAgent, agentScheduler) {
+			if handleCommand(input, board, model, toolReg, wm, ltm, projMem, undoStack, sessionStore, currentSession, reasoner, learner, projectInfo, episodic, collector, autoTuner, assistantStore, handManager, autonomousAgent, agentScheduler, fedRegistry) {
 				continue
 			}
 		}
@@ -1261,7 +1266,7 @@ func main() {
 	}
 }
 
-func handleCommand(input string, board *blackboard.Blackboard, model *string, toolReg *tools.Registry, wm *memory.WorkingMemory, ltm *memory.LongTermMemory, projMem *memory.ProjectMemory, undoStack *memory.UndoStack, sessions *cognitive.SessionStore, current *cognitive.Session, reasoner *cognitive.Reasoner, learner *cognitive.Learner, project *cognitive.ProjectInfo, episodic *memory.EpisodicMemory, collector *training.Collector, autoTuner *training.AutoTuner, assistantStore *assistant.Store, handManager *hands.Manager, autonomousAgent *agent.Agent, agentScheduler *agent.Scheduler) bool {
+func handleCommand(input string, board *blackboard.Blackboard, model *string, toolReg *tools.Registry, wm *memory.WorkingMemory, ltm *memory.LongTermMemory, projMem *memory.ProjectMemory, undoStack *memory.UndoStack, sessions *cognitive.SessionStore, current *cognitive.Session, reasoner *cognitive.Reasoner, learner *cognitive.Learner, project *cognitive.ProjectInfo, episodic *memory.EpisodicMemory, collector *training.Collector, autoTuner *training.AutoTuner, assistantStore *assistant.Store, handManager *hands.Manager, autonomousAgent *agent.Agent, agentScheduler *agent.Scheduler, fedRegistry *federation.Registry) bool {
 	parts := strings.Fields(input)
 	cmd := strings.ToLower(parts[0])
 
@@ -2119,6 +2124,114 @@ func handleCommand(input string, board *blackboard.Blackboard, model *string, to
 		reasoner.Conv = cognitive.NewConversation(20)
 		fmt.Println("  conversation cleared")
 
+	case "/federation":
+		if fedRegistry == nil {
+			fmt.Println("  federation registry not available")
+			break
+		}
+		sub := ""
+		if len(parts) > 1 {
+			sub = strings.ToLower(parts[1])
+		}
+		switch sub {
+		case "status":
+			stats := fedRegistry.Stats()
+			fmt.Println(cognitive.Panel("Federation", []string{
+				fmt.Sprintf("Crystals  %d", stats.TotalCrystals),
+				fmt.Sprintf("Bundles   %d", stats.TotalBundles),
+				fmt.Sprintf("Avg qual  %.1f%%", stats.AvgQuality*100),
+			}))
+			if len(stats.TopIntents) > 0 {
+				fmt.Println("  top intents:")
+				for intent, count := range stats.TopIntents {
+					fmt.Printf("    %s: %d\n", intent, count)
+				}
+			}
+
+		case "export":
+			ts := time.Now().Format("20060102-150405")
+			exportPath := filepath.Join(fedRegistry.Path, "export_"+ts+".json")
+			if err := fedRegistry.Export(exportPath, 0.0); err != nil {
+				fmt.Printf("  export failed: %v\n", err)
+				break
+			}
+			stats := fedRegistry.Stats()
+			fmt.Printf("  exported %d crystals to %s\n", stats.TotalCrystals, exportPath)
+
+		case "import":
+			if len(parts) < 3 {
+				fmt.Println("  usage: /federation import <path>")
+				break
+			}
+			bundlePath := parts[2]
+			bundle, err := federation.ImportBundle(bundlePath)
+			if err != nil {
+				fmt.Printf("  import failed: %v\n", err)
+				break
+			}
+			if err := bundle.Validate(); err != nil {
+				fmt.Printf("  invalid bundle: %v\n", err)
+				break
+			}
+			scorer := federation.NewTrustScorer()
+			accepted, rejected := 0, 0
+			for _, c := range bundle.Crystals {
+				if scorer.ShouldImport(c) {
+					fedRegistry.Merge(c)
+					accepted++
+				} else {
+					rejected++
+				}
+			}
+			scorer.ObserveBundle(bundle.Instance, accepted, rejected)
+			fmt.Printf("  imported %d crystals (%d rejected by trust scorer)\n", accepted, rejected)
+
+		case "search":
+			if len(parts) < 3 {
+				fmt.Println("  usage: /federation search <query>")
+				break
+			}
+			query := strings.Join(parts[2:], " ")
+			results := fedRegistry.Search(query, 10)
+			if len(results) == 0 {
+				fmt.Println("  no crystals matched")
+				break
+			}
+			fmt.Printf("  %d results for %q:\n", len(results), query)
+			for i, c := range results {
+				fmt.Printf("  %d. [%.0f%% q, %d votes] %s — %s\n",
+					i+1, c.Quality*100, c.Votes, c.Intent, c.Pattern)
+			}
+
+		case "top":
+			n := 10
+			if len(parts) > 2 {
+				parsed, err := strconv.Atoi(parts[2])
+				if err == nil && parsed > 0 {
+					n = parsed
+				}
+			}
+			top := fedRegistry.TopCrystals(n)
+			if len(top) == 0 {
+				fmt.Println("  no crystals in registry")
+				break
+			}
+			fmt.Printf("  top %d crystals:\n", len(top))
+			for i, c := range top {
+				fmt.Printf("  %d. [%.0f%% q, %d votes] %s — %s\n",
+					i+1, c.Quality*100, c.Votes, c.Intent, c.Pattern)
+			}
+
+		default:
+			fmt.Println("  usage: /federation <status|export|import|search|top>")
+			fmt.Println("  subcommands:")
+			fmt.Println("    status         show federation stats")
+			fmt.Println("    export         export crystals to a bundle file")
+			fmt.Println("    import <path>  import a crystal bundle")
+			fmt.Println("    search <query> search registry for crystals")
+			fmt.Println("    top [n]        show top N crystals by quality")
+		}
+
 	default:
 		fmt.Printf("  unknown command: %s (try /help)\n", cmd)
 	}
@@ -2165,6 +2278,13 @@ func renderHelp() string {
 		"/vctx — virtual context stats (your 200K+ token window)",
 		"/growth — your interests, topics, and interaction patterns",
 		"/learn <category> <fact> — teach Nous about yourself",
+	}))
+	b.WriteString(cognitive.Panel("Federation", []string{
+		cognitive.Styled(cognitive.ColorCyan, "/federation status") + " crystals, bundles, avg quality",
+		cognitive.Styled(cognitive.ColorCyan, "/federation export") + " export local crystals to a bundle file",
+		cognitive.Styled(cognitive.ColorCyan, "/federation import <path>") + " import a crystal bundle",
+		cognitive.Styled(cognitive.ColorCyan, "/federation search <query>") + " search registry for crystals",
+		cognitive.Styled(cognitive.ColorCyan, "/federation top [n]") + " show top N crystals by quality",
 	}))
 	b.WriteString(cognitive.Panel("Sessions and safety", []string{
 		"/sessions, /save [name], /clear, /undo, /history, /quit",
