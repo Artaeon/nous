@@ -270,20 +270,33 @@ var domainRegistry = []DomainDef{
 // -----------------------------------------------------------------------
 
 // FindDomain matches a description to the best domain, or returns nil.
+// Only returns a match if the domain's primary keywords (name-related)
+// are present — not just generic keywords like "tracker" or "manager".
 func FindDomain(desc string) *DomainDef {
 	lower := strings.ToLower(desc)
 	var best *DomainDef
 	bestScore := 0
 
+	// Generic words that shouldn't count as domain matches on their own
+	genericWords := map[string]bool{
+		"tracker": true, "manager": true, "organizer": true, "system": true,
+		"tool": true, "app": true, "application": true, "service": true,
+	}
+
 	for i := range domainRegistry {
 		d := &domainRegistry[i]
 		score := 0
+		hasSpecificMatch := false
 		for _, kw := range d.Keywords {
 			if strings.Contains(lower, kw) {
-				score += len(kw) // longer keyword matches = higher confidence
+				score += len(kw)
+				if !genericWords[kw] {
+					hasSpecificMatch = true
+				}
 			}
 		}
-		if score > bestScore {
+		// Only count this domain if a specific (non-generic) keyword matched
+		if hasSpecificMatch && score > bestScore {
 			bestScore = score
 			best = d
 		}

@@ -504,116 +504,78 @@ func printUsage() {
 	return sb.String()
 }
 
+func testValue(f Field) string {
+	switch f.Type {
+	case "string":
+		return "\"Test\""
+	case "int":
+		return "42"
+	case "float64":
+		return "9.99"
+	case "bool":
+		return "true"
+	case "[]string":
+		return "[]string{\"a\", \"b\"}"
+	default:
+		return "\"Test\""
+	}
+}
+
+func testComparison(f Field) string {
+	switch f.Type {
+	case "string":
+		return fmt.Sprintf("if got.%s != \"Test\" {\n\t\tt.Errorf(\"%s: got %%v, want Test\", got.%s)\n\t}", f.Name, f.Name, f.Name)
+	case "int":
+		return fmt.Sprintf("if got.%s != 42 {\n\t\tt.Errorf(\"%s: got %%v, want 42\", got.%s)\n\t}", f.Name, f.Name, f.Name)
+	case "float64":
+		return fmt.Sprintf("if got.%s != 9.99 {\n\t\tt.Errorf(\"%s: got %%v, want 9.99\", got.%s)\n\t}", f.Name, f.Name, f.Name)
+	case "bool":
+		return fmt.Sprintf("if got.%s != true {\n\t\tt.Errorf(\"%s: got %%v, want true\", got.%s)\n\t}", f.Name, f.Name, f.Name)
+	default:
+		return fmt.Sprintf("if got.%s != \"Test\" {\n\t\tt.Errorf(\"%s: got %%v, want Test\", got.%s)\n\t}", f.Name, f.Name, f.Name)
+	}
+}
+
 func genSmartTests(e Entity, lower string) string {
 	name := e.Name
-	firstField := "Name"
+	firstField := Field{Name: "Name", Type: "string"}
 	if len(e.Fields) > 0 {
-		firstField = e.Fields[0].Name
+		firstField = e.Fields[0]
 	}
 
-	return fmt.Sprintf(`package main
+	ff := firstField
+	val := testValue(ff)
+	cmp := testComparison(ff)
 
-import (
-	"os"
-	"testing"
-)
+	var sb strings.Builder
+	sb.WriteString("package main\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\n")
 
-func TestStoreCreateAndGet(t *testing.T) {
-	dir := t.TempDir()
-	store := NewStore(dir)
+	// TestStoreCreateAndGet
+	sb.WriteString(fmt.Sprintf("func TestStoreCreateAndGet(t *testing.T) {\n\tdir := t.TempDir()\n\tstore := NewStore(dir)\n\n\titem := &%s{%s: %s}\n\tcreated := store.Create(item)\n\tif created.ID != 1 {\n\t\tt.Errorf(\"ID: got %%d, want 1\", created.ID)\n\t}\n\n\tgot, err := store.Get(1)\n\tif err != nil {\n\t\tt.Fatalf(\"Get: %%v\", err)\n\t}\n\t%s\n}\n\n",
+		name, ff.Name, val, cmp))
 
-	item := &%s{%s: "Test"}
-	created := store.Create(item)
-	if created.ID != 1 {
-		t.Errorf("ID: got %%d, want 1", created.ID)
-	}
+	// TestStoreList
+	sb.WriteString(fmt.Sprintf("func TestStoreList(t *testing.T) {\n\tdir := t.TempDir()\n\tstore := NewStore(dir)\n\n\tstore.Create(&%s{%s: %s})\n\tstore.Create(&%s{%s: %s})\n\n\titems := store.List()\n\tif len(items) != 2 {\n\t\tt.Errorf(\"List: got %%d items, want 2\", len(items))\n\t}\n}\n\n",
+		name, ff.Name, val, name, ff.Name, val))
 
-	got, err := store.Get(1)
-	if err != nil {
-		t.Fatalf("Get: %%v", err)
-	}
-	if got.%s != "Test" {
-		t.Errorf("%s: got %%q, want %%q", got.%s, "Test")
-	}
-}
+	// TestStoreDelete
+	sb.WriteString(fmt.Sprintf("func TestStoreDelete(t *testing.T) {\n\tdir := t.TempDir()\n\tstore := NewStore(dir)\n\n\tstore.Create(&%s{%s: %s})\n\tif err := store.Delete(1); err != nil {\n\t\tt.Fatalf(\"Delete: %%v\", err)\n\t}\n\t_, err := store.Get(1)\n\tif err == nil {\n\t\tt.Error(\"expected error after delete\")\n\t}\n}\n\n",
+		name, ff.Name, val))
 
-func TestStoreList(t *testing.T) {
-	dir := t.TempDir()
-	store := NewStore(dir)
+	// TestStoreSearch
+	sb.WriteString(fmt.Sprintf("func TestStoreSearch(t *testing.T) {\n\tdir := t.TempDir()\n\tstore := NewStore(dir)\n\n\tstore.Create(&%s{%s: %s})\n\n\tresults := store.Search(\"%s\")\n\tif len(results) != 1 {\n\t\tt.Errorf(\"Search: got %%d results, want 1\", len(results))\n\t}\n}\n\n",
+		name, ff.Name, val, strings.Trim(val, "\"")))
 
-	store.Create(&%s{%s: "First"})
-	store.Create(&%s{%s: "Second"})
+	// TestStorePersistence
+	sb.WriteString(fmt.Sprintf("func TestStorePersistence(t *testing.T) {\n\tdir := t.TempDir()\n\tstore := NewStore(dir)\n\tstore.Create(&%s{%s: %s})\n\n\tstore2 := NewStore(dir)\n\titems := store2.List()\n\tif len(items) != 1 {\n\t\tt.Errorf(\"Persistence: got %%d items, want 1\", len(items))\n\t}\n}\n\n",
+		name, ff.Name, val))
 
-	items := store.List()
-	if len(items) != 2 {
-		t.Errorf("List: got %%d items, want 2", len(items))
-	}
-}
+	// TestStoreGetNotFound
+	sb.WriteString("func TestStoreGetNotFound(t *testing.T) {\n\tdir := t.TempDir()\n\tstore := NewStore(dir)\n\t_, err := store.Get(999)\n\tif err == nil {\n\t\tt.Error(\"expected error for missing ID\")\n\t}\n}\n\n")
 
-func TestStoreDelete(t *testing.T) {
-	dir := t.TempDir()
-	store := NewStore(dir)
+	sb.WriteString("func TestMain(m *testing.M) { os.Exit(m.Run()) }\n")
 
-	store.Create(&%s{%s: "DeleteMe"})
-	if err := store.Delete(1); err != nil {
-		t.Fatalf("Delete: %%v", err)
-	}
-	_, err := store.Get(1)
-	if err == nil {
-		t.Error("expected error after delete")
-	}
-}
-
-func TestStoreSearch(t *testing.T) {
-	dir := t.TempDir()
-	store := NewStore(dir)
-
-	store.Create(&%s{%s: "Hello World"})
-	store.Create(&%s{%s: "Goodbye"})
-
-	results := store.Search("Hello")
-	if len(results) != 1 {
-		t.Errorf("Search: got %%d results, want 1", len(results))
-	}
-}
-
-func TestStorePersistence(t *testing.T) {
-	dir := t.TempDir()
-	store := NewStore(dir)
-	store.Create(&%s{%s: "Persist"})
-
-	// Reload from disk
-	store2 := NewStore(dir)
-	items := store2.List()
-	if len(items) != 1 {
-		t.Errorf("Persistence: got %%d items, want 1", len(items))
-	}
-	if items[0].%s != "Persist" {
-		t.Errorf("Persistence: got %%q, want %%q", items[0].%s, "Persist")
-	}
-}
-
-func TestStoreGetNotFound(t *testing.T) {
-	dir := t.TempDir()
-	store := NewStore(dir)
-	_, err := store.Get(999)
-	if err == nil {
-		t.Error("expected error for missing ID")
-	}
-}
-
-func TestMain(m *testing.M) {
-	os.Exit(m.Run())
-}
-`,
-		name, firstField,
-		firstField, firstField, firstField,
-		name, firstField, name, firstField,
-		name, firstField,
-		name, firstField, name, firstField,
-		name, firstField,
-		firstField, firstField,
-	)
+	return sb.String()
 }
 
 // -----------------------------------------------------------------------

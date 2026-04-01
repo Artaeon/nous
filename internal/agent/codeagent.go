@@ -988,10 +988,47 @@ func (ca *CodeAgent) compile() (bool, string) {
 }
 
 func (ca *CodeAgent) autoFix() {
-	// Run goimports-like fix: gofmt
+	// Try gofmt first
 	cmd := exec.Command("gofmt", "-w", ".")
 	cmd.Dir = ca.OutputDir
 	cmd.Run()
+
+	// Try to fix unused imports by removing them
+	files, _ := filepath.Glob(filepath.Join(ca.OutputDir, "*.go"))
+	for _, f := range files {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		content := string(src)
+		modified := false
+
+		// Remove common unused imports
+		for _, imp := range []string{"strings", "strconv", "text/tabwriter", "os", "time", "fmt"} {
+			if strings.Contains(content, "\""+imp+"\"") {
+				// Check if the package is actually used (simple heuristic)
+				pkg := imp
+				if idx := strings.LastIndex(imp, "/"); idx >= 0 {
+					pkg = imp[idx+1:]
+				}
+				// Count usages outside of import block
+				importEnd := strings.Index(content, ")")
+				if importEnd < 0 {
+					continue
+				}
+				afterImports := content[importEnd:]
+				if !strings.Contains(afterImports, pkg+".") && !strings.Contains(afterImports, pkg+"\"") {
+					// Remove the import line
+					content = strings.Replace(content, "\t\""+imp+"\"\n", "", 1)
+					modified = true
+				}
+			}
+		}
+
+		if modified {
+			os.WriteFile(f, []byte(content), 0644)
+		}
+	}
 }
 
 func (ca *CodeAgent) runTests() (passed, failed int, output string) {
