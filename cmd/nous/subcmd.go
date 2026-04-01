@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/artaeon/nous/internal/agent"
 	"github.com/artaeon/nous/internal/cognitive"
 	"github.com/artaeon/nous/internal/memory"
 )
@@ -531,6 +532,8 @@ Commands:
 		return runCodeDeps(args[1:])
 	case "diff":
 		return runCodeDiffCmd(args[1:])
+	case "build":
+		return runCodeBuild(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown code command: %s\n", args[0])
 		os.Exit(1)
@@ -1180,5 +1183,42 @@ func runCodeDiffCmd(args []string) bool {
 		}
 	}
 
+	return true
+}
+
+// --- code build subcommand ---
+
+func runCodeBuild(args []string) bool {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, `Usage: nous code build "<description>"
+
+Examples:
+  nous code build "REST API for managing todos"
+  nous code build "CLI tool for file management"
+  nous code build "worker pool for image processing"`)
+		os.Exit(1)
+	}
+
+	description := strings.Join(args, " ")
+	description = strings.Trim(description, "\"'")
+
+	// Parse to get project name for output dir
+	tmpAgent := agent.NewCodeAgent("")
+	plan := tmpAgent.ParseRequest(description)
+	outputDir := "./" + plan.ProjectName
+
+	ca := agent.NewCodeAgent(outputDir)
+	fmt.Printf("Building: %s\nOutput:   %s/\n\n", description, outputDir)
+
+	result, err := ca.Build(description)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("\nSummary: %d files, compiled=%v, tests=%d/%d passed (%s)\n",
+		len(result.Files), result.Compiled,
+		result.TestsPassed, result.TestsPassed+result.TestsFailed,
+		result.Duration.Round(time.Millisecond))
 	return true
 }
