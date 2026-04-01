@@ -58,10 +58,28 @@ func (b *Bridge) GenerateSentence(subject, relation, object string) string {
 	return b.generator.Generate(subject, relation, object, 40, 0.7)
 }
 
+// GenerateConstrained generates a single sentence using knowledge-constrained
+// beam search. Only available with the Mamba backend. Falls back to standard
+// generation for transformer models.
+func (b *Bridge) GenerateConstrained(subject, relation, object string, extraFacts [][3]string) string {
+	if b == nil {
+		return ""
+	}
+	// Use constrained generation with Mamba
+	if b.Mamba != nil {
+		return b.Mamba.GenerateGrounded(subject, relation, object, extraFacts, 3)
+	}
+	// Fallback: standard generation
+	if b.generator != nil {
+		return b.generator.Generate(subject, relation, object, 40, 0.7)
+	}
+	return ""
+}
+
 // GenerateParagraph takes multiple fact triples and returns a coherent paragraph.
-// Facts are expressed as (subject, relation, object) string triples.
+// Uses constrained generation with Mamba, standard generation with transformer.
 func (b *Bridge) GenerateParagraph(topic string, facts [][3]string) string {
-	if b == nil || b.Model == nil || len(facts) == 0 {
+	if b == nil || b.generator == nil || len(facts) == 0 {
 		return ""
 	}
 
@@ -73,7 +91,13 @@ func (b *Bridge) GenerateParagraph(topic string, facts [][3]string) string {
 	ordered := orderFacts(facts)
 
 	for _, fact := range ordered {
-		sent := b.Model.Generate(fact[0], fact[1], fact[2], 40, 0.7)
+		var sent string
+		if b.Mamba != nil {
+			// Mamba: use constrained generation grounded in all facts
+			sent = b.Mamba.GenerateGrounded(fact[0], fact[1], fact[2], ordered, 3)
+		} else {
+			sent = b.generator.Generate(fact[0], fact[1], fact[2], 40, 0.7)
+		}
 		sent = strings.TrimSpace(sent)
 		if sent == "" || len(sent) < 10 {
 			continue
