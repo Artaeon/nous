@@ -20,6 +20,7 @@ import (
 	"github.com/artaeon/nous/internal/blackboard"
 	"github.com/artaeon/nous/internal/cognitive"
 	"github.com/artaeon/nous/internal/compress"
+	"github.com/artaeon/nous/internal/federation"
 	"github.com/artaeon/nous/internal/hands"
 	"github.com/artaeon/nous/internal/index"
 	"github.com/artaeon/nous/internal/memory"
@@ -1000,6 +1001,10 @@ func main() {
 		return
 	}
 
+	// --- Federation registry — shared crystal exchange between Nous instances ---
+	fedPath := filepath.Join(nousDir, "federation")
+	fedRegistry, _ := federation.NewRegistry(fedPath)
+
 	// --- First-run onboarding or welcome-back ---
 	if !cognitive.RunOnboarding(os.Stdin, ltm, wm) {
 		cognitive.WelcomeBack(ltm)
@@ -1072,7 +1077,7 @@ func main() {
 				}
 				continue
 			}
-			if handleCommand(input, board, model, toolReg, wm, ltm, projMem, undoStack, sessionStore, currentSession, reasoner, learner, projectInfo, episodic, collector, autoTuner, assistantStore, handManager, autonomousAgent, agentScheduler) {
+			if handleCommand(input, board, model, toolReg, wm, ltm, projMem, undoStack, sessionStore, currentSession, reasoner, learner, projectInfo, episodic, collector, autoTuner, assistantStore, handManager, autonomousAgent, agentScheduler, fedRegistry) {
 				continue
 			}
 		}
@@ -1186,7 +1191,7 @@ func main() {
 	}
 }
 
-func handleCommand(input string, board *blackboard.Blackboard, model *string, toolReg *tools.Registry, wm *memory.WorkingMemory, ltm *memory.LongTermMemory, projMem *memory.ProjectMemory, undoStack *memory.UndoStack, sessions *cognitive.SessionStore, current *cognitive.Session, reasoner *cognitive.Reasoner, learner *cognitive.Learner, project *cognitive.ProjectInfo, episodic *memory.EpisodicMemory, collector *training.Collector, autoTuner *training.AutoTuner, assistantStore *assistant.Store, handManager *hands.Manager, autonomousAgent *agent.Agent, agentScheduler *agent.Scheduler) bool {
+func handleCommand(input string, board *blackboard.Blackboard, model *string, toolReg *tools.Registry, wm *memory.WorkingMemory, ltm *memory.LongTermMemory, projMem *memory.ProjectMemory, undoStack *memory.UndoStack, sessions *cognitive.SessionStore, current *cognitive.Session, reasoner *cognitive.Reasoner, learner *cognitive.Learner, project *cognitive.ProjectInfo, episodic *memory.EpisodicMemory, collector *training.Collector, autoTuner *training.AutoTuner, assistantStore *assistant.Store, handManager *hands.Manager, autonomousAgent *agent.Agent, agentScheduler *agent.Scheduler, fedRegistry *federation.Registry) bool {
 	parts := strings.Fields(input)
 	cmd := strings.ToLower(parts[0])
 
