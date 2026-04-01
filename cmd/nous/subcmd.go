@@ -2,13 +2,17 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	goflag "flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/artaeon/nous/internal/cognitive"
 	"github.com/artaeon/nous/internal/memory"
@@ -497,12 +501,12 @@ func runCode(args []string) bool {
 		fmt.Fprintln(os.Stderr, `Usage: nous code <command> [args]
 
 Commands:
-  explain <file>[:<func|line>]   Explain Go source code
-  review <file|dir>              Find code issues (static analysis)
-  generate <type> [flags]        Generate code boilerplate
-    handler --name <Name> [--method POST] [--path /api/x]
-    test    --file <file.go>
-    struct  --name <Name> --fields "name:type,name:type"`)
+  explain  <file>[:<func|line>]   Explain Go source code
+  review   <file|dir>             Find code issues (static analysis)
+  generate <type> [flags]         Generate code boilerplate
+  run      <file.go>              Compile and execute a Go file
+  fix      <file.go> [--write]    Auto-fix common Go issues
+  test     <package> [-run regex] Run tests with summary`)
 		os.Exit(1)
 	}
 
@@ -513,6 +517,12 @@ Commands:
 		return runCodeReview(args[1:])
 	case "generate":
 		return runCodeGenerate(args[1:])
+	case "run":
+		return runCodeRun(args[1:])
+	case "fix":
+		return runCodeFix(args[1:])
+	case "test":
+		return runCodeTest(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown code command: %s\n", args[0])
 		os.Exit(1)
@@ -807,5 +817,165 @@ func genStruct(args []string) bool {
 	}
 	fmt.Println("\t}\n}")
 
+	return true
+}
+
+// --- code run subcommand ---
+
+func runCodeRun(args []string) bool {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: nous code run <file.go>")
+		os.Exit(1)
+	}
+	file := args[0]
+	if _, err := os.Stat(file); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Compiling... ")
+	start := time.Now()
+
+	cmd := exec.Command("go", "run", file)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	dur := time.Since(start)
+
+	if err != nil {
+		fmt.Printf("failed (%.1fs)\n\n", dur.Seconds())
+		errText := stderr.String()
+		if errText != "" {
+			for _, line := range strings.Split(strings.TrimRight(errText, "\n"), "\n") {
+				fmt.Printf("  %s\n", line)
+			}
+		}
+		// Highlight source lines from error
+		errLineRe := regexp.MustCompile(`([^:\s]+\.go):(\d+)(?::\d+)?:`)
+		src, _ := os.ReadFile(file)
+		lines := strings.Split(string(src), "\n")
+		for _, m := range errLineRe.FindAllStringSubmatch(errText, 3) {
+			if ln, e := strconv.Atoi(m[2]); e == nil && ln >= 1 && ln <= len(lines) {
+				fmt.Printf("\n  Line %d: %s\n", ln, strings.TrimSpace(lines[ln-1]))
+			}
+		}
+		exitCode := 1
+		if cmd.ProcessState != nil {
+			exitCode = cmd.ProcessState.ExitCode()
+		}
+		fmt.Printf("\nExit: %d (%.1fs)\n", exitCode, dur.Seconds())
+	} else {
+		fmt.Printf("ok (%.1fs)\n", dur.Seconds())
+		if out := stdout.String(); out != "" {
+			fmt.Println()
+			fmt.Print(out)
+		}
+		fmt.Printf("\nExit: 0 (%.1fs)\n", dur.Seconds())
+	}
+	return true
+}
+
+// --- code fix subcommand ---
+
+func runCodeFix(args []string) bool {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: nous code fix <file.go> [--write]")
+		os.Exit(1)
+	}
+
+	file := ""
+	write := false
+	for _, a := range args {
+		if a == "--write" || a == "-w" {
+			write = true
+		} else if file == "" {
+			file = a
+		}
+	}
+
+	src, err := os.ReadFile(file)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Run gofmt first
+	formatted, fmtErr := goFormat(src)
+	var changes []string
+
+	if fmtErr == nil && string(formatted) != string(src) {
+		changes = append(changes, "formatted code (gofmt)")
+	}
+
+	// Run go vet for additional issues
+	cmd := exec.Command("go", "vet", file)
+	var vetOut bytes.Buffer
+	cmd.Stderr = &vetOut
+	cmd.Run()
+	if vetText := vetOut.String(); vetText != "" {
+		for _, line := range strings.Split(strings.TrimSpace(vetText), "\n") {
+			if strings.Contains(line, file) {
+				changes = append(changes, "vet: "+line)
+			}
+		}
+	}
+
+	if len(changes) == 0 {
+		fmt.Println("no fixes needed")
+		return true
+	}
+
+	fmt.Printf("Found %d issue(s):\n", len(changes))
+	for _, c := range changes {
+		fmt.Printf("  - %s\n", c)
+	}
+
+	if write && fmtErr == nil && string(formatted) != string(src) {
+		os.WriteFile(file, formatted, 0644)
+		fmt.Printf("\nWrote %s\n", file)
+	} else if !write && fmtErr == nil && string(formatted) != string(src) {
+		fmt.Println("\nRun with --write to apply formatting fix")
+	}
+	return true
+}
+
+func goFormat(src []byte) ([]byte, error) {
+	// Use go/format from stdlib
+	cmd := exec.Command("gofmt")
+	cmd.Stdin = bytes.NewReader(src)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+// --- code test subcommand ---
+
+func runCodeTest(args []string) bool {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: nous code test <package> [-run regex]")
+		os.Exit(1)
+	}
+
+	testArgs := []string{"test", "-v", "-count=1"}
+	testArgs = append(testArgs, args...)
+
+	cmd := exec.Command("go", testArgs...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	start := time.Now()
+	err := cmd.Run()
+	dur := time.Since(start)
+
+	fmt.Println()
+	if err != nil {
+		fmt.Printf("FAILED (%.1fs)\n", dur.Seconds())
+	} else {
+		fmt.Printf("All tests passed (%.1fs)\n", dur.Seconds())
+	}
 	return true
 }
