@@ -4,26 +4,58 @@ import (
 	"strings"
 )
 
+// Generator is the interface that both MicroModel (transformer) and
+// MambaModel implement for text generation from knowledge triples.
+type Generator interface {
+	Generate(subject, relation, object string, maxLen int, temperature float32) string
+}
+
 // Bridge connects the micro model to Nous's cognitive systems.
+// Supports both transformer and Mamba backends transparently.
 type Bridge struct {
-	Model *MicroModel
+	Model     *MicroModel // transformer backend (legacy)
+	Mamba     *MambaModel // Mamba backend (preferred)
+	generator Generator   // unified interface
 }
 
 // LoadBridge loads a trained model from disk and wraps it in a Bridge.
+// Detects the model type from the file magic bytes automatically.
 func LoadBridge(path string) (*Bridge, error) {
+	// Try Mamba first (preferred)
+	mamba, err := LoadMambaModel(path)
+	if err == nil {
+		return &Bridge{Mamba: mamba, generator: mamba}, nil
+	}
+
+	// Fall back to transformer
 	m := &MicroModel{}
 	if err := m.Load(path); err != nil {
 		return nil, err
 	}
-	return &Bridge{Model: m}, nil
+	return &Bridge{Model: m, generator: m}, nil
+}
+
+// NewMambaBridge wraps a MambaModel in a Bridge.
+func NewMambaBridge(m *MambaModel) *Bridge {
+	return &Bridge{Mamba: m, generator: m}
+}
+
+// NewTransformerBridge wraps a MicroModel in a Bridge.
+func NewTransformerBridge(m *MicroModel) *Bridge {
+	return &Bridge{Model: m, generator: m}
+}
+
+// IsMamba returns true if the bridge is using the Mamba backend.
+func (b *Bridge) IsMamba() bool {
+	return b != nil && b.Mamba != nil
 }
 
 // GenerateSentence takes a knowledge triple and returns a fluent sentence.
 func (b *Bridge) GenerateSentence(subject, relation, object string) string {
-	if b == nil || b.Model == nil {
+	if b == nil || b.generator == nil {
 		return ""
 	}
-	return b.Model.Generate(subject, relation, object, 40, 0.7)
+	return b.generator.Generate(subject, relation, object, 40, 0.7)
 }
 
 // GenerateParagraph takes multiple fact triples and returns a coherent paragraph.
