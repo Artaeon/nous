@@ -451,3 +451,97 @@ func (cc *CognitiveCompiler) Execute(handler *CompiledHandler, slots map[string]
 
 	return result
 }
+
+// ---------------------------------------------------------------------------
+// Observe (feedback loop)
+// ---------------------------------------------------------------------------
+
+// Observe records user feedback on a handler execution. Accepted responses
+// increase quality; rejected ones decrease it. Handlers whose quality
+// drops below 0.3 are pruned.
+func (cc *CognitiveCompiler) Observe(handler *CompiledHandler, accepted bool) {
+	if handler == nil {
+		return
+	}
+
+	cc.mu.Lock()
+	if accepted {
+		// Exponential moving average toward 1.0.
+		handler.Quality = handler.Quality + (1.0-handler.Quality)*0.1
+	} else {
+		// Exponential moving average toward 0.0.
+		handler.Quality = handler.Quality * 0.8
+	}
+	// Prune if quality is too low.
+	if handler.Quality < 0.3 {
+		cc.removeHandlerUnlocked(handler.ID)
+	}
+	cc.mu.Unlock()
+
+	cc.Save()
+}
+
+// removeHandlerUnlocked removes a handler by ID. Caller must hold cc.mu.
+func (cc *CognitiveCompiler) removeHandlerUnlocked(id string) {
+	for i, h := range cc.Handlers {
+		if h.ID == id {
+			cc.Handlers = append(cc.Handlers[:i], cc.Handlers[i+1:]...)
+			return
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Prune
+// ---------------------------------------------------------------------------
+
+// Prune removes low-quality or stale handlers. A handler is pruned if its
+// quality is below 0.3, or it has not been used for 30 days with low quality.
+func (cc *CognitiveCompiler) Prune() {
+	cc.mu.Lock()
+	cc.pruneUnlocked()
+	cc.mu.Unlock()
+	cc.Save()
+}
+
+// ---------------------------------------------------------------------------
+// Stats
+// ---------------------------------------------------------------------------
+
+// Stats returns aggregated statistics about the cognitive compiler.
+func (cc *CognitiveCompiler) Stats() CompilerStats {
+	cc.mu.RLock()
+	defer cc.mu.RUnlock()
+
+	stats := CompilerStats{
+		TotalHandlers: len(cc.Handlers),
+	}
+	if len(cc.Handlers) == 0 {
+		return stats
+	}
+
+	cutoff := time.Now().Add(-30 * 24 * time.Hour)
+	qualitySum := 0.0
+	used := 0
+
+	for _, h := range cc.Handlers {
+		stats.TotalExecutions += h.Uses
+		qualitySum += h.Quality
+		if h.Uses > 0 {
+			used++
+		}
+		if h.Quality >= 0.8 {
+			stats.HighQuality++
+		}
+		if h.LastUsed.Before(cutoff) {
+			stats.Stale++
+		}
+	}
+
+	stats.AvgQuality = qualitySum / float64(len(cc.Handlers))
+	if len(cc.Handlers) > 0 {
+		stats.HitRate = float64(used) / float64(len(cc.Handlers))
+	}
+
+	return stats
+}
