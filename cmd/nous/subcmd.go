@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	goflag "flag"
 	"fmt"
 	"os"
 	"strings"
@@ -74,9 +75,119 @@ func runUnderstand(args []string, nlu *cognitive.NLU) bool {
 	return true
 }
 
+// --- generate subcommand ---
+
+func runGenerate(args []string, actions *cognitive.ActionRouter) bool {
+	fs := goflag.NewFlagSet("generate", goflag.ExitOnError)
+	facts := fs.String("facts", "", "Facts to compose text from")
+	style := fs.String("style", "paragraph", "Output style: paragraph, bullet, brief, detailed")
+	jsonOut := fs.Bool("json", false, "Emit JSON instead of plain text")
+	jsonShort := fs.Bool("j", false, "Emit JSON instead of plain text (short)")
+	quiet := fs.Bool("quiet", false, "Suppress headers, raw output only")
+	quietShort := fs.Bool("q", false, "Suppress headers, raw output only (short)")
+	fs.Parse(args)
+
+	wantJSON := *jsonOut || *jsonShort
+	wantQuiet := *quiet || *quietShort
+	_ = wantQuiet // reserved for future header suppression
+
+	// Collect facts: --facts flag, positional args, or stdin
+	input := *facts
+	if input == "" {
+		input = strings.Join(fs.Args(), " ")
+	}
+	if input == "" {
+		input = readStdin()
+	}
+	if input == "" {
+		fmt.Fprintln(os.Stderr, "usage: nous generate --facts \"...\" [--style paragraph|bullet|brief|detailed]")
+		os.Exit(1)
+	}
+
+	// Feed facts into the Composer as a factual query
+	var text string
+	if actions.Composer != nil {
+		ctx := actions.BuildComposeContext()
+		resp := actions.Composer.Compose(input, cognitive.RespFactual, ctx)
+		if resp != nil && resp.Text != "" {
+			text = resp.Text
+		}
+	}
+
+	// Fallback: if the Composer produced nothing, echo the input as-is
+	if text == "" {
+		text = input
+	}
+
+	// Apply style transformation
+	text = applyStyle(text, *style)
+
+	if wantJSON {
+		out := map[string]string{
+			"style": *style,
+			"text":  text,
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		enc.Encode(out)
+	} else {
+		fmt.Println(text)
+	}
+	return true
+}
+
+// applyStyle formats composed text according to the requested style.
+func applyStyle(text, style string) string {
+	switch style {
+	case "bullet":
+		sentences := splitSentences(text)
+		var bullets []string
+		for _, s := range sentences {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				bullets = append(bullets, "- "+s)
+			}
+		}
+		if len(bullets) > 0 {
+			return strings.Join(bullets, "\n")
+		}
+		return "- " + text
+	case "brief":
+		sentences := splitSentences(text)
+		if len(sentences) > 2 {
+			return strings.Join(sentences[:2], " ")
+		}
+		return text
+	case "detailed":
+		// For detailed, return the full text as-is (already maximally expanded)
+		return text
+	default: // "paragraph"
+		return text
+	}
+}
+
+// splitSentences naively splits text on sentence-ending punctuation.
+func splitSentences(text string) []string {
+	var sentences []string
+	var current strings.Builder
+	for i, r := range text {
+		current.WriteRune(r)
+		if (r == '.' || r == '!' || r == '?') && i+1 < len(text) && text[i+1] == ' ' {
+			s := strings.TrimSpace(current.String())
+			if s != "" {
+				sentences = append(sentences, s)
+			}
+			current.Reset()
+		}
+	}
+	if s := strings.TrimSpace(current.String()); s != "" {
+		sentences = append(sentences, s)
+	}
+	return sentences
+}
+
 // Subcommand stubs — each is implemented in subsequent commits.
 
-func runGenerate(_ []string, _ *cognitive.ActionRouter) bool   { return true }
 func runReason(_ []string, _ *cognitive.ActionRouter) bool     { return true }
 func runRemember(_ []string, _ *memory.LongTermMemory) bool    { return true }
 
