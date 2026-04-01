@@ -136,9 +136,226 @@ func (cc *CognitiveCompiler) Load() error {
 	return nil
 }
 
-// Ensure unused imports don't cause build failures. These will be used in
-// subsequent methods (Compile, Match, Execute, etc.).
-var (
-	_ = strings.ToLower
-	_ = time.Now
-)
+// ---------------------------------------------------------------------------
+// Pattern extraction (unexported helpers)
+// ---------------------------------------------------------------------------
+
+// extractPattern builds a QueryPattern from a raw input and a set of
+// recognised entities. Each entity value found in the input is replaced
+// with a named slot, and a regex with named capture groups is compiled.
+func extractPattern(input string, entities map[string]string, intent string) *QueryPattern {
+	if len(entities) == 0 || input == "" {
+		return nil
+	}
+
+	lower := strings.ToLower(input)
+	template := lower
+
+	// Collect slot names in a stable order (sorted by position in input).
+	type slotPos struct {
+		name string
+		pos  int
+	}
+	var slots []slotPos
+	for key, val := range entities {
+		valLower := strings.ToLower(val)
+		idx := strings.Index(lower, valLower)
+		if idx < 0 {
+			continue
+		}
+		slots = append(slots, slotPos{name: key, pos: idx})
+	}
+	if len(slots) == 0 {
+		return nil
+	}
+	// Sort by position so replacements don't shift offsets unexpectedly.
+	for i := 1; i < len(slots); i++ {
+		for j := i; j > 0 && slots[j].pos < slots[j-1].pos; j-- {
+			slots[j], slots[j-1] = slots[j-1], slots[j]
+		}
+	}
+
+	// Replace entity values with {slot_name} placeholders.
+	var slotNames []string
+	for _, s := range slots {
+		valLower := strings.ToLower(entities[s.name])
+		template = strings.Replace(template, valLower, "{"+s.name+"}", 1)
+		slotNames = append(slotNames, s.name)
+	}
+
+	// Build regex: escape fixed text, swap placeholders for named groups.
+	regexStr := buildPatternRegex(template, slotNames)
+	compiled, err := regexp.Compile(regexStr)
+	if err != nil {
+		return nil
+	}
+
+	// Confidence heuristic: more fixed text relative to total length means
+	// higher confidence. Many slots lower it.
+	fixedLen := len(template)
+	for _, name := range slotNames {
+		fixedLen -= len("{" + name + "}")
+	}
+	confidence := float64(fixedLen) / float64(len(template)+1)
+	if confidence < 0.2 {
+		return nil // pattern is too generic
+	}
+	if len(slotNames) > 3 {
+		confidence *= 0.7
+	}
+
+	return &QueryPattern{
+		Template:   template,
+		Slots:      slotNames,
+		RegexStr:   regexStr,
+		Intent:     intent,
+		Confidence: confidence,
+		compiled:   compiled,
+	}
+}
+
+// buildPatternRegex converts a template like "what is {topic}" into a regex
+// string: `^what is (?P<topic>.+?)$`.
+func buildPatternRegex(template string, slotNames []string) string {
+	// Temporarily replace slot placeholders with unique tokens so they
+	// survive regexp.QuoteMeta.
+	const tokenPrefix = "\x00SLOT_"
+	const tokenSuffix = "\x00"
+	tmp := template
+	for _, name := range slotNames {
+		tmp = strings.Replace(tmp, "{"+name+"}", tokenPrefix+name+tokenSuffix, 1)
+	}
+
+	// Escape everything for a literal match.
+	escaped := regexp.QuoteMeta(tmp)
+
+	// Restore slot placeholders as named capture groups.
+	for _, name := range slotNames {
+		escapedToken := regexp.QuoteMeta(tokenPrefix + name + tokenSuffix)
+		escaped = strings.Replace(escaped, escapedToken, "(?P<"+name+">.+?)", 1)
+	}
+
+	return "^" + escaped + "$"
+}
+
+// ---------------------------------------------------------------------------
+// Template extraction (unexported helper)
+// ---------------------------------------------------------------------------
+
+// extractTemplate builds a response template by replacing entity values in
+// the response with their slot names.
+func extractTemplate(response string, entities map[string]string) string {
+	if len(entities) == 0 {
+		return response
+	}
+	tmpl := response
+	for key, val := range entities {
+		if val == "" {
+			continue
+		}
+		// Case-insensitive replacement: find the value in the response
+		// preserving surrounding text.
+		lower := strings.ToLower(tmpl)
+		valLower := strings.ToLower(val)
+		for {
+			idx := strings.Index(lower, valLower)
+			if idx < 0 {
+				break
+			}
+			tmpl = tmpl[:idx] + "{" + key + "}" + tmpl[idx+len(val):]
+			lower = strings.ToLower(tmpl)
+		}
+	}
+	return tmpl
+}
+
+// ---------------------------------------------------------------------------
+// Compile
+// ---------------------------------------------------------------------------
+
+// Compile extracts a pattern from input and a response template, producing
+// a CompiledHandler that can answer similar queries deterministically.
+// Returns nil if the pattern is too specific or the response too variable.
+func (cc *CognitiveCompiler) Compile(input string, response string, intent string, entities map[string]string) *CompiledHandler {
+	if input == "" || response == "" {
+		return nil
+	}
+
+	pattern := extractPattern(input, entities, intent)
+	if pattern == nil {
+		return nil
+	}
+
+	tmpl := extractTemplate(response, entities)
+
+	// Build slot definitions from the pattern's slot names.
+	var slotDefs []SlotDef
+	for _, name := range pattern.Slots {
+		st := "entity"
+		if strings.HasSuffix(name, "_lookup") || name == "knowledge" {
+			st = "knowledge_lookup"
+		}
+		slotDefs = append(slotDefs, SlotDef{
+			Name: name,
+			Type: st,
+		})
+	}
+
+	now := time.Now()
+	handler := &CompiledHandler{
+		ID:       compilerHandlerID(pattern.Template),
+		Pattern:  pattern,
+		Template: tmpl,
+		Slots:    slotDefs,
+		Source:   "neural",
+		Quality:  0.6, // initial quality; needs observation to increase
+		Compiled: now,
+		LastUsed: now,
+	}
+
+	cc.mu.Lock()
+	// Deduplicate: replace existing handler with the same pattern template.
+	replaced := false
+	for i, h := range cc.Handlers {
+		if h.Pattern.Template == pattern.Template {
+			cc.Handlers[i] = handler
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		cc.Handlers = append(cc.Handlers, handler)
+	}
+	// Enforce capacity.
+	if len(cc.Handlers) > cc.MaxHandlers {
+		cc.pruneUnlocked()
+	}
+	cc.mu.Unlock()
+
+	cc.Save()
+	return handler
+}
+
+// compilerHandlerID builds a short deterministic ID from a pattern template.
+func compilerHandlerID(template string) string {
+	return "ch_" + shortHash(template)
+}
+
+// pruneUnlocked removes stale/low-quality handlers. Caller must hold cc.mu.
+func (cc *CognitiveCompiler) pruneUnlocked() {
+	cutoff := time.Now().Add(-30 * 24 * time.Hour)
+	kept := make([]*CompiledHandler, 0, len(cc.Handlers))
+	for _, h := range cc.Handlers {
+		if h.Quality < 0.3 {
+			continue
+		}
+		if h.Uses == 0 && h.LastUsed.Before(cutoff) {
+			continue
+		}
+		if h.Uses > 0 && h.LastUsed.Before(cutoff) && h.Quality < 0.5 {
+			continue
+		}
+		kept = append(kept, h)
+	}
+	cc.Handlers = kept
+}
