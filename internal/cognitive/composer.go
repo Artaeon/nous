@@ -1310,7 +1310,11 @@ func (c *Composer) combineTaggedWithFlow(tagged []taggedSentence) string {
 	b.WriteString(tagged[0].Text)
 	for i := 1; i < len(tagged); i++ {
 		connector := c.connectorBetween(tagged[i-1].Relation, tagged[i].Relation)
-		b.WriteString(" " + connector + " " + connectorLowerFirst(tagged[i].Text))
+		if connector == "" {
+			b.WriteString(" " + tagged[i].Text)
+		} else {
+			b.WriteString(" " + connector + " " + connectorLowerFirst(tagged[i].Text))
+		}
 	}
 	return b.String()
 }
@@ -3027,7 +3031,11 @@ func (c *Composer) flowConnectors(sentences []string) string {
 	b.WriteString(sentences[0])
 	for i := 1; i < len(sentences); i++ {
 		connector := c.pick(allConnectors)
-		b.WriteString(" " + connector + " " + connectorLowerFirst(sentences[i]))
+		if connector == "" {
+			b.WriteString(" " + sentences[i])
+		} else {
+			b.WriteString(" " + connector + " " + connectorLowerFirst(sentences[i]))
+		}
 	}
 	return b.String()
 }
@@ -3044,7 +3052,11 @@ func (c *Composer) flowMixed(sentences []string) string {
 	for i := 1; i < len(sentences); i++ {
 		if i%2 == 1 {
 			connector := c.pick(allConnectors)
-			b.WriteString(" " + connector + " " + connectorLowerFirst(sentences[i]))
+			if connector == "" {
+				b.WriteString(" " + sentences[i])
+			} else {
+				b.WriteString(" " + connector + " " + connectorLowerFirst(sentences[i]))
+			}
 		} else {
 			b.WriteString(" " + sentences[i])
 		}
@@ -3376,14 +3388,28 @@ var inferredPrefixes = []string{
 }
 
 var allConnectors = []string{
-	"Additionally,", "Also,", "Moreover,",
-	"Furthermore,", "Beyond that,",
-	"Notably,",
+	"",  // no connector — just continue naturally
+	"",  // doubled to increase probability of clean flow
+	"In addition,",
+	"What stands out is that",
+	"It is worth mentioning that",
+	"Interestingly,",
+	"On a related note,",
+	"Looking deeper,",
+	"Equally important,",
+	"Also,",
+	"Moreover,",
 }
 
 var contrastConnectors = []string{
-	"That said,", "However,",
-	"At the same time,", "Meanwhile,",
+	"That said,",
+	"However,",
+	"At the same time,",
+	"Meanwhile,",
+	"On the other hand,",
+	"Then again,",
+	"Even so,",
+	"Still,",
 	"In contrast,",
 }
 
@@ -3395,36 +3421,36 @@ var contrastConnectors = []string{
 var semanticConnectors = map[RelType]map[RelType][]string{
 	// After identity → explaining properties/location/origin
 	RelIsA: {
-		RelLocatedIn:   {"Geographically,", "In terms of location,"},
-		RelFoundedIn:   {"Historically,", "In terms of origins,"},
-		RelFoundedBy:   {"In terms of its creation,", "Regarding its origins,"},
-		RelHas:         {"Among its characteristics,", "Notably,"},
-		RelUsedFor:     {"In practice,", "On the applied side,"},
-		RelDescribedAs: {"More specifically,", "In particular,"},
+		RelLocatedIn:   {"", "Geographically,", "In terms of location,", "As for where it sits,"},
+		RelFoundedIn:   {"", "Historically,", "Looking back,", "Going back in time,"},
+		RelFoundedBy:   {"", "In terms of its creation,", "Behind the scenes,", "As for who started it,"},
+		RelHas:         {"", "Among its characteristics,", "One thing that stands out:", "It comes with"},
+		RelUsedFor:     {"", "In practice,", "When put to use,", "On the practical side,"},
+		RelDescribedAs: {"", "More specifically,", "In particular,", "To be more precise,"},
 	},
 	// After origin → properties/purpose
 	RelFoundedIn: {
-		RelFoundedBy: {"Regarding its creation,", "On the founding side,"},
-		RelHas:       {"Among its features,", "Notably,"},
-		RelUsedFor:   {"In practice,", "On the applied side,"},
-		RelIsA:       {"At its core,", "Fundamentally,"},
+		RelFoundedBy: {"", "Regarding its creation,", "As for who was behind it,"},
+		RelHas:       {"", "Among its features,", "It brings with it", "One notable aspect:"},
+		RelUsedFor:   {"", "In practice,", "When put to use,"},
+		RelIsA:       {"", "At its core,", "Fundamentally,"},
 	},
 	RelFoundedBy: {
-		RelFoundedIn: {"Historically,", "In terms of timing,"},
-		RelHas:       {"Among its features,", "Notably,"},
-		RelUsedFor:   {"In practice,", "On the applied side,"},
+		RelFoundedIn: {"", "Historically,", "In terms of timing,", "Looking at the timeline,"},
+		RelHas:       {"", "Among its features,", "It offers", "One notable aspect:"},
+		RelUsedFor:   {"", "In practice,", "When put to use,"},
 	},
 	// After features → more features or purpose
 	RelHas: {
-		RelHas:     {"In addition,", "Beyond that,"},
-		RelUsedFor: {"In practice,", "On the applied side,"},
-		RelOffers:  {"Additionally,", "Beyond that,"},
+		RelHas:     {"", "", "It also has", "Another aspect is", "On top of that,"},
+		RelUsedFor: {"", "In practice,", "When put to use,", "This makes it useful for"},
+		RelOffers:  {"", "It also provides", "Along with that,"},
 	},
 	// After purpose → related concepts
 	RelUsedFor: {
-		RelUsedFor:   {"Beyond that,", "In addition,"},
-		RelRelatedTo: {"On a related note,", "Connected to this,"},
-		RelHas:       {"Worth noting,", "Additionally,"},
+		RelUsedFor:   {"", "", "It also serves", "Another use is"},
+		RelRelatedTo: {"", "On a related note,", "Connected to this,", "This ties into"},
+		RelHas:       {"", "It also features", "Alongside that,"},
 	},
 }
 
@@ -3437,9 +3463,9 @@ func (c *Composer) connectorBetween(prev, cur RelType) string {
 			return c.pick(conns)
 		}
 	}
-	// Same relation type → "Similarly," / "Likewise,"
+	// Same relation type → sometimes no connector, sometimes explicit parallel
 	if prev == cur {
-		return c.pick([]string{"Similarly,", "Likewise,", "Along the same lines,"})
+		return c.pick([]string{"", "", "Similarly,", "Likewise,", "Along the same lines,", "In much the same way,"})
 	}
 	// Contrast relations
 	if cur == RelContradicts {
