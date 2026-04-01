@@ -505,7 +505,10 @@ Commands:
   generate <type> [flags]         Generate code boilerplate
   run      <file.go>              Compile and execute a Go file
   fix      <file.go> [--write]    Auto-fix common Go issues
-  test     <package> [-run regex] Run tests with summary`)
+  test     <package> [-run regex] Run tests with summary
+  doc      <file>[:<func>]        Generate doc comments for undocumented code
+  deps     <file>:<func>          Show dependency graph (callers/callees)
+  diff     [--staged|--commit H]  Explain code changes in natural language`)
 		os.Exit(1)
 	}
 
@@ -522,6 +525,10 @@ Commands:
 		return runCodeFix(args[1:])
 	case "test":
 		return runCodeTest(args[1:])
+	case "doc":
+		return runCodeDoc(args[1:])
+	case "deps":
+		return runCodeDeps(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown code command: %s\n", args[0])
 		os.Exit(1)
@@ -971,6 +978,133 @@ func runCodeTest(args []string) bool {
 		fmt.Printf("FAILED (%.1fs)\n", dur.Seconds())
 	} else {
 		fmt.Printf("All tests passed (%.1fs)\n", dur.Seconds())
+	}
+	return true
+}
+
+// --- code doc subcommand ---
+
+func runCodeDoc(args []string) bool {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: nous code doc <file>[:<func>] [--write]")
+		os.Exit(1)
+	}
+
+	write := false
+	target := ""
+	for _, a := range args {
+		if a == "--write" || a == "-w" {
+			write = true
+		} else if target == "" {
+			target = a
+		}
+	}
+
+	file, funcName := target, ""
+	if idx := strings.LastIndex(target, ":"); idx > 0 {
+		file = target[:idx]
+		funcName = target[idx+1:]
+	}
+
+	gen := cognitive.NewAutoDocGenerator()
+
+	if funcName != "" {
+		// Document a single function
+		doc := gen.GenerateDoc(file, funcName)
+		if doc == "" {
+			fmt.Println("no documentation needed (already documented or not found)")
+		} else {
+			fmt.Println(doc)
+		}
+		return true
+	}
+
+	if write {
+		// Write docs for entire directory
+		info, err := os.Stat(file)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		dir := file
+		if !info.IsDir() {
+			dir = "."
+		}
+		count, err := gen.DocumentPackage(dir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Documented %d function(s)\n", count)
+	} else {
+		// Show suggested docs as diff
+		diff := gen.GenerateDocForFile(file)
+		if diff == "" {
+			fmt.Println("all exported functions are already documented")
+		} else {
+			fmt.Print(diff)
+			fmt.Println("\nRun with --write to apply")
+		}
+	}
+	return true
+}
+
+// --- code deps subcommand ---
+
+func runCodeDeps(args []string) bool {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: nous code deps <file>:<funcName> [--impact]")
+		os.Exit(1)
+	}
+
+	impact := false
+	target := ""
+	for _, a := range args {
+		if a == "--impact" {
+			impact = true
+		} else if target == "" {
+			target = a
+		}
+	}
+
+	file, funcName := target, ""
+	if idx := strings.LastIndex(target, ":"); idx > 0 {
+		file = target[:idx]
+		funcName = target[idx+1:]
+	}
+	if funcName == "" {
+		fmt.Fprintln(os.Stderr, "usage: nous code deps <file>:<funcName>")
+		os.Exit(1)
+	}
+
+	// Build dep graph from the file's directory
+	info, _ := os.Stat(file)
+	dir := "."
+	if info != nil && !info.IsDir() {
+		dir = file[:strings.LastIndex(file, "/")]
+		if dir == "" {
+			dir = "."
+		}
+	}
+
+	graph := cognitive.NewDepGraph()
+	if err := graph.Build(dir); err != nil {
+		fmt.Fprintf(os.Stderr, "error building dependency graph: %v\n", err)
+		os.Exit(1)
+	}
+
+	if impact {
+		affected := graph.Impact(funcName)
+		if len(affected) == 0 {
+			fmt.Printf("No transitive callers found for %s\n", funcName)
+		} else {
+			fmt.Printf("If %s changes, these are affected:\n", funcName)
+			for _, a := range affected {
+				fmt.Printf("  - %s\n", a)
+			}
+		}
+	} else {
+		fmt.Print(graph.Render(funcName, 2))
 	}
 	return true
 }
