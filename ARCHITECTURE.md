@@ -1,27 +1,37 @@
 # Nous (νοῦς) — Architecture Reference
 
 **Native Orchestration of Unified Streams**
-Version 1.0.0 | Go 1.22+ | Zero External Dependencies | ~14MB Static Binary | 51 Built-in Tools
+Version 1.1.0 | Go 1.22+ | Zero External Dependencies | ~19MB Static Binary | 52 Built-in Tools | Mamba SSM
 
 ---
 
 ## Overview
 
-Nous is a fully local AI assistant powered by a pure cognitive engine — no external models required. A deterministic NLU engine with 30+ intent categories and 51 built-in tools handles queries through pattern matching, knowledge graphs, and compositional generation. The Thinking Engine handles open-ended queries with frame-based generation and discourse planning, all running in ~50 MB RAM.
+Nous is a fully local AI assistant powered by a pure cognitive engine — no external models required. A deterministic NLU engine with 30+ intent categories and 52 built-in tools handles queries through pattern matching, knowledge graphs, and compositional generation. A cognitive compiler progressively compiles query patterns into deterministic handlers (~0ms), and a custom Mamba SSM with knowledge-constrained decoding generates neural responses with zero hallucination. The Thinking Engine handles remaining open-ended queries with frame-based generation and discourse planning, all running in ~50 MB RAM.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                           USER INPUT                             │
-│                    (Terminal / Telegram / Web UI)                 │
+│                    (Terminal / Telegram / Web UI / CLI pipes)     │
 └──────────────────────┬───────────────────────────────────────────┘
                        │
                        ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│                     NLU ENGINE (first pass)                       │
+│                 COGNITIVE COMPILER (first pass)                   │
+│         Compiled pattern handlers, ~0ms                          │
+│         Regex with named capture groups → slot-filled templates  │
+│                                                                  │
+│  HIT → execute compiled handler → done (~0ms)                    │
+│  MISS ↓                                                          │
+└──────┬───────────────────────────────────────────────────────────┘
+       │
+       ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                     NLU ENGINE (second pass)                      │
 │         Deterministic intent classification, <1ms                 │
 │         30+ intent categories, entity extraction                  │
 │                                                                  │
-│  Confidence ≥ 0.5 → ActionRouter → Direct tool dispatch          │
+│  Confidence ≥ 0.5 → ActionRouter → Direct tool dispatch (52)     │
 │  weather, convert, timer, translate, volume, notes, todos,       │
 │  calendar, hash, dict, network, process, app, brightness,        │
 │  archive, diskusage, qrcode, screenshot, email, news, ...        │
@@ -60,7 +70,34 @@ Nous is a fully local AI assistant powered by a pure cognitive engine — no ext
                                   │   Up to 6 tool iterations  │
                                   │   Knowledge graph lookup   │
                                   │   Compositional generation │
-                                  └────────────────────────────┘
+                                  └──────────┬─────────────────┘
+                                             │
+                                             ▼
+                              ┌──────────────────────────────┐
+                              │ MAMBA SSM (neural generation) │
+                              │ Constrained beam search       │
+                              │ FactTrie → zero hallucination │
+                              └──────────────────────────────┘
+```
+
+### Response Pipeline (linear summary)
+
+```
+User Query
+    ↓
+Cognitive Compiler (compiled handlers, ~0ms)
+    ↓ (miss)
+NLU Engine (neural + pattern, <1ms)
+    ↓
+ActionRouter (52 tools, knowledge graph)
+    ↓
+Mamba SSM (constrained neural generation)
+    ↓
+Composer (template + discourse planning)
+    ↓
+Quality Gate
+    ↓
+Response
 ```
 
 ---
@@ -228,7 +265,7 @@ Nous has 8 interconnected learning systems:
 
 ---
 
-## Anti-Hallucination Architecture: 5 Layers
+## Anti-Hallucination Architecture: 6 Layers
 
 ```
 Layer 1: Intent Compilation
@@ -249,11 +286,81 @@ Layer 4: User Profile Grounding
 Layer 5: Post-Generation Validation
   → Check generated response against knowledge store
   → Flag contradictions before user sees them
+
+Layer 6: Knowledge-Constrained Decoding (Mamba)
+  → FactTrie restricts beam search to verified token sequences
+  → Neural generation physically cannot produce ungrounded text
 ```
 
 ---
 
-## Tool System: 51 Built-In Tools
+## Mamba Language Model (Selective State Spaces)
+
+Nous includes a custom Mamba SSM implementation in pure Go — the first
+decoder-only structured state space model built without any ML framework.
+
+Architecture:
+- Selective State Space Model (S6) with O(n) training, O(1)/token inference
+- 8 Mamba blocks: conv1d → SiLU → input-dependent SSM → gated output
+- 7.6M parameters (256-dim, 16-state, 4-conv, 2x expand)
+- Stateful inference: hidden state updated per token, no KV cache
+- Knowledge-constrained beam search: FactTrie ensures zero hallucination
+
+Training: `nous-train mamba -knowledge knowledge/ -epochs 50`
+Binary format: MAMB magic, auto-detected by Bridge loader
+
+---
+
+## Cognitive Compiler (Progressive Self-Improvement)
+
+Every response generation feeds into the CognitiveCompiler, which extracts
+query patterns and compiles them into deterministic handlers.
+
+Pipeline:
+1. Query → extractPattern → regex with named capture groups
+2. Response → extractTemplate → slot-filled template
+3. Future matching queries → execute compiled handler (~0ms)
+4. Quality feedback loop → EMA-based scoring, auto-pruning
+
+Over time: Day 1 = 80% instant, Week 1 = 90%, Month 1 = 99%
+
+---
+
+## Federated Crystal Sharing
+
+Privacy-preserving collective intelligence:
+- SharedCrystal: pattern + response template (no personal data)
+- CrystalBundle: export/import with SHA-256 checksums
+- Registry: file-based, search by keyword/intent
+- TrustScorer: quality × votes × recency × bundle trust
+
+REPL: `/federation status|export|import|search|top`
+
+---
+
+## UNIX CLI Primitives
+
+Pipe-friendly cognitive infrastructure:
+- `nous understand <text>` → JSON `{intent, action, entities, confidence}`
+- `nous generate --facts "..." --style paragraph|bullet|brief`
+- `nous reason <question>` → JSON `{question, analysis, conclusion}`
+- `nous remember <key> [value]` → store/recall/list
+
+All accept stdin, output JSON, composable with pipes.
+
+---
+
+## Multi-Hop Knowledge Reasoning
+
+Traverses the knowledge graph to find connections between entities:
+- Direct edges: A → B
+- Two-hop paths: A → X → B
+- Shared properties: common attributes
+- Natural language explanation of connections
+
+---
+
+## Tool System: 52 Built-In Tools
 
 ### Core File Tools
 
@@ -385,13 +492,14 @@ Layer 5: Post-Generation Validation
 ```
 
 All channels go through identical processing:
-1. Classify query (51 patterns)
-2. Extract personal facts
-3. Check response crystal cache
-4. Route to appropriate path (fast/medium/full)
-5. Record in episodic memory
-6. Collect training data
-7. Learn response crystal (async)
+1. Check cognitive compiler (compiled handlers)
+2. Classify query (51 patterns)
+3. Extract personal facts
+4. Check response crystal cache
+5. Route to appropriate path (fast/medium/full)
+6. Record in episodic memory
+7. Collect training data
+8. Learn response crystal (async)
 
 ### Web UI (5 tabs)
 - **Chat**: Terminal-style interface with task sidebar and job panel
@@ -443,7 +551,7 @@ services:
       - nous_data:/data
 ```
 
-- **Image size**: 41MB (Alpine + 14MB binary + knowledge files)
+- **Image size**: ~46MB (Alpine + 19MB binary + knowledge files)
 - **Startup time**: ~2 seconds
 - **Knowledge**: 660 chunks auto-ingested on first run (background)
 - **Memory**: All backed up (5 timestamped copies per file)
@@ -452,9 +560,9 @@ services:
 
 | Component | RAM | Disk | CPU |
 |-----------|-----|------|-----|
-| Nous binary | ~50 MB | 14 MB | negligible |
+| Nous binary | ~50 MB | 19 MB | negligible |
 | Memory files | negligible | < 50 MB | — |
-| **Total** | **~50 MB** | **~64 MB** | **any** |
+| **Total** | **~50 MB** | **~69 MB** | **any** |
 
 No external services, no model downloads, no special hardware required.
 
@@ -488,13 +596,13 @@ All data stored as plain JSON with atomic writes and automatic backups:
 
 ## What Makes Nous Different
 
-1. **Pure cognitive engine**: No external models required. The Thinking Engine, Discourse Planner, and Compositional Generation handle all open-ended queries deterministically.
+1. **Pure cognitive engine**: No external models required. A custom Mamba SSM (7.6M params, pure Go) handles neural generation, while the Thinking Engine, Discourse Planner, and Compositional Generation handle all other open-ended queries deterministically.
 
-2. **NLU-first architecture**: Every query hits the NLU engine first (<1ms). Pattern matching, word lists, and entity extraction route to tools directly. Only queries the NLU can't handle fall through to the cognitive pipeline.
+2. **Compiler-first architecture**: Every query first hits the Cognitive Compiler (~0ms compiled handlers), then the NLU engine (<1ms). Pattern matching, word lists, and entity extraction route to tools directly. Only queries neither can handle fall through to the cognitive pipeline.
 
-3. **Progressive compilation**: Every generated response becomes a cached crystal. The system gets faster over time — from 80% instant on day 1 to 98% after months.
+3. **Progressive compilation**: Every generated response feeds back into the Cognitive Compiler and crystal cache. The system gets faster over time — from 80% instant on day 1 to 99% after a month.
 
-4. **Zero dependencies**: Single Go binary, no Python, no npm, no Docker required for the binary itself. 51 tools implemented in pure Go + standard Linux utilities.
+4. **Zero dependencies**: Single Go binary, no Python, no npm, no Docker required for the binary itself. 52 tools implemented in pure Go + standard Linux utilities.
 
 5. **Self-improving**: 8 learning systems evolve tool descriptions, cache patterns, collect training data, and learn from failures.
 
