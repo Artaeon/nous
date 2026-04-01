@@ -221,9 +221,27 @@ func (ca *CodeAgent) ParseRequest(desc string) *CodePlan {
 	ctx := ExtractContext(desc)
 	plan.Storage = ctx["storage"]
 
-	// Step 4: If no domain matched, fall back to entity extraction
+	// Step 4: If no domain matched, use smart entity extraction
 	if plan.Domain == nil {
-		plan.Entities = extractEntities(lower)
+		smartEntity := ExtractSmartEntity(desc)
+		if smartEntity != nil {
+			plan.Entities = []Entity{*smartEntity}
+			// Build a synthetic domain from the smart entity
+			plan.Domain = &DomainDef{
+				Name:   strings.ToLower(smartEntity.Name),
+				Entity: *smartEntity,
+				Operations: []Operation{
+					{Name: "add", Verb: "Add", Description: "create a new " + strings.ToLower(smartEntity.Name), CLIUsage: "add [fields...]"},
+					{Name: "list", Verb: "List", Description: "list all " + strings.ToLower(smartEntity.Name) + "s", CLIUsage: "list"},
+					{Name: "view", Verb: "View", Description: "view details", CLIUsage: "view <id>"},
+					{Name: "edit", Verb: "Edit", Description: "edit a " + strings.ToLower(smartEntity.Name), CLIUsage: "edit <id>"},
+					{Name: "delete", Verb: "Delete", Description: "delete a " + strings.ToLower(smartEntity.Name), CLIUsage: "delete <id>"},
+					{Name: "search", Verb: "Search", Description: "search " + strings.ToLower(smartEntity.Name) + "s", CLIUsage: "search <query>"},
+				},
+			}
+		} else {
+			plan.Entities = extractEntities(lower)
+		}
 	}
 
 	// Step 5: Generate project name
@@ -299,6 +317,24 @@ func extractEntities(desc string) []Entity {
 			{Name: "Value", Type: "string", JSON: "value"},
 		},
 	}}
+}
+
+// genValidation generates a validation check for the first field of an entity.
+func genValidation(e Entity) string {
+	if len(e.Fields) == 0 {
+		return "// no validation"
+	}
+	f := e.Fields[0]
+	switch f.Type {
+	case "string":
+		return fmt.Sprintf("if item.%s == \"\" {\n\t\thttp.Error(w, `{\"error\":\"%s is required\"}`, http.StatusBadRequest)\n\t\treturn\n\t}", f.Name, f.JSON)
+	case "float64":
+		return fmt.Sprintf("if item.%s == 0 {\n\t\thttp.Error(w, `{\"error\":\"%s is required\"}`, http.StatusBadRequest)\n\t\treturn\n\t}", f.Name, f.JSON)
+	case "int":
+		return fmt.Sprintf("if item.%s == 0 {\n\t\thttp.Error(w, `{\"error\":\"%s is required\"}`, http.StatusBadRequest)\n\t\treturn\n\t}", f.Name, f.JSON)
+	default:
+		return "// no validation"
+	}
 }
 
 func containsAnyWord(s string, words ...string) bool {
@@ -466,11 +502,6 @@ func (s *%sStore) Delete(id int) error {
 func (ca *CodeAgent) genHandlers(e Entity) string {
 	name := e.Name
 	lower := strings.ToLower(name)
-	firstField := "Name"
-	if len(e.Fields) > 0 {
-		firstField = e.Fields[0].Name
-	}
-	firstJSON := strings.ToLower(firstField)
 
 	return fmt.Sprintf(`package main
 
@@ -506,10 +537,7 @@ func (s *Server) Create%s(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `+"`"+`{"error":"invalid JSON"}`+"`"+`, http.StatusBadRequest)
 		return
 	}
-	if item.%s == "" {
-		http.Error(w, `+"`"+`{"error":"%s is required"}`+"`"+`, http.StatusBadRequest)
-		return
-	}
+	%s
 	created := s.store.Create(&item)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -578,7 +606,7 @@ func extractID(path string) (int, error) {
 		name, name,
 		name, lower, lower, name,
 		name, lower, lower, name, name,
-		firstField, firstJSON,
+		genValidation(e),
 		name, lower, lower, name,
 		name, lower, lower, name, name,
 		name, lower, lower, name,
