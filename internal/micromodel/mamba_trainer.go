@@ -77,8 +77,6 @@ func (m *MambaModel) trainStep(ex TrainingExample, lr float32) float32 {
 	dim := m.Config.ModelDim
 	vocab := m.Config.VocabSize
 	inner := m.Config.InnerDim()
-	dState := m.Config.StateDim
-	kSize := m.Config.ConvDim
 
 	// Tokenize: for decoder-only, concatenate triple + target
 	// Format: <bos> subject <sep> relation <sep> object <sep> target_tokens <eos>
@@ -197,30 +195,19 @@ func (m *MambaModel) trainStep(ex TrainingExample, lr float32) float32 {
 		}
 	}
 
-	// Step 3: Backprop through Mamba blocks (reverse order)
-	// Optimized: trains OutProj, gating, SSM params (A, D), and conv1D.
-	// InProj weights are frozen (too expensive for CPU training, and the
-	// other parameters provide sufficient learning capacity).
+	// Step 3: Backprop through Mamba block output projections only.
+	// CPU-optimized: trains OutProj weights and biases per layer.
+	// SSM params (A, D), InProj, and conv1D are frozen — the SSM backward
+	// is O(seqLen × dInner × dState) per layer which is too expensive.
+	// The output projections + embeddings provide sufficient learning
+	// capacity for knowledge-grounded generation.
 	dX := dHidden
 
 	for li := len(m.Layers) - 1; li >= 0; li-- {
 		l := &m.Layers[li]
 		cache := &caches[li]
 
-		// Backprop through output projection: out = gated @ OutProjW + OutProjB
-		// Use matmul for batch gradient computation instead of element-wise loops
-		// dGated = dX @ OutProjW^T (transposed)
-		dGated := make([]float32, seqLen*inner)
-		for t := 0; t < seqLen; t++ {
-			for j := 0; j < inner; j++ {
-				var sum float32
-				for d := 0; d < dim; d++ {
-					sum += dX[t*dim+d] * l.OutProjW[j*dim+d]
-				}
-				dGated[t*inner+j] = sum
-			}
-		}
-		// Update OutProjW: accumulate gradient across all timesteps, then apply
+		// Update OutProj bias: accumulate gradient across timesteps
 		for d := 0; d < dim; d++ {
 			var bGrad float32
 			for t := 0; t < seqLen; t++ {
@@ -228,6 +215,8 @@ func (m *MambaModel) trainStep(ex TrainingExample, lr float32) float32 {
 			}
 			l.OutProjB[d] -= lr * clipGrad(bGrad, gradClip)
 		}
+
+		// Update OutProj weights: dW = gated^T @ dX (accumulated over time)
 		for j := 0; j < inner; j++ {
 			for d := 0; d < dim; d++ {
 				var wGrad float32
@@ -238,49 +227,7 @@ func (m *MambaModel) trainStep(ex TrainingExample, lr float32) float32 {
 			}
 		}
 
-		// Backprop through gating: gated = ssmOut * silu(z)
-		dSsmOut := vecMul(dGated, cache.zSilu)
-
-		// Backprop through SSM: selective scan backward
-		_, _, dAGrad, _, _, dDGrad := SelectiveScanBackward(
-			dSsmOut, cache.xSilu, seqLen, inner,
-			cache.dt, cache.A, dState,
-			cache.B, cache.C, l.D,
-		)
-
-		// Update D (skip connection)
-		for i := 0; i < inner; i++ {
-			l.D[i] -= lr * clipGrad(dDGrad[i], gradClip)
-		}
-
-		// Update A_log: dA_log = dA * (-exp(A_log))
-		for i := range l.ALog {
-			aVal := -float32(math.Exp(float64(l.ALog[i])))
-			l.ALog[i] -= lr * clipGrad(dAGrad[i]*aVal, gradClip)
-		}
-
-		// Conv1D backward (lightweight — kernel is small)
-		dZSilu := vecMul(dGated, cache.ssmOut)
-		_ = siluBackward(cache.zBranch, dZSilu) // compute but don't need for frozen InProj
-
-		dXSilu, _, _, _, _, _ := SelectiveScanBackward(
-			dSsmOut, cache.xSilu, seqLen, inner,
-			cache.dt, cache.A, dState,
-			cache.B, cache.C, l.D,
-		)
-		dXConv := siluBackward(cache.xConv, dXSilu)
-		_, dConvW, dConvB := conv1DBackward(dXConv, cache.xBranch, seqLen, inner, l.Conv1DW, kSize)
-
-		for i := range l.Conv1DW {
-			l.Conv1DW[i] -= lr * clipGrad(dConvW[i], gradClip)
-		}
-		for i := range l.Conv1DB {
-			l.Conv1DB[i] -= lr * clipGrad(dConvB[i], gradClip)
-		}
-
-		// InProj is FROZEN — too expensive for CPU backprop (O(seqLen × 2×inner × dim))
-		// The output projection, SSM params, and conv1D provide sufficient capacity.
-		// dX passes through the residual unchanged.
+		// dX passes through residual unchanged for next layer
 	}
 
 	// Step 4: Update token embeddings
