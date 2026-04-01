@@ -1,10 +1,12 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/artaeon/nous/internal/ollama"
 	"github.com/artaeon/nous/internal/tools"
 )
 
@@ -139,7 +141,7 @@ func (e *Executor) ExecuteStep(step ToolStep, context map[string]string) (string
 }
 
 // executeCognitiveStep handles internal cognitive operations.
-func (e *Executor) executeCognitiveStep(tool string, args, context map[string]string) (string, error) {
+func (e *Executor) executeCognitiveStep(tool string, args, stepCtx map[string]string) (string, error) {
 	if e.Brain == nil {
 		return "", fmt.Errorf("cognitive tool %q requires a brain (CognitiveBridge not connected)", tool)
 	}
@@ -148,7 +150,7 @@ func (e *Executor) executeCognitiveStep(tool string, args, context map[string]st
 	case "_summarize":
 		text := args["text"]
 		if text == "" {
-			text = context["_prev"]
+			text = stepCtx["_prev"]
 		}
 		if text == "" {
 			return "", fmt.Errorf("_summarize: no text to summarize")
@@ -177,7 +179,18 @@ func (e *Executor) executeCognitiveStep(tool string, args, context map[string]st
 		if result != "" {
 			return result, nil
 		}
-		// Both failed — return a stub so downstream steps get something
+		// Try LLM for thinking when cognitive systems can't handle it
+		if e.Brain.LLM != nil {
+			timeoutCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			resp, err := e.Brain.LLM.ChatCtx(timeoutCtx, []ollama.Message{
+				{Role: "system", Content: "Analyze this topic concisely. Use bullet points."},
+				{Role: "user", Content: query},
+			}, &ollama.ModelOptions{Temperature: 0.3, NumPredict: 128})
+			if err == nil && strings.TrimSpace(resp.Message.Content) != "" {
+				return strings.TrimSpace(resp.Message.Content), nil
+			}
+		}
 		return "No detailed analysis available for: " + query, nil
 
 	case "_reason":
@@ -197,15 +210,23 @@ func (e *Executor) executeCognitiveStep(tool string, args, context map[string]st
 		if style == "" {
 			style = "report"
 		}
+		// Try knowledge graph DocumentGenerator first
 		doc := e.Brain.GenerateDocument(topic, style)
 		if doc != "" {
 			return doc, nil
 		}
-		// DocGen couldn't produce content (topic not in knowledge graph).
-		// Fall back to synthesis from context, or a stub.
-		synth := e.Brain.SynthesizeResults("write a "+style+" about "+topic, context)
-		if synth != "" {
-			return synth, nil
+		// DocGen couldn't produce content — use full synthesis pipeline
+		// (including LLM if available) for the report.
+		filtered := make(map[string]string)
+		for k, v := range stepCtx {
+			if k == "_prev" || k == "" || v == "" {
+				continue
+			}
+			filtered[k] = v
+		}
+		report := e.Brain.WriteReport(topic, style, filtered)
+		if report != "" && len(report) > 50 {
+			return report, nil
 		}
 		return "# " + topic + "\n\nDocument generation pending — topic not yet in knowledge base.", nil
 
@@ -214,9 +235,9 @@ func (e *Executor) executeCognitiveStep(tool string, args, context map[string]st
 		if goal == "" {
 			goal = "summarize the findings"
 		}
-		// Filter context to only include task results, not internal keys
+		// Filter stepCtx to only include task results, not internal keys
 		filtered := make(map[string]string)
-		for k, v := range context {
+		for k, v := range stepCtx {
 			if k == "_prev" || k == "" || v == "" {
 				continue
 			}
@@ -231,7 +252,7 @@ func (e *Executor) executeCognitiveStep(tool string, args, context map[string]st
 	case "_compose":
 		query := args["query"]
 		if query == "" {
-			query = context["_prev"]
+			query = stepCtx["_prev"]
 		}
 		result := e.Brain.Compose(query)
 		if result == "" {
@@ -245,9 +266,15 @@ func (e *Executor) executeCognitiveStep(tool string, args, context map[string]st
 }
 
 // executeWithRetry runs a step with retries on failure.
+// Cognitive steps (starting with "_") are not retried — they have their
+// own fallback logic and LLM calls shouldn't be retried on timeout.
 func (e *Executor) executeWithRetry(step ToolStep, context map[string]string) (StepResult, error) {
 	maxRetries := e.MaxRetries
 	if maxRetries <= 0 {
+		maxRetries = 1
+	}
+	// Don't retry cognitive/LLM steps — they handle fallbacks internally
+	if strings.HasPrefix(step.Tool, "_") {
 		maxRetries = 1
 	}
 
@@ -352,6 +379,18 @@ func (e *Executor) substituteVars(s string, context map[string]string) string {
 		s = strings.ReplaceAll(s, "${"+k+"}", v)
 	}
 	return s
+}
+
+// contextValues extracts non-internal values from the context map.
+func contextValues(ctx map[string]string) []string {
+	var vals []string
+	for k, v := range ctx {
+		if k == "_prev" || k == "" || v == "" {
+			continue
+		}
+		vals = append(vals, v)
+	}
+	return vals
 }
 
 // IsDangerousTool returns true for tools that modify the filesystem or

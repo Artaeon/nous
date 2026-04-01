@@ -16,6 +16,8 @@ import (
 	"unicode"
 
 	"github.com/artaeon/nous/internal/agent"
+	"github.com/artaeon/nous/internal/micromodel"
+	"github.com/artaeon/nous/internal/ollama"
 	"github.com/artaeon/nous/internal/assistant"
 	"github.com/artaeon/nous/internal/blackboard"
 	"github.com/artaeon/nous/internal/cognitive"
@@ -450,6 +452,15 @@ func main() {
 	// Code generator — template-based code generation
 	actions.CodeGen = cognitive.NewCodeGenerator()
 
+	// Micro language model — load if trained
+	microModelPath := filepath.Join(nousDir, "micromodel.bin")
+	if _, err := os.Stat(microModelPath); err == nil {
+		if bridge, err := micromodel.LoadBridge(microModelPath); err == nil {
+			actions.MicroModel = bridge
+			fmt.Printf("  loaded micro language model (%d params)\n", bridge.Model.ParamCount())
+		}
+	}
+
 	// Conversational Learning Engine — Nous learns from every interaction
 	learningEngine := cognitive.NewLearningEngine(actions.CogGraph, actions.Composer, nousDir)
 
@@ -838,7 +849,21 @@ func main() {
 	agentConfig := agent.DefaultConfig()
 	agentConfig.Workspace = filepath.Join(nousDir, "agent")
 	autonomousAgent := agent.NewAgent(toolReg, agentConfig)
-	autonomousAgent.SetBrain(agent.NewCognitiveBridge(actions))
+	agentBrain := agent.NewCognitiveBridge(actions)
+	// Wire Ollama for LLM-powered responses if available
+	if ollamaClient := tryConnectOllama(); ollamaClient != nil {
+		// Agent synthesis — LLM writes reports from web search data
+		agentBrain.LLM = ollamaClient
+		// Chat pipeline — LLM fills knowledge gaps (topics not in graph)
+		actions.LLM = &cognitive.OllamaLLM{Client: ollamaClient}
+		fmt.Printf("  %sOllama connected: %s (chat + agent synthesis)%s\n",
+			cognitive.ColorGreen, ollamaClient.Model(), cognitive.ColorReset)
+		// Pre-warm the model so first user query doesn't wait for model loading
+		go func() {
+			actions.LLM.Generate("", "warmup", 1)
+		}()
+	}
+	autonomousAgent.SetBrain(agentBrain)
 	autonomousAgent.SetReportCallback(func(msg string) {
 		fmt.Printf("\n  %s[agent]%s %s\n", cognitive.ColorCyan, cognitive.ColorReset, msg)
 	})
@@ -2293,6 +2318,16 @@ func splitGoalAndSchedule(s string) (string, string) {
 		return strings.Join(parts[:len(parts)-1], " "), parts[len(parts)-1]
 	}
 	return s, "daily 9:00"
+}
+
+// tryConnectOllama attempts to connect to a local Ollama instance.
+// Returns nil if Ollama is not running or not available.
+func tryConnectOllama() *ollama.Client {
+	client := ollama.New()
+	if err := client.Ping(); err != nil {
+		return nil
+	}
+	return client
 }
 
 func truncate(s string, max int) string {

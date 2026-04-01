@@ -117,6 +117,26 @@ type ActionRouter struct {
 	// Prose composition and code generation
 	ProseComposer  *ProseComposer
 	CodeGen        *CodeGenerator
+
+	// Micro language model — knowledge-grounded sentence generation
+	MicroModel interface {
+		GenerateSentence(subject, relation, object string) string
+		GenerateParagraph(topic string, facts [][3]string) string
+	}
+
+	// LLM — optional local language model for enhanced responses.
+	// When set, used for: knowledge gap filling, deeper explanations,
+	// comparisons, and any query the deterministic pipeline can't handle well.
+	// Falls back silently when nil.
+	LLM LLMClient
+}
+
+// LLMClient is the interface for a local language model.
+// Implemented by the Ollama client wrapper.
+type LLMClient interface {
+	// Generate sends a prompt and returns the response text.
+	// maxTokens controls output length. Returns empty string on error.
+	Generate(system, prompt string, maxTokens int) string
 }
 
 // NewActionRouter creates a router with nil subsystems.
@@ -304,6 +324,20 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 	}
 
 	result := ar.dispatch(nlu, conv)
+
+	// LLM gap-fill: if the deterministic pipeline returned a deflection
+	// ("What specifically about X would you like to explore?") and we have
+	// a local LLM, ask it to answer the question directly instead.
+	if result != nil && isDeflection(result.DirectResponse) && ar.LLM != nil {
+		answer := ar.LLM.Generate(
+			"Answer concisely and factually in 2-3 sentences.",
+			nlu.Raw,
+			96,
+		)
+		if answer != "" && !isDeflection(answer) {
+			result = &ActionResult{DirectResponse: answer, Source: "llm"}
+		}
+	}
 
 	// Detect implicit follow-ups: questions containing pronouns that reference previous turns.
 	// Many follow-ups are classified as "question" by the NLU (e.g., "how does that relate to
@@ -2897,8 +2931,25 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 		}
 	}
 
-	// Multiple results or ambiguous — return combined data.
-	return &ActionResult{DirectResponse: strings.Join(parts, "\n"), Source: "knowledge"}
+	// Multiple results or ambiguous — return combined data if substantial.
+	combined := strings.Join(parts, "\n")
+	if len(combined) > 50 {
+		return &ActionResult{DirectResponse: combined, Source: "knowledge"}
+	}
+
+	// LLM fallback for knowledge gaps — the graph doesn't have this topic.
+	if ar.LLM != nil {
+		answer := ar.LLM.Generate(
+			"Answer factually and concisely in 2-3 sentences.",
+			nlu.Raw,
+			96,
+		)
+		if answer != "" {
+			return &ActionResult{DirectResponse: answer, Source: "llm"}
+		}
+	}
+
+	return &ActionResult{DirectResponse: combined, Source: "knowledge"}
 }
 
 // handleCompare generates a comparison between two items using knowledge graph data.
@@ -3037,6 +3088,17 @@ func (ar *ActionRouter) handleCompare(nlu *NLUResult) *ActionResult {
 	}
 
 	if descA == "" && descB == "" && len(factsA) == 0 && len(factsB) == 0 {
+		// No graph facts for either item — try LLM for a full comparison
+		if ar.LLM != nil {
+			answer := ar.LLM.Generate(
+				"Compare these two items concisely. Use short bullet points for pros/cons.",
+				nlu.Raw,
+				160,
+			)
+			if answer != "" {
+				return &ActionResult{DirectResponse: answer, Source: "llm"}
+			}
+		}
 		sb.Reset()
 		sb.WriteString(ar.buildSparseComparisonFallback(displayA, displayB, raw))
 	}
@@ -3621,14 +3683,30 @@ func (ar *ActionRouter) handleLLMChat(nlu *NLUResult, conv *Conversation) *Actio
 		respType := ar.ClassifyForComposer(nlu.Raw)
 		ctx := ar.BuildComposeContext()
 		resp := ar.Composer.Compose(nlu.Raw, respType, ctx)
-		if resp != nil && resp.Text != "" {
+		if resp != nil && resp.Text != "" &&
+			!isLowInformationConversational(resp.Text) &&
+			!isDeflection(resp.Text) {
 			return &ActionResult{DirectResponse: resp.Text, Source: "composer"}
 		}
 	}
 
-	// Fallback — Composer unavailable or returned empty (should not happen).
+	// LLM fallback — when the knowledge graph and composer can't answer,
+	// ask the local LLM directly. This fills knowledge gaps for topics
+	// not in the graph (Roman Empire, car engines, yoga, etc.).
+	if ar.LLM != nil {
+		answer := ar.LLM.Generate(
+			"Answer concisely and factually in 2-3 sentences.",
+			nlu.Raw,
+			96,
+		)
+		if answer != "" {
+			return &ActionResult{DirectResponse: answer, Source: "llm"}
+		}
+	}
+
+	// Fallback — no LLM, no knowledge, no composer.
 	return &ActionResult{
-		DirectResponse: "I'm not sure how to answer that — could you rephrase?",
+		DirectResponse: "I don't have detailed knowledge about that topic yet. Try asking me to look it up, or point me to a source I can learn from.",
 		Source:         "fallback",
 	}
 }
@@ -4622,6 +4700,30 @@ func extractTextForSummarization(raw string) string {
 	}
 
 	return text
+}
+
+// isDeflection detects when the response is a deflection rather than an answer.
+// E.g., "What specifically about X would you like to explore?" is a deflection.
+func isDeflection(text string) bool {
+	lower := strings.ToLower(text)
+	deflections := []string{
+		"what specifically about",
+		"would you like to explore",
+		"what angle are you",
+		"what aspect of",
+		"could you be more specific",
+		"what would you like to know about",
+		"i'd need more context",
+		"that's a broad topic",
+		"here's my take. what specifically",
+		"let me address that directly. what specifically",
+	}
+	for _, d := range deflections {
+		if strings.Contains(lower, d) {
+			return true
+		}
+	}
+	return false
 }
 
 // isSparkRelevant checks whether an associative spark explanation is relevant

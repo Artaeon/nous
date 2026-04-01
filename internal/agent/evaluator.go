@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -32,9 +33,8 @@ func (a *Agent) evaluatePhase(phaseIdx int) *PhaseEvaluation {
 	a.State.mu.RUnlock()
 
 	// Gather all content produced by this phase's tasks.
-	// Check both task.Result AND the results map — task.Result for
-	// multi-step chains is the LAST step (often "wrote to file"),
-	// while the actual content is stored in the results map.
+	// For write tasks, read the actual file content instead of the
+	// "wrote N bytes to path" result string.
 	var phaseContent strings.Builder
 	completedTasks := 0
 	failedTasks := 0
@@ -42,12 +42,22 @@ func (a *Agent) evaluatePhase(phaseIdx int) *PhaseEvaluation {
 		switch task.Status {
 		case TaskCompleted:
 			completedTasks++
-			// Use the stored result from the results map first (has actual content)
+			result := task.Result
 			if stored, ok := results[task.ID]; ok && stored != "" {
-				phaseContent.WriteString(stored)
-				phaseContent.WriteString("\n")
-			} else if task.Result != "" {
-				phaseContent.WriteString(task.Result)
+				result = stored
+			}
+			// If result is "wrote to <path>", read the actual file
+			if strings.HasPrefix(result, "wrote ") && strings.Contains(result, " to ") {
+				if path := extractWritePath(result); path != "" {
+					if data, err := os.ReadFile(path); err == nil {
+						phaseContent.Write(data)
+						phaseContent.WriteString("\n")
+						continue
+					}
+				}
+			}
+			if result != "" {
+				phaseContent.WriteString(result)
 				phaseContent.WriteString("\n")
 			}
 		case TaskFailed:
@@ -207,6 +217,21 @@ func injectSearchTasks(phase *Phase, queries []string, baseID string) {
 	}
 	// Prepend new tasks before existing ones
 	phase.Tasks = append(newTasks, phase.Tasks...)
+}
+
+// extractWritePath pulls the file path from a "wrote N bytes to /path" string.
+func extractWritePath(result string) string {
+	// Format: "wrote N bytes to /path/to/file" or "wrote to /path/to/file"
+	if idx := strings.Index(result, " to /"); idx >= 0 {
+		return strings.TrimSpace(result[idx+4:])
+	}
+	if idx := strings.Index(result, " to "); idx >= 0 {
+		path := strings.TrimSpace(result[idx+4:])
+		if strings.Contains(path, "/") {
+			return path
+		}
+	}
+	return ""
 }
 
 // countContentWords counts non-trivial words in text, skipping URLs,

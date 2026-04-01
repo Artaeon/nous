@@ -1,11 +1,14 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/artaeon/nous/internal/cognitive"
+	"github.com/artaeon/nous/internal/ollama"
 )
 
 // CognitiveBridge connects the autonomous agent to Nous's cognitive systems.
@@ -19,6 +22,7 @@ type CognitiveBridge struct {
 	Composer   *cognitive.Composer
 	NLG        *cognitive.NLGEngine
 	Graph      *cognitive.CognitiveGraph
+	LLM        *ollama.Client // optional: local LLM for synthesis
 }
 
 // NewCognitiveBridge creates a bridge from an ActionRouter's cognitive systems.
@@ -252,6 +256,9 @@ func extractFromSearchResult(raw string) ([]extractedFact, []string) {
 			continue
 		}
 
+		// Strip "Conclusion ", "Introduction ", "Summary " prefixes from snippets
+		cleaned = stripSectionPrefix(cleaned)
+
 		// Skip sentences that end abruptly (truncated snippets)
 		if !strings.HasSuffix(cleaned, ".") && !strings.HasSuffix(cleaned, "!") &&
 			!strings.HasSuffix(cleaned, "?") && !strings.HasSuffix(cleaned, ":") {
@@ -275,6 +282,7 @@ func extractFromSearchResult(raw string) ([]extractedFact, []string) {
 		// Split into sentences and classify each
 		for _, sent := range splitSentences(cleaned) {
 			sent = strings.TrimSpace(sent)
+			sent = stripSectionPrefix(sent) // strip "Conclusion ", "Introduction " etc.
 			if len(sent) < 25 {
 				continue
 			}
@@ -357,7 +365,12 @@ func isMetaSentence(s string) bool {
 		"no results found for:", "what angle are you",
 		"min read", "would you like to explore",
 		"let me share what i know", "context really matters",
-		"that's an interesting area",
+		"that's an interesting area", "that's worth exploring",
+		"i can see why", "is on your mind",
+		"what angle are you most interested in",
+		"looking at .* from different angles",
+		"for more information", "visit our",
+		"cookie", "privacy policy", "terms of service",
 	}
 	for _, m := range meta {
 		if strings.Contains(lower, m) {
@@ -530,6 +543,25 @@ func formatAsReport(topic string, clusters map[string][]string, sources []string
 	return result
 }
 
+// stripSectionPrefix removes "Conclusion ", "Introduction ", etc. from snippet starts.
+func stripSectionPrefix(s string) string {
+	prefixes := []string{
+		"Conclusion ", "Introduction ", "Summary ", "Abstract ",
+		"Overview ", "Background ", "Key Takeaways ",
+		"Conclusion: ", "Introduction: ", "Summary: ",
+		"TL;DR ", "TL;DR: ", "TLDR ",
+	}
+	for _, p := range prefixes {
+		if strings.HasPrefix(s, p) {
+			rest := strings.TrimSpace(s[len(p):])
+			if len(rest) > 20 {
+				return rest
+			}
+		}
+	}
+	return s
+}
+
 // extractDomain extracts the domain name from a URL for citation.
 func extractDomain(url string) string {
 	// Strip protocol
@@ -566,6 +598,8 @@ func capitalizeTitle(s string) string {
 }
 
 // SynthesizeResults takes raw tool outputs and produces a structured report.
+// When Ollama is available, it generates real analysis prose. Otherwise
+// falls back to the extractive SmartSynthesize pipeline.
 func (cb *CognitiveBridge) SynthesizeResults(goal string, results map[string]string) string {
 	if cb == nil {
 		return concatenateResults(results)
@@ -582,7 +616,15 @@ func (cb *CognitiveBridge) SynthesizeResults(goal string, results map[string]str
 		webResults = append(webResults, v)
 	}
 
-	// Get knowledge graph content if available
+	// Try Ollama synthesis first — produces real analysis prose
+	if cb.LLM != nil && len(webResults) > 0 {
+		llmResult := cb.llmSynthesize(topic, goal, webResults)
+		if llmResult != "" {
+			return llmResult
+		}
+	}
+
+	// Fallback: extractive synthesis pipeline
 	var graphFacts []string
 	if cb.Graph != nil {
 		graphFacts = cb.queryGraphFacts(topic)
@@ -595,18 +637,98 @@ func (cb *CognitiveBridge) SynthesizeResults(goal string, results map[string]str
 	return result
 }
 
-// WriteReport generates a full document from accumulated results.
-func (cb *CognitiveBridge) WriteReport(topic, style string, results map[string]string) string {
-	// Try DocumentGenerator first (knowledge graph content)
-	doc := cb.GenerateDocument(topic, style)
+// llmSynthesize uses a local LLM (via Ollama) to generate real analysis
+// from web search results. The agent gathers data with its tools;
+// the LLM writes the prose.
+func (cb *CognitiveBridge) llmSynthesize(topic, goal string, webResults []string) string {
+	// First, clean the web results to remove URLs and noise
+	var cleaned []string
+	for _, raw := range webResults {
+		facts, _ := extractFromSearchResult(raw)
+		var lines []string
+		for _, f := range facts {
+			lines = append(lines, f.text)
+		}
+		if len(lines) > 0 {
+			cleaned = append(cleaned, strings.Join(lines, "\n"))
+		}
+	}
 
-	// Try synthesis from web results
+	if len(cleaned) == 0 {
+		return ""
+	}
+
+	// Build the research material block — keep it concise for small models.
+	// Extract only the most important sentences (max 20) to fit in context.
+	var materialSentences []string
+	for _, block := range cleaned {
+		for _, s := range splitSentences(block) {
+			s = strings.TrimSpace(s)
+			if len(s) > 30 && !isMetaSentence(s) {
+				materialSentences = append(materialSentences, s)
+			}
+		}
+	}
+	// Keep best 20 sentences, prefer longer ones (more information)
+	if len(materialSentences) > 20 {
+		materialSentences = materialSentences[:20]
+	}
+	material := strings.Join(materialSentences, "\n")
+
+	// Construct a concise synthesis prompt
+	prompt := fmt.Sprintf(`Summarize this research about %s into a structured report:
+
+%s
+
+Format as markdown with these sections:
+## Overview (2-3 sentences)
+## Key Findings (bullet points)
+## Challenges (bullet points)
+## Conclusion (2-3 sentences)
+
+Be concise. Use only facts from the material above.`, topic, material)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	resp, err := cb.LLM.ChatCtx(ctx, []ollama.Message{
+		{Role: "system", Content: "You are a research analyst. Write concise, factual reports. Use markdown. Max 200 words."},
+		{Role: "user", Content: prompt},
+	}, &ollama.ModelOptions{
+		Temperature: 0.3,
+		NumPredict:  300,
+	})
+
+	if err != nil {
+		return "" // fall back to extractive synthesis
+	}
+
+	result := strings.TrimSpace(resp.Message.Content)
+	if len(result) < 50 {
+		return "" // too short, fall back
+	}
+
+	return result
+}
+
+// WriteReport generates a full document from accumulated results.
+// Prefers LLM synthesis when available, merges with knowledge graph content.
+func (cb *CognitiveBridge) WriteReport(topic, style string, results map[string]string) string {
+	// Try LLM-powered synthesis first (best quality)
 	synth := cb.SynthesizeResults("write a "+style+" about "+topic, results)
 
-	// Merge: if both produced content, combine them
-	if doc != "" && synth != "" && len(synth) > 100 {
-		return doc + "\n\n---\n\n## Web Research Findings\n\n" + synth
+	// Try DocumentGenerator for knowledge graph content
+	doc := cb.GenerateDocument(topic, style)
+
+	// If LLM produced good content, use it (optionally merge with graph content)
+	if synth != "" && len(synth) > 200 {
+		if doc != "" && len(doc) > 100 {
+			return synth + "\n\n---\n\n## Additional Context from Knowledge Base\n\n" + doc
+		}
+		return synth
 	}
+
+	// Fallback to graph-only or synthesis-only
 	if doc != "" {
 		return doc
 	}
@@ -622,12 +744,11 @@ func (cb *CognitiveBridge) queryGraphFacts(topic string) []string {
 		return nil
 	}
 
-	// Use the graph's FindParagraph method if it has one, or compose from edges
-	// The graph stores facts as edges; we want prose paragraphs.
-	// Try Compose which queries the graph internally.
-	composed := cb.Compose("What is " + topic + "?")
-	if composed != "" && len(composed) > 30 {
-		return []string{composed}
+	// Query the graph's description directly — don't use the Composer
+	// which generates conversational responses ("What would you like to explore?")
+	desc := cb.Graph.LookupDescription(topic)
+	if desc != "" && len(desc) > 30 && !isMetaSentence(desc) {
+		return []string{desc}
 	}
 	return nil
 }

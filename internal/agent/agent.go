@@ -30,7 +30,7 @@ func DefaultConfig() AgentConfig {
 		MaxRetries:         3,
 		PauseOnUncertainty: true,
 		ReportInterval:     30 * time.Second,
-		StepTimeout:        30 * time.Second,
+		StepTimeout:        90 * time.Second,
 	}
 }
 
