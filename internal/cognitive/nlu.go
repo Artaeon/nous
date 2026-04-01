@@ -749,12 +749,29 @@ func extractSpecificEntities(lower string, r *NLUResult) {
 			if after == "" {
 				continue
 			}
-			// Skip if the "location" is a common non-location word
+			// Skip if the "location" is a non-geographic phrase.
+			// Common false positives: "in simple terms", "in our solar system",
+			// "at 6pm", "in the morning", "at the moment", etc.
 			nonLocWords := map[string]bool{
 				"general": true, "detail": true, "details": true, "brief": true,
 				"order": true, "total": true, "english": true, "french": true,
 				"spanish": true, "german": true, "japanese": true, "chinese": true,
 				"the morning": true, "the evening": true, "the afternoon": true,
+				"simple terms": true, "other words": true, "a nutshell": true,
+				"plain english": true, "layman's terms": true, "more detail": true,
+				"the future": true, "the past": true, "the world": true,
+				"common": true, "particular": true, "practice": true, "theory": true,
+				"the end": true, "the beginning": true, "fact": true, "general terms": true,
+				"a way": true, "some way": true, "many ways": true, "no time": true,
+				"the moment": true, "a bit": true, "advance": true, "mind": true,
+			}
+			// Skip time-like values (digits + am/pm/colon)
+			if regexp.MustCompile(`^\d|am$|pm$|o'clock|noon|midnight`).MatchString(after) {
+				continue
+			}
+			// Skip if it starts with "our" or "the" + common non-place nouns
+			if strings.HasPrefix(after, "our ") || strings.HasPrefix(after, "my ") {
+				continue
 			}
 			if nonLocWords[after] {
 				continue
