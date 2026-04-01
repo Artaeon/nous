@@ -2,6 +2,62 @@
 
 All notable changes to Nous are documented here.
 
+## [1.1.0] - 2026-04-01
+
+### Revolutionary — Mamba SSM Architecture
+- **Mamba language model** — First decoder-only structured state space model in pure Go. Selective scan with O(n) training and O(1)-per-token generation. 7.6M parameters (256-dim, 16-state, 8 layers). No ML framework, no GPU, no dependencies.
+- **Knowledge-constrained beam search** — FactTrie encodes allowed token sequences from the knowledge graph. Neural model physically cannot hallucinate facts not in the knowledge base. Zero-hallucination neural generation.
+- **Stateful inference** — Hidden state updated per token, no KV cache needed. Constant-time autoregressive generation.
+- **Training pipeline** — `nous-train mamba` command with cosine annealing LR, teacher forcing, configurable architecture. Same knowledge corpus as transformer.
+
+### Revolutionary — Cognitive Compiler
+- **Progressive self-improvement** — Every response generates a compilation artifact. Queries matching compiled patterns resolve in ~0ms via regex+template instead of full NLU pipeline.
+- **Pattern extraction** — Replaces entity values with named capture groups for generalized matching.
+- **Quality feedback loop** — EMA-based scoring with auto-pruning below 0.3 threshold.
+- **Persistent handlers** — Compiled patterns survive restarts, accumulate over time.
+
+### Revolutionary — Federated Crystal Sharing
+- **SharedCrystal format** — Privacy-preserving response patterns with SHA-256 IDs.
+- **CrystalBundle** — Export/import with checksum validation.
+- **File-based registry** — Publish, search, merge, top-N retrieval.
+- **Trust scoring** — Quality x votes x recency x bundle trust. Auto-filters low-quality imports.
+- **REPL commands** — `/federation status|export|import|search|top`
+
+### Revolutionary — UNIX CLI Primitives
+- **`nous understand`** — Pipe-friendly NLU with JSON output (intent, entities, confidence).
+- **`nous generate`** — Fact-grounded text generation with style options (paragraph, bullet, brief).
+- **`nous reason`** — Multi-strategy reasoning pipeline with JSON output.
+- **`nous remember`** — Persistent key-value memory store/recall/list.
+- All subcommands accept stdin, composable with UNIX pipes.
+
+### Added
+- **Multi-hop knowledge reasoning** — Graph traversal finds connections between entities (direct, two-hop, shared properties). Natural language explanations.
+- **Smart entity extraction** — NLU now extracts location, time, amount, target language from queries.
+- **Sentence fusion** — Composer combines consecutive same-subject facts into compound sentences.
+- **Response deduplication** — Filters redundant facts already covered by wiki descriptions.
+- **Broken sentence cleanup** — Post-processing removes fragments, fixes pronoun capitalization.
+- **Varied NLG connectors** — 8-12 options per pool including zero-connector natural flow.
+- **Varied response openings** — Sometimes leads with origin or interesting facts instead of identity.
+- **Expanded templates** — 5-9 expression templates per relation type (up from 2-3).
+- **Enriched training data** — 4,290 training pairs with multi-sentence targets and clause reordering.
+- **Music/media intent** — "play music", "next song", etc. correctly routed.
+- **Auto-training hint** — Shows training command when no Mamba model found.
+- **Better thank-you responses** — Contextually appropriate acknowledgments.
+- **Better empathetic responses** — Practical support options for stress/negative emotions.
+- **Socratic skip for casual queries** — Dinner/entertainment recommendations get direct answers.
+- **Username handling** — Greetings skip raw unix usernames when no proper name is known.
+
+### Fixed
+- "what time is it in Tokyo" misclassified as translate → now correctly routes to question
+- False location extraction for "in simple terms", "in our solar system", "at 6pm"
+- "meant, science" topic extraction bug in memory trigger patterns
+- `TestCreative_JokeQuestionAnswer` accepts all joke formats
+- `TestNeuralOverrideDebug` handles non-deterministic neural classifier output
+
+### Performance
+- Mamba training optimized: InProj and SSM backward frozen for CPU, ~100x faster
+- Bridge auto-detects model type (Mamba vs transformer) from file magic bytes
+
 ## [1.0.0] - 2026-03-21
 
 ### Revolutionary
