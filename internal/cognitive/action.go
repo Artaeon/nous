@@ -78,6 +78,7 @@ type ActionRouter struct {
 	Council        *InnerCouncil
 	Opinions       *OpinionEngine
 	DeepReason     *DeepReasoner
+	MultiHop       *MultiHopReasoner
 
 	// Phase 1-4 wired systems
 	ConvState      *ConversationState
@@ -252,7 +253,11 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 				strings.HasPrefix(lower, "differences") ||
 				strings.HasPrefix(lower, "pros and cons") ||
 				strings.Contains(lower, " vs ") ||
-				strings.Contains(lower, " versus "):
+				strings.Contains(lower, " versus ") ||
+				strings.HasPrefix(lower, "how are ") && strings.Contains(lower, " related") ||
+				strings.HasPrefix(lower, "what connects ") ||
+				strings.HasPrefix(lower, "connection between ") ||
+				strings.HasPrefix(lower, "relationship between "):
 				nlu.Intent = "compare"
 				nlu.Action = "compare"
 			case strings.HasPrefix(lower, "summarize ") ||
@@ -3033,6 +3038,20 @@ func (ar *ActionRouter) handleCompare(nlu *NLUResult) *ActionResult {
 		}
 		if len(factsB) > 0 {
 			sb.WriteString(fmt.Sprintf("%s: %s\n", displayB, strings.Join(factsB, " ")))
+		}
+	}
+
+	// Enrich with multi-hop connection reasoning if available.
+	if ar.MultiHop != nil {
+		conn := ar.MultiHop.FindConnection(itemA, itemB)
+		if conn != nil && conn.Summary != "" {
+			// Only append connection info when there is a real link found.
+			hasLink := len(conn.Direct) > 0 || len(conn.TwoHop) > 0 || len(conn.SharedProps) > 0
+			if hasLink {
+				sb.WriteString("\n**Connection:** ")
+				sb.WriteString(conn.Summary)
+				sb.WriteString("\n")
+			}
 		}
 	}
 
