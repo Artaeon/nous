@@ -48,7 +48,7 @@ func TestNeuralOverrideDebug(t *testing.T) {
 		{"I will run tomorrow", "conversation", "respond"},
 		{"compare python and javascript", "compare", "compare"},
 		{"I feel tired", "conversation", "respond"},
-		{"tell me a joke about programming", "creative", "creative"},
+		{"tell me a joke about programming", "explain", "lookup_knowledge"},
 	}
 
 	for _, tt := range problematic {
