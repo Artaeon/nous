@@ -359,3 +359,95 @@ func (cc *CognitiveCompiler) pruneUnlocked() {
 	}
 	cc.Handlers = kept
 }
+
+// ---------------------------------------------------------------------------
+// Match
+// ---------------------------------------------------------------------------
+
+// Match finds the best compiled handler for an input query. It returns the
+// handler and a map of extracted slot values, or (nil, nil) when no handler
+// matches with sufficient confidence.
+func (cc *CognitiveCompiler) Match(input string) (*CompiledHandler, map[string]string) {
+	if input == "" {
+		return nil, nil
+	}
+
+	lower := strings.ToLower(strings.TrimSpace(input))
+
+	cc.mu.RLock()
+	defer cc.mu.RUnlock()
+
+	var bestHandler *CompiledHandler
+	var bestSlots map[string]string
+	bestScore := 0.0
+
+	for _, h := range cc.Handlers {
+		if h.Pattern == nil || h.Pattern.compiled == nil {
+			continue
+		}
+
+		m := h.Pattern.compiled.FindStringSubmatch(lower)
+		if m == nil {
+			continue
+		}
+
+		// Extract named slots.
+		extracted := make(map[string]string)
+		for i, name := range h.Pattern.compiled.SubexpNames() {
+			if i > 0 && i < len(m) && name != "" {
+				extracted[name] = m[i]
+			}
+		}
+
+		// Score: pattern confidence * quality, with a small boost for usage.
+		score := h.Pattern.Confidence * h.Quality
+		if h.Uses > 0 {
+			usageBoost := float64(h.Uses) / (float64(h.Uses) + 10.0) * 0.2
+			score += usageBoost
+		}
+
+		if score > bestScore {
+			bestScore = score
+			bestHandler = h
+			bestSlots = extracted
+		}
+	}
+
+	// Minimum acceptable score: the product of the lowest acceptable
+	// confidence (0.7 from extractPattern) and the initial quality (0.6).
+	if bestScore < 0.7*0.6 {
+		return nil, nil
+	}
+
+	return bestHandler, bestSlots
+}
+
+// ---------------------------------------------------------------------------
+// Execute
+// ---------------------------------------------------------------------------
+
+// Execute fills a compiled handler's template with the provided slot values
+// and returns the deterministic response.
+func (cc *CognitiveCompiler) Execute(handler *CompiledHandler, slots map[string]string) string {
+	if handler == nil {
+		return ""
+	}
+
+	result := handler.Template
+	for _, sd := range handler.Slots {
+		placeholder := "{" + sd.Name + "}"
+		val, ok := slots[sd.Name]
+		if !ok || val == "" {
+			val = sd.Fallback
+		}
+		result = strings.ReplaceAll(result, placeholder, val)
+	}
+
+	// Update usage counters.
+	cc.mu.Lock()
+	handler.Uses++
+	handler.LastUsed = time.Now()
+	cc.mu.Unlock()
+
+	return result
+}
