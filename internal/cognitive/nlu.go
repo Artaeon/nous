@@ -318,6 +318,10 @@ func NewNLU() *NLU {
 			"open firefox", "open chrome", "open terminal",
 			"open spotify", "open slack", "open discord",
 			"open vscode", "open code",
+			"play music", "play some music", "play a song", "play song",
+			"play video", "play a video", "play audio",
+			"pause music", "stop music", "next song", "previous song",
+			"skip song", "resume music", "shuffle",
 		},
 		hashWords: []string{
 			"hash", "md5", "sha256", "sha1", "sha512",
