@@ -29,6 +29,8 @@ func SubcommandRouter(args []string, nlu *cognitive.NLU, actions *cognitive.Acti
 		return runReason(args[1:], actions)
 	case "remember":
 		return runRemember(args[1:], ltm)
+	case "summarize":
+		return runSummarize(args[1:])
 	default:
 		return false
 	}
@@ -356,4 +358,52 @@ func readStdin() string {
 		lines = append(lines, scanner.Text())
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// --- summarize subcommand ---
+
+func runSummarize(args []string) bool {
+	fs := goflag.NewFlagSet("summarize", goflag.ContinueOnError)
+	sentences := fs.Int("sentences", 5, "Number of sentences to extract")
+	fs.IntVar(sentences, "s", 5, "Number of sentences (short)")
+	bullet := fs.Bool("bullet", false, "Output as bullet points")
+	fs.BoolVar(bullet, "b", false, "Bullet points (short)")
+	oneliner := fs.Bool("oneliner", false, "Single sentence summary")
+	fs.BoolVar(oneliner, "1", false, "One-liner (short)")
+	jsonOut := fs.Bool("json", false, "JSON output")
+	fs.BoolVar(jsonOut, "j", false, "JSON output (short)")
+	fs.Parse(args)
+
+	text := strings.Join(fs.Args(), " ")
+	if text == "" {
+		text = readStdin()
+	}
+	if text == "" {
+		fmt.Fprintln(os.Stderr, "usage: nous summarize [--sentences N] [--bullet] [--oneliner] <text>")
+		os.Exit(1)
+	}
+
+	var result string
+	switch {
+	case *oneliner:
+		result = cognitive.ExtractOneLiner(text)
+	case *bullet:
+		result = cognitive.ExtractBullets(text, *sentences)
+	default:
+		result = cognitive.ExtractSummary(text, *sentences)
+	}
+
+	if *jsonOut {
+		out := map[string]interface{}{
+			"summary":   result,
+			"mode":      "extractive",
+			"sentences": *sentences,
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		enc.Encode(out)
+	} else {
+		fmt.Println(result)
+	}
+	return true
 }
