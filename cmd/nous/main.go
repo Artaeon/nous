@@ -60,8 +60,13 @@ func channelHandler(
 		start := time.Now()
 		var answer string
 
+		// Try cognitive compiler first (compiled patterns, ~0ms)
+		if compiled, ok := actions.TryCompiled(text); ok {
+			answer = compiled
+		}
+
 		nluResult := nlu.Understand(text)
-		if nluResult.Confidence >= 0.5 {
+		if answer == "" && nluResult.Confidence >= 0.5 {
 			actionResult := actions.Execute(nluResult, conv)
 			if actionResult.DirectResponse != "" {
 				answer = actionResult.DirectResponse
@@ -82,6 +87,9 @@ func channelHandler(
 		}
 
 		duration := time.Since(start)
+
+		// Learn from this response for future compilation
+		go actions.LearnResponse(text, answer, nluResult)
 
 		// Record in episodic memory
 		go episodic.Record(memory.Episode{
@@ -452,13 +460,33 @@ func main() {
 	// Code generator — template-based code generation
 	actions.CodeGen = cognitive.NewCodeGenerator()
 
-	// Micro language model — load if trained
+	// Micro language model — load Mamba (preferred) or transformer
+	mambaModelPath := filepath.Join(nousDir, "mamba.bin")
 	microModelPath := filepath.Join(nousDir, "micromodel.bin")
-	if _, err := os.Stat(microModelPath); err == nil {
+	if _, err := os.Stat(mambaModelPath); err == nil {
+		if bridge, err := micromodel.LoadBridge(mambaModelPath); err == nil {
+			actions.MicroModel = bridge
+			if bridge.IsMamba() {
+				fmt.Printf("  %s✓%s Mamba language model loaded (%d params, O(1)/token)\n",
+					cognitive.ColorGreen, cognitive.ColorReset, bridge.Mamba.ParamCount())
+			}
+		}
+	} else if _, err := os.Stat(microModelPath); err == nil {
 		if bridge, err := micromodel.LoadBridge(microModelPath); err == nil {
 			actions.MicroModel = bridge
-			fmt.Printf("  loaded micro language model (%d params)\n", bridge.Model.ParamCount())
+			fmt.Printf("  loaded micro language model (transformer)\n")
 		}
+	}
+
+	// Cognitive compiler — compiles responses into deterministic handlers.
+	// Every response generation feeds back into the compiler, making Nous
+	// faster with every interaction. The more you use it, the more queries
+	// resolve in O(1) via compiled patterns instead of neural inference.
+	compilerPath := filepath.Join(nousDir, "compiler.json")
+	actions.CogCompiler = cognitive.NewCognitiveCompiler(compilerPath)
+	if stats := actions.CogCompiler.Stats(); stats.TotalHandlers > 0 {
+		fmt.Printf("  %s✓%s cognitive compiler: %d handlers (%.0f%% hit rate)\n",
+			cognitive.ColorGreen, cognitive.ColorReset, stats.TotalHandlers, stats.HitRate*100)
 	}
 
 	// Conversational Learning Engine — Nous learns from every interaction
@@ -1123,12 +1151,20 @@ func main() {
 		responseStarted = false
 		start := time.Now()
 
-		// Try NLU/ActionRouter first — handles all 51 tools deterministically (0ms).
-		// Supports multi-intent: "do X and Y" splits into separate actions.
-		// Only falls through to LLM if the action needs language generation.
+		// Try cognitive compiler first — compiled handlers from previous responses.
+		// This is the fastest path: regex match + template fill, ~0ms.
 		var answer string
+		if compiled, ok := actions.TryCompiled(input); ok {
+			answer = compiled
+			reasoner.Conv.User(input)
+			reasoner.Conv.Assistant(answer)
+		}
+
+		// Try NLU/ActionRouter — handles all 51 tools deterministically (0ms).
+		// Supports multi-intent: "do X and Y" splits into separate actions.
+		// Only falls through to Composer if the action needs language generation.
 		nluResult := nlu.UnderstandMultiWithContext(input, reasoner.Conv)
-		if nluResult.Confidence >= 0.5 {
+		if answer == "" && nluResult.Confidence >= 0.5 {
 			if len(nluResult.SubResults) > 0 {
 				// Multi-intent: execute each sub-result and combine responses
 				var parts []string
@@ -1177,6 +1213,12 @@ func main() {
 		if actions.Composer != nil {
 			actions.Composer.RecordTurn(input, answer)
 		}
+
+		// Cognitive compiler learning — compile this response into a
+		// deterministic handler for future use. Async, no latency impact.
+		// Over time, this makes Nous faster: more queries resolve via
+		// compiled patterns (~0ms) instead of full NLU+generation.
+		go actions.LearnResponse(input, answer, nluResult)
 
 		// Conversational learning — extract facts, patterns, preferences
 		// from every user message. Async, no latency impact.

@@ -124,6 +124,11 @@ type ActionRouter struct {
 		GenerateParagraph(topic string, facts [][3]string) string
 	}
 
+	// Cognitive compiler — compiles neural responses into deterministic handlers.
+	// Checked before expensive generation paths. Every neural response feeds back
+	// into the compiler, making the system faster over time.
+	CogCompiler *CognitiveCompiler
+
 	// LLM — optional local language model for enhanced responses.
 	// When set, used for: knowledge gap filling, deeper explanations,
 	// comparisons, and any query the deterministic pipeline can't handle well.
@@ -143,6 +148,43 @@ type LLMClient interface {
 // Wire up the fields after creation as each subsystem initialises.
 func NewActionRouter() *ActionRouter {
 	return &ActionRouter{}
+}
+
+// TryCompiled checks the cognitive compiler for a pre-compiled handler
+// that matches the input. Returns the response and true if a compiled
+// handler was found, or empty string and false if no match.
+// This is the fast path: O(n) regex match, no neural computation.
+func (ar *ActionRouter) TryCompiled(input string) (string, bool) {
+	if ar.CogCompiler == nil {
+		return "", false
+	}
+	handler, slots := ar.CogCompiler.Match(input)
+	if handler == nil {
+		return "", false
+	}
+	response := ar.CogCompiler.Execute(handler, slots)
+	if response == "" {
+		return "", false
+	}
+	ar.CogCompiler.Observe(handler, true)
+	return response, true
+}
+
+// LearnResponse feeds a (input, response, nlu) tuple into the cognitive
+// compiler so it can extract a pattern and compile a deterministic handler.
+// Called asynchronously after every successful response generation.
+func (ar *ActionRouter) LearnResponse(input, response string, nlu *NLUResult) {
+	if ar.CogCompiler == nil || nlu == nil {
+		return
+	}
+	entities := nlu.Entities
+	if entities == nil {
+		entities = make(map[string]string)
+	}
+	handler := ar.CogCompiler.Compile(input, response, nlu.Intent, entities)
+	if handler != nil {
+		ar.CogCompiler.Save()
+	}
 }
 
 // ActionChain represents a sequence of actions to execute in order.
