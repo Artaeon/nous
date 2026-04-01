@@ -24,9 +24,10 @@ type CodePlan struct {
 	Description string        `json:"description"`
 	Type        string        `json:"type"` // "api", "cli", "library", "worker"
 	Entities    []Entity      `json:"entities"`
-	Storage     string        `json:"storage"` // "memory", "file"
+	Storage     string        `json:"storage"` // "memory", "json_file"
 	Features    []string      `json:"features"`
 	Files       []PlannedFile `json:"files"`
+	Domain      *DomainDef    `json:"-"` // matched domain from knowledge base
 }
 
 // Entity is a data model extracted from the description.
@@ -74,8 +75,15 @@ func (ca *CodeAgent) Build(description string) (*BuildResult, error) {
 	plan := ca.ParseRequest(description)
 	result.Plan = plan
 	ca.log("  Project: %s (%s)", plan.ProjectName, plan.Type)
+	if plan.Domain != nil {
+		ca.log("  Domain:  %s (%d operations)", plan.Domain.Name, len(plan.Domain.Operations))
+	}
 	for _, e := range plan.Entities {
-		ca.log("  Entity: %s (%d fields)", e.Name, len(e.Fields))
+		fields := make([]string, len(e.Fields))
+		for i, f := range e.Fields {
+			fields[i] = f.Name
+		}
+		ca.log("  Entity:  %s {%s}", e.Name, strings.Join(fields, ", "))
 	}
 	ca.log("  Storage: %s", plan.Storage)
 	ca.log("")
@@ -90,17 +98,23 @@ func (ca *CodeAgent) Build(description string) (*BuildResult, error) {
 	var files []string
 	var err error
 
-	switch plan.Type {
-	case "api":
-		files, err = ca.generateAPI(plan)
-	case "cli":
-		files, err = ca.generateCLI(plan)
-	case "library":
-		files, err = ca.generateLibrary(plan)
-	case "worker":
-		files, err = ca.generateWorker(plan)
-	default:
-		files, err = ca.generateAPI(plan) // default to API
+	// Use smart domain-aware generation when a domain was matched
+	if plan.Domain != nil && plan.Type == "cli" {
+		ca.log("  (using domain knowledge: %s)", plan.Domain.Name)
+		files, err = ca.GenerateSmartCLI(plan, plan.Domain)
+	} else {
+		switch plan.Type {
+		case "api":
+			files, err = ca.generateAPI(plan)
+		case "cli":
+			files, err = ca.generateCLI(plan)
+		case "library":
+			files, err = ca.generateLibrary(plan)
+		case "worker":
+			files, err = ca.generateWorker(plan)
+		default:
+			files, err = ca.generateAPI(plan)
+		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("generate: %w", err)
@@ -173,53 +187,59 @@ func (ca *CodeAgent) log(format string, args ...interface{}) {
 // -----------------------------------------------------------------------
 
 // ParseRequest parses a natural language description into a code plan.
+// Uses the domain knowledge base to understand what the user wants to build.
 func (ca *CodeAgent) ParseRequest(desc string) *CodePlan {
 	lower := strings.ToLower(desc)
 	plan := &CodePlan{Description: desc}
 
-	// Detect project type
+	// Step 1: Find matching domain from the knowledge base
+	domain := FindDomain(desc)
+	if domain != nil {
+		plan.Entities = []Entity{domain.Entity}
+		plan.Domain = domain
+	}
+
+	// Step 2: Detect project type
 	switch {
-	case containsAnyWord(lower, "rest api", "http server", "web server", "api server", "web api", "api"):
+	case containsAnyWord(lower, "rest api", "http server", "web server", "api server", "web api"):
 		plan.Type = "api"
-	case containsAnyWord(lower, "cli", "command line", "terminal", "console"):
+	case containsAnyWord(lower, "cli", "command line", "terminal", "console", "tool"):
 		plan.Type = "cli"
 	case containsAnyWord(lower, "library", "package", "module", "pkg"):
 		plan.Type = "library"
 	case containsAnyWord(lower, "worker", "background", "queue", "job", "processor"):
 		plan.Type = "worker"
 	default:
-		plan.Type = "api"
+		if domain != nil {
+			plan.Type = "cli" // domains default to CLI tools
+		} else {
+			plan.Type = "api"
+		}
 	}
 
-	// Detect storage
-	switch {
-	case containsAnyWord(lower, "sqlite", "database", "postgres", "mysql", "db"):
-		plan.Storage = "database"
-	case containsAnyWord(lower, "file", "json file", "disk"):
-		plan.Storage = "file"
-	default:
-		plan.Storage = "memory"
+	// Step 3: Extract context (storage, style, replaces)
+	ctx := ExtractContext(desc)
+	plan.Storage = ctx["storage"]
+
+	// Step 4: If no domain matched, fall back to entity extraction
+	if plan.Domain == nil {
+		plan.Entities = extractEntities(lower)
 	}
 
-	// Extract entities
-	plan.Entities = extractEntities(lower)
-
-	// Generate project name
+	// Step 5: Generate project name
 	if len(plan.Entities) > 0 {
-		plan.ProjectName = strings.ToLower(plan.Entities[0].Name) + "-" + plan.Type
+		entityLower := strings.ToLower(plan.Entities[0].Name)
+		plan.ProjectName = entityLower + "-" + plan.Type
 	} else {
 		plan.ProjectName = "myproject"
 	}
 
-	// Detect features
+	// Step 6: Detect features
 	if containsAnyWord(lower, "auth", "authentication", "jwt", "login") {
 		plan.Features = append(plan.Features, "auth")
 	}
 	if containsAnyWord(lower, "cors") {
 		plan.Features = append(plan.Features, "cors")
-	}
-	if containsAnyWord(lower, "logging", "log", "logs") {
-		plan.Features = append(plan.Features, "logging")
 	}
 
 	return plan
