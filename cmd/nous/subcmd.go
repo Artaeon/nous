@@ -529,6 +529,8 @@ Commands:
 		return runCodeDoc(args[1:])
 	case "deps":
 		return runCodeDeps(args[1:])
+	case "diff":
+		return runCodeDiffCmd(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown code command: %s\n", args[0])
 		os.Exit(1)
@@ -1106,5 +1108,77 @@ func runCodeDeps(args []string) bool {
 	} else {
 		fmt.Print(graph.Render(funcName, 2))
 	}
+	return true
+}
+
+// --- code diff subcommand ---
+
+func runCodeDiffCmd(args []string) bool {
+	staged := false
+	commitHash := ""
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--staged":
+			staged = true
+		case "--commit":
+			if i+1 < len(args) {
+				i++
+				commitHash = args[i]
+			}
+		}
+	}
+
+	var diffText string
+	var err error
+
+	if commitHash != "" {
+		cmd := exec.Command("git", "show", commitHash)
+		out, e := cmd.Output()
+		diffText, err = string(out), e
+	} else if staged {
+		cmd := exec.Command("git", "diff", "--staged")
+		out, e := cmd.Output()
+		diffText, err = string(out), e
+	} else {
+		// Check stdin first
+		piped := readStdin()
+		if piped != "" {
+			diffText = piped
+		} else {
+			cmd := exec.Command("git", "diff")
+			out, e := cmd.Output()
+			diffText, err = string(out), e
+		}
+	}
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error getting diff: %v\n", err)
+		os.Exit(1)
+	}
+
+	if strings.TrimSpace(diffText) == "" {
+		fmt.Println("no changes to explain")
+		return true
+	}
+
+	explainer := &cognitive.DiffExplainer{}
+	result := explainer.ExplainDiff(diffText)
+
+	fmt.Printf("Intent:   %s\n", result.Intent)
+	fmt.Printf("Risk:     %s\n", result.Risk)
+	if result.Breaking {
+		fmt.Printf("Breaking: YES\n")
+	}
+	fmt.Println()
+	fmt.Println(result.Summary)
+
+	if len(result.Files) > 0 {
+		fmt.Println()
+		fmt.Println("Files:")
+		for _, f := range result.Files {
+			fmt.Printf("  %-50s +%d -%d  %s\n", f.Path, f.Added, f.Removed, f.Description)
+		}
+	}
+
 	return true
 }
