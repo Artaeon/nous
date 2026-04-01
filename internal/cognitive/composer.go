@@ -734,8 +734,13 @@ func (c *Composer) composeFactual(query string) *ComposedResponse {
 
 	// Clean factual output: description + structured realization.
 	var parts []string
-	if desc := c.Graph.LookupDescription(topic); len(desc) >= 40 {
+	desc := c.Graph.LookupDescription(topic)
+	if len(desc) >= 40 {
 		parts = append(parts, desc)
+	}
+	// Filter out facts already covered by the description to avoid duplication.
+	if desc != "" {
+		facts = filterRedundantFacts(facts, desc)
 	}
 	if len(facts) > 0 {
 		// For rich topics (4+ facts), use discourse planner for paragraph structure
@@ -759,11 +764,142 @@ func (c *Composer) composeFactual(query string) *ComposedResponse {
 	if len(parts) == 0 {
 		return nil
 	}
+	text := cleanSentences(strings.Join(parts, "\n\n"))
 	return &ComposedResponse{
-		Text:    strings.Join(parts, "\n\n"),
+		Text:    text,
 		Sources: uniqueStrings(sources),
 		Type:    RespFactual,
 	}
+}
+
+// cleanSentences post-processes composed text to remove broken fragments,
+// fix pronoun capitalization issues, and eliminate duplicate sentences.
+func cleanSentences(text string) string {
+	// Split on paragraph boundaries to preserve structure.
+	paragraphs := strings.Split(text, "\n\n")
+	var cleanParagraphs []string
+
+	// Collect all sentences across paragraphs for substring dedup.
+	var allSentences []string
+
+	for _, para := range paragraphs {
+		sentences := splitCleanSentences(para)
+		for _, s := range sentences {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			allSentences = append(allSentences, s)
+		}
+	}
+
+	for _, para := range paragraphs {
+		sentences := splitCleanSentences(para)
+		var kept []string
+		for _, s := range sentences {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			// Remove short fragments (likely broken).
+			if len(s) < 15 {
+				continue
+			}
+			// Fix mid-sentence pronoun capitalization: "of It" → "of it"
+			s = fixPronounCase(s)
+			// Remove sentences that are substrings of other sentences.
+			if isSentenceSubstring(s, allSentences) {
+				continue
+			}
+			kept = append(kept, s)
+		}
+		if len(kept) > 0 {
+			p := strings.Join(kept, " ")
+			// Collapse multiple spaces.
+			p = collapseCleanSpaces(p)
+			cleanParagraphs = append(cleanParagraphs, p)
+		}
+	}
+	if len(cleanParagraphs) == 0 {
+		return text // Don't destroy the response if cleaning is too aggressive
+	}
+	return strings.Join(cleanParagraphs, "\n\n")
+}
+
+// splitCleanSentences splits text on sentence-ending punctuation while
+// keeping the terminator attached to each sentence.
+func splitCleanSentences(text string) []string {
+	var sentences []string
+	start := 0
+	for i := 0; i < len(text); i++ {
+		if text[i] == '.' || text[i] == '!' || text[i] == '?' {
+			// Look ahead to see if this is truly a sentence boundary
+			// (followed by space+uppercase, end of string, or newline).
+			end := i + 1
+			if end >= len(text) || (end < len(text) && (text[end] == ' ' || text[end] == '\n')) {
+				sentences = append(sentences, strings.TrimSpace(text[start:end]))
+				start = end
+			}
+		}
+	}
+	if start < len(text) {
+		remainder := strings.TrimSpace(text[start:])
+		if remainder != "" {
+			sentences = append(sentences, remainder)
+		}
+	}
+	return sentences
+}
+
+// fixPronounCase fixes common mid-sentence pronoun capitalization errors
+// like "of It", "use of It", "for It".
+var pronounCaseRe = regexp.MustCompile(`\b(of|for|about|with|from|by|to|use of|in) (It|Its)\b`)
+
+func fixPronounCase(s string) string {
+	return pronounCaseRe.ReplaceAllStringFunc(s, func(m string) string {
+		return strings.Replace(m, " It", " it", 1)
+	})
+}
+
+// isSentenceSubstring returns true if sentence is a proper substring of
+// any other sentence in the list (not equal, just strictly contained).
+func isSentenceSubstring(sentence string, all []string) bool {
+	lower := strings.ToLower(sentence)
+	for _, other := range all {
+		otherLower := strings.ToLower(other)
+		if len(otherLower) > len(lower) && strings.Contains(otherLower, lower) {
+			return true
+		}
+	}
+	return false
+}
+
+// collapseCleanSpaces replaces runs of whitespace with a single space and
+// fixes double-period punctuation.
+func collapseCleanSpaces(s string) string {
+	// Collapse multiple spaces.
+	for strings.Contains(s, "  ") {
+		s = strings.ReplaceAll(s, "  ", " ")
+	}
+	// Fix double periods.
+	s = strings.ReplaceAll(s, "..", ".")
+	return s
+}
+
+// filterRedundantFacts removes facts whose object is already mentioned
+// in a pre-written description, avoiding duplicated information.
+func filterRedundantFacts(facts []edgeFact, description string) []edgeFact {
+	lower := strings.ToLower(description)
+	var filtered []edgeFact
+	for _, f := range facts {
+		objLower := strings.ToLower(f.Object)
+		// Skip if the object is already mentioned in the description
+		if strings.Contains(lower, objLower) {
+			continue
+		}
+		filtered = append(filtered, f)
+	}
+	return filtered
 }
 
 // gatherFacts extracts typed facts from the graph for a query.
@@ -1274,6 +1410,20 @@ func (c *Composer) structuredRealization(facts []edgeFact) string {
 	if len(facts) == 0 {
 		return ""
 	}
+
+	// Deduplicate facts by (relation, lower(object)) to avoid repeating
+	// the same information with slightly different phrasing.
+	seen := make(map[string]bool)
+	var dedupFacts []edgeFact
+	for _, f := range facts {
+		key := string(f.Relation) + ":" + strings.ToLower(f.Object)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		dedupFacts = append(dedupFacts, f)
+	}
+	facts = dedupFacts
 
 	facts = c.varyOpening(facts)
 
