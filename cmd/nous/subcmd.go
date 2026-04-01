@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 
@@ -31,10 +33,49 @@ func SubcommandRouter(args []string, nlu *cognitive.NLU, actions *cognitive.Acti
 	}
 }
 
-// Subcommand stubs — each is implemented in subsequent commits.
-// They exist here as forward declarations so the router compiles.
+// --- understand subcommand ---
 
-func runUnderstand(_ []string, _ *cognitive.NLU) bool          { return true }
+// understandResult is the JSON output for "nous understand".
+type understandResult struct {
+	Intent     string            `json:"intent"`
+	Action     string            `json:"action"`
+	Entities   map[string]string `json:"entities"`
+	Confidence float64           `json:"confidence"`
+	Raw        string            `json:"raw"`
+}
+
+func runUnderstand(args []string, nlu *cognitive.NLU) bool {
+	// Collect input: positional args or stdin
+	text := strings.Join(args, " ")
+	if text == "" {
+		text = readStdin()
+	}
+	if text == "" {
+		fmt.Fprintln(os.Stderr, "usage: nous understand <text>")
+		os.Exit(1)
+	}
+
+	result := nlu.Understand(text)
+
+	out := understandResult{
+		Intent:     result.Intent,
+		Action:     result.Action,
+		Entities:   result.Entities,
+		Confidence: result.Confidence,
+		Raw:        result.Raw,
+	}
+	if out.Entities == nil {
+		out.Entities = make(map[string]string)
+	}
+
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	enc.Encode(out)
+	return true
+}
+
+// Subcommand stubs — each is implemented in subsequent commits.
+
 func runGenerate(_ []string, _ *cognitive.ActionRouter) bool   { return true }
 func runReason(_ []string, _ *cognitive.ActionRouter) bool     { return true }
 func runRemember(_ []string, _ *memory.LongTermMemory) bool    { return true }
