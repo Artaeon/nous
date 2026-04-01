@@ -477,6 +477,10 @@ func main() {
 			actions.MicroModel = bridge
 			fmt.Printf("  loaded micro language model (transformer)\n")
 		}
+	} else {
+		fmt.Printf("  %s⚡%s no Mamba model found — train one for neural generation:\n",
+			cognitive.ColorYellow, cognitive.ColorReset)
+		fmt.Printf("       nous-train mamba -knowledge knowledge/\n")
 	}
 
 	// Cognitive compiler — compiles responses into deterministic handlers.
