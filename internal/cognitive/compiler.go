@@ -308,7 +308,7 @@ func (cc *CognitiveCompiler) Compile(input string, response string, intent strin
 		Template: tmpl,
 		Slots:    slotDefs,
 		Source:   "neural",
-		Quality:  0.6, // initial quality; needs observation to increase
+		Quality:  0.7, // initial quality; needs observation to increase
 		Compiled: now,
 		LastUsed: now,
 	}
@@ -413,9 +413,11 @@ func (cc *CognitiveCompiler) Match(input string) (*CompiledHandler, map[string]s
 		}
 	}
 
-	// Minimum acceptable score: the product of the lowest acceptable
-	// confidence (0.7 from extractPattern) and the initial quality (0.6).
-	if bestScore < 0.7*0.6 {
+	// Minimum acceptable score. Since regex already matched (structural
+	// match), we only need the confidence*quality product to be reasonable.
+	// Patterns with confidence >= 0.2 are admitted by extractPattern, and
+	// initial quality is 0.7, so 0.15 is the floor for fresh handlers.
+	if bestScore < 0.3 {
 		return nil, nil
 	}
 
