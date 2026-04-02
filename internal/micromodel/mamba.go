@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -33,6 +34,7 @@ type MambaConfig struct {
 }
 
 // DefaultMambaConfig returns the standard ~8M parameter configuration.
+// MaxSeqLen=256 supports paragraph-length generation (~200 words).
 func DefaultMambaConfig() MambaConfig {
 	return MambaConfig{
 		VocabSize: 8000,
@@ -41,7 +43,7 @@ func DefaultMambaConfig() MambaConfig {
 		ConvDim:   4,
 		Expand:    2,
 		NumLayers: 8,
-		MaxSeqLen: 128,
+		MaxSeqLen: 256,
 	}
 }
 
@@ -579,6 +581,93 @@ func (m *MambaModel) Generate(subject, relation, object string, maxLen int, temp
 	}
 
 	return m.Tok.Decode(genIDs)
+}
+
+// GenerateFreeform produces a paragraph about a topic without requiring
+// a knowledge triple. Uses the "<bos> topic <sep> describe" prompt format.
+// This enables neural paragraph generation from just a topic name.
+func (m *MambaModel) GenerateFreeform(topic string, maxLen int, temperature float32) string {
+	if topic == "" || m.Tok == nil {
+		return ""
+	}
+	if maxLen <= 0 {
+		maxLen = m.Config.MaxSeqLen
+	}
+	if temperature <= 0 {
+		temperature = 0.7
+	}
+
+	// Encode prompt: <bos> topic <sep> describe <sep>
+	prompt := "<bos> " + strings.ToLower(strings.TrimSpace(topic)) + " <sep> describe <sep>"
+	prefixIDs := m.Tok.Encode(prompt)
+	if len(prefixIDs) > m.Config.MaxSeqLen/4 {
+		prefixIDs = prefixIDs[:m.Config.MaxSeqLen/4]
+	}
+
+	state := m.NewMambaState()
+	rngFunc := func() float64 { return m.rng.Float64() }
+
+	// Process prefix
+	for _, id := range prefixIDs {
+		m.StepForward(id, state)
+	}
+
+	// Generate
+	var genIDs []int
+	seen := make(map[int]int) // token → count (for repetition penalty)
+	for i := 0; i < maxLen; i++ {
+		var logits []float32
+		if len(genIDs) == 0 {
+			logits = m.StepForward(prefixIDs[len(prefixIDs)-1], state)
+		} else {
+			logits = m.StepForward(genIDs[len(genIDs)-1], state)
+		}
+
+		// Apply repetition penalty
+		probs := make([]float32, len(logits))
+		copy(probs, logits)
+		for id, count := range seen {
+			if count > 1 && id < len(probs) {
+				probs[id] *= float32(1.0 / (1.0 + 0.3*float64(count)))
+			}
+		}
+
+		softmax(probs, 1, len(probs))
+
+		// Suppress special tokens in first few tokens
+		if i < 5 {
+			probs[EosID] = 0
+			probs[PadID] = 0
+			probs[BosID] = 0
+			probs[SepID] = 0
+			var sum float32
+			for _, p := range probs {
+				sum += p
+			}
+			if sum > 0 {
+				for j := range probs {
+					probs[j] /= sum
+				}
+			}
+		}
+
+		nextID := sampleToken(probs, temperature, rngFunc)
+		if nextID == EosID || nextID == PadID {
+			break
+		}
+		genIDs = append(genIDs, nextID)
+		seen[nextID]++
+	}
+
+	result := m.Tok.Decode(genIDs)
+	// Clean up: ensure proper sentence ending
+	result = strings.TrimSpace(result)
+	if result != "" && !strings.HasSuffix(result, ".") && !strings.HasSuffix(result, "!") && !strings.HasSuffix(result, "?") {
+		if lastDot := strings.LastIndex(result, "."); lastDot > 20 {
+			result = result[:lastDot+1]
+		}
+	}
+	return result
 }
 
 // -----------------------------------------------------------------------

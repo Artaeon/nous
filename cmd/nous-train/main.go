@@ -69,10 +69,16 @@ func trainMamba(args []string) {
 	small := fs.Bool("small", false, "Use small config (faster, for testing)")
 	fs.Parse(args)
 
-	// Generate training pairs (same pipeline as transformer)
+	// Generate training pairs — triples + freeform paragraphs
 	fmt.Println("Generating training data...")
 	pairs := micromodel.GenerateTrainingPairs(*knowledgeDir)
-	fmt.Printf("  Extracted %d pairs from knowledge corpus\n", len(pairs))
+	triplePairs := len(pairs)
+	fmt.Printf("  Triple pairs: %d\n", triplePairs)
+
+	// Add freeform paragraph pairs for paragraph-level generation
+	paraPairs := micromodel.ExtractParagraphPairs(*knowledgeDir, 600)
+	pairs = append(pairs, paraPairs...)
+	fmt.Printf("  Paragraph pairs: %d\n", len(paraPairs))
 	fmt.Printf("  Total: %d training pairs\n", len(pairs))
 
 	if len(pairs) == 0 {

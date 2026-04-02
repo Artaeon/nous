@@ -76,10 +76,28 @@ func (b *Bridge) GenerateConstrained(subject, relation, object string, extraFact
 	return ""
 }
 
+// GenerateFreeform produces a paragraph about a topic using neural generation.
+// Only available with Mamba backend. Returns empty string for transformer.
+func (b *Bridge) GenerateFreeform(topic string) string {
+	if b == nil || b.Mamba == nil {
+		return ""
+	}
+	return b.Mamba.GenerateFreeform(topic, 0, 0.7)
+}
+
 // GenerateParagraph takes multiple fact triples and returns a coherent paragraph.
+// If no facts are provided and Mamba is available, uses freeform generation.
 // Uses constrained generation with Mamba, standard generation with transformer.
 func (b *Bridge) GenerateParagraph(topic string, facts [][3]string) string {
-	if b == nil || b.generator == nil || len(facts) == 0 {
+	if b == nil || b.generator == nil {
+		return ""
+	}
+
+	// If no facts provided, try freeform generation (Mamba only)
+	if len(facts) == 0 {
+		if b.Mamba != nil && topic != "" {
+			return b.Mamba.GenerateFreeform(topic, 0, 0.7)
+		}
 		return ""
 	}
 

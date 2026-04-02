@@ -733,6 +733,70 @@ func extractFromKnowledge(dir string) []TrainingExample {
 	return examples
 }
 
+// ExtractParagraphPairs creates (topic_prompt, paragraph) training pairs
+// for freeform paragraph generation. Instead of decomposing into triples,
+// this preserves the full paragraph as the training target.
+// Input format: "<bos> topic <sep> describe"
+// Target: full paragraph text (truncated to maxSeqLen tokens)
+func ExtractParagraphPairs(knowledgeDir string, maxTargetLen int) []TrainingExample {
+	var examples []TrainingExample
+
+	if maxTargetLen <= 0 {
+		maxTargetLen = 250 // ~200 words
+	}
+
+	files, err := filepath.Glob(filepath.Join(knowledgeDir, "*.txt"))
+	if err != nil || len(files) == 0 {
+		return nil
+	}
+
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+
+		paragraphs := strings.Split(string(data), "\n\n")
+		for _, para := range paragraphs {
+			para = strings.TrimSpace(para)
+			if len(para) < 100 {
+				continue // skip short paragraphs
+			}
+
+			// Extract topic from first sentence
+			sentences := splitKnowledgeSentences(para)
+			if len(sentences) == 0 {
+				continue
+			}
+			topic := extractSentenceTopic(sentences[0])
+			if topic == "" {
+				continue
+			}
+
+			// Truncate paragraph to maxTargetLen characters
+			target := para
+			if len(target) > maxTargetLen {
+				// Truncate at sentence boundary
+				truncated := target[:maxTargetLen]
+				if lastDot := strings.LastIndex(truncated, ". "); lastDot > 100 {
+					truncated = truncated[:lastDot+1]
+				}
+				target = truncated
+			}
+
+			// Create the freeform training pair
+			input := fmt.Sprintf("<bos> %s <sep> describe", strings.ToLower(topic))
+			examples = append(examples, TrainingExample{Input: input, Target: target})
+
+			// Also create a "what is" variant
+			input2 := fmt.Sprintf("<bos> what is %s <sep> explain", strings.ToLower(topic))
+			examples = append(examples, TrainingExample{Input: input2, Target: target})
+		}
+	}
+
+	return examples
+}
+
 func splitKnowledgeSentences(text string) []string {
 	var sentences []string
 	remaining := text
