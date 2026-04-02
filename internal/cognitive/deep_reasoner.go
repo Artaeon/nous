@@ -69,6 +69,16 @@ func (dr *DeepReasoner) Reason(question string) *DeepReasoningResult {
 	// 2. Answer each sub-question from the knowledge graph and text.
 	var steps []ReasoningChainStep
 	prevConclusion := ""
+	seenAnswers := make(map[string]bool) // dedup identical answers
+
+	// Extract the original topic for relevance checking.
+	origTopic := extractDeepTopic(strings.ToLower(question))
+	if origTopic == "" {
+		// Fallback: extract from first sub-question
+		if len(subQuestions) > 0 {
+			origTopic = dr.extractTopic(subQuestions[0])
+		}
+	}
 
 	for i, sq := range subQuestions {
 		step := ReasoningChainStep{
@@ -77,6 +87,38 @@ func (dr *DeepReasoner) Reason(question string) *DeepReasoningResult {
 
 		// Search the knowledge graph for facts.
 		premise, source := dr.answerSubQuestion(sq)
+
+		// Dedup: if this answer is identical to a previous one, skip it.
+		if premise != "" {
+			premiseKey := strings.ToLower(strings.TrimSpace(premise))
+			if len(premiseKey) > 80 {
+				premiseKey = premiseKey[:80]
+			}
+			if seenAnswers[premiseKey] {
+				premise = ""
+				source = "none"
+			} else {
+				seenAnswers[premiseKey] = true
+			}
+		}
+
+		// Relevance check: if the answer doesn't mention any word from the
+		// original topic, it's probably from a loosely related graph node.
+		if premise != "" && origTopic != "" {
+			premLower := strings.ToLower(premise)
+			topicWords := strings.Fields(strings.ToLower(origTopic))
+			relevant := false
+			for _, tw := range topicWords {
+				if len(tw) > 3 && strings.Contains(premLower, tw) {
+					relevant = true
+					break
+				}
+			}
+			if !relevant {
+				premise = ""
+				source = "none"
+			}
+		}
 
 		// If the previous step produced a conclusion, incorporate it.
 		if prevConclusion != "" && premise != "" {
@@ -156,11 +198,27 @@ type decompositionRule struct {
 
 // decompositionRules defines how complex questions are broken down.
 var decompositionRules = []decompositionRule{
-	// "Why X?" → "What is X?" + "What causes X?"
+	// "Why is X Y?" → extract the subject X and predicate Y properly.
+	// "Why is the sky blue?" → topic = "sky", predicate = "blue"
+	// "Why are cats afraid of water?" → topic = "cats"
 	{
 		pattern: regexp.MustCompile(`(?i)^why\s+(?:is|are|does|do|did|was|were|has|have|had|can|could|would|should|might)\s+(.+?)[\?]?$`),
-		build: func(m []string, _ string) []string {
-			topic := strings.TrimRight(m[1], "? ")
+		build: func(m []string, original string) []string {
+			raw := strings.TrimRight(m[1], "? ")
+			// Try to split into subject + predicate: "the sky blue" → "sky"
+			words := strings.Fields(raw)
+			topic := raw
+			if len(words) >= 2 {
+				// Skip articles
+				start := 0
+				if words[0] == "the" || words[0] == "a" || words[0] == "an" {
+					start = 1
+				}
+				// The subject is typically the first noun phrase
+				if start < len(words) {
+					topic = strings.Join(words[start:], " ")
+				}
+			}
 			return []string{
 				"What is " + topic + "?",
 				"What causes " + topic + "?",

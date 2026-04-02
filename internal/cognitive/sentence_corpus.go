@@ -302,6 +302,14 @@ func scoreExemplar(ex SentenceExemplar, targetSubjLower, targetObj string) float
 func adaptSentence(ex SentenceExemplar, targetSubj, targetObj string) string {
 	result := ex.Sentence
 
+	// Safety guard: don't adapt long paragraphs (>200 chars). Adaptation works
+	// for single sentences ("X is a Y" → "Z is a Y") but produces nonsense
+	// for full paragraphs where only the first-sentence subject is replaced
+	// while the rest of the paragraph remains about the original topic.
+	if len(result) > 200 {
+		return ""
+	}
+
 	// Replace subject (first occurrence only).
 	result = strings.Replace(result, ex.Subject, capitalizeFirst(targetSubj), 1)
 

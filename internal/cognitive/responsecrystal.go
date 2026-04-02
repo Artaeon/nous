@@ -211,6 +211,22 @@ func (s *ResponseCrystalStore) Lookup(query string) (string, bool) {
 		return "", false
 	}
 
+	// Topic verification: for knowledge/factual queries, verify that the
+	// core topic noun of the query matches the crystal's original query.
+	// Without this, "What is gravity?" matches "What is photosynthesis?"
+	// because the structural words "what is" dominate the embedding average.
+	queryTopic := ExtractNounPhrase(query)
+	crystalTopic := ExtractNounPhrase(s.crystals[bestIdx].Query)
+	if queryTopic != "" && crystalTopic != "" {
+		qtLower := strings.ToLower(queryTopic)
+		ctLower := strings.ToLower(crystalTopic)
+		if qtLower != ctLower &&
+			!strings.Contains(qtLower, ctLower) &&
+			!strings.Contains(ctLower, qtLower) {
+			return "", false // topic mismatch — don't serve stale crystal
+		}
+	}
+
 	// Safe to update under the same write lock — no race window
 	s.crystals[bestIdx].Uses++
 	s.crystals[bestIdx].LastUsed = time.Now()

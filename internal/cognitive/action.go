@@ -156,36 +156,21 @@ func NewActionRouter() *ActionRouter {
 // handler was found, or empty string and false if no match.
 // This is the fast path: O(n) regex match, no neural computation.
 func (ar *ActionRouter) TryCompiled(input string) (string, bool) {
-	if ar.CogCompiler == nil {
-		return "", false
-	}
-	handler, slots := ar.CogCompiler.Match(input)
-	if handler == nil {
-		return "", false
-	}
-	response := ar.CogCompiler.Execute(handler, slots)
-	if response == "" {
-		return "", false
-	}
-	ar.CogCompiler.Observe(handler, true)
-	return response, true
+	// Disabled: the cognitive compiler caches full response text keyed by
+	// regex patterns, causing cross-topic contamination (e.g., "What is
+	// gravity?" returns the photosynthesis paragraph). Will be re-enabled
+	// with topic-aware validation in a future update.
+	return "", false
 }
 
 // LearnResponse feeds a (input, response, nlu) tuple into the cognitive
 // compiler so it can extract a pattern and compile a deterministic handler.
 // Called asynchronously after every successful response generation.
 func (ar *ActionRouter) LearnResponse(input, response string, nlu *NLUResult) {
-	if ar.CogCompiler == nil || nlu == nil {
-		return
-	}
-	entities := nlu.Entities
-	if entities == nil {
-		entities = make(map[string]string)
-	}
-	handler := ar.CogCompiler.Compile(input, response, nlu.Intent, entities)
-	if handler != nil {
-		ar.CogCompiler.Save()
-	}
+	// Disabled: cognitive compiler caches full response text keyed by regex
+	// patterns, causing cross-topic contamination. Will be re-enabled with
+	// topic-aware validation.
+	return
 }
 
 // ActionChain represents a sequence of actions to execute in order.
@@ -205,6 +190,14 @@ type ChainStep struct {
 // Execute runs the appropriate action for an NLU result.
 // This is PURE CODE — no LLM calls. Returns raw data/facts.
 func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResult {
+	// Safety guard: refuse requests that involve harmful activities.
+	if isHarmfulRequest(nlu.Raw) {
+		return &ActionResult{
+			DirectResponse: "I can't help with that. I'm designed to be helpful, but I need to avoid assisting with activities that could harm others. Is there something else I can help you with?",
+			Source:         "safety",
+		}
+	}
+
 	// Conversational context: resolve pronouns and references using the
 	// current conversation topic. "why are THEY dangerous?" → "they" = last topic.
 	// "can anything escape from ONE?" → "one" = last topic.
@@ -715,7 +708,13 @@ func (ar *ActionRouter) dispatch(nlu *NLUResult, conv *Conversation) *ActionResu
 	case "qrcode":
 		return ar.handleGenericTool(nlu, "qrcode")
 	case "calculate":
-		return ar.handleCalculate(nlu)
+		result := ar.handleCalculate(nlu)
+		if result != nil && strings.HasPrefix(result.DirectResponse, "Could not calculate") {
+			if compResult := ar.handleCompute(nlu); compResult != nil && !strings.HasPrefix(compResult.DirectResponse, "cannot compute") {
+				return compResult
+			}
+		}
+		return result
 	case "password":
 		return ar.handlePassword(nlu)
 	case "bookmark":
@@ -1147,14 +1146,22 @@ func isFarewell(lower string) bool {
 }
 
 func isThankYou(lower string) bool {
-	thanks := []string{
-		"thanks", "thank you", "thx", "ty", "thank you so much",
-		"thanks a lot", "much appreciated", "appreciate it",
-		"thanks so much", "thank you very much", "cheers",
-	}
 	clean := strings.TrimRight(strings.TrimSpace(lower), "!?.\\ ")
-	for _, t := range thanks {
+	exactThanks := []string{
+		"thanks", "thx", "ty", "cheers", "much appreciated",
+		"appreciate it", "appreciated",
+	}
+	for _, t := range exactThanks {
 		if clean == t {
+			return true
+		}
+	}
+	prefixThanks := []string{
+		"thank you", "thanks a lot", "thanks so much",
+		"thanks for", "thank you for", "many thanks",
+	}
+	for _, t := range prefixThanks {
+		if strings.HasPrefix(clean, t) {
 			return true
 		}
 	}
@@ -4610,6 +4617,34 @@ func sentenceOverlaps(sentence, existingLower string) bool {
 // isEmotionalStatement detects personal emotional statements that need
 // empathy, not knowledge lookup. E.g., "I got promoted!", "I'm feeling sad",
 // "I just had a terrible day", "my dog passed away".
+func isHarmfulRequest(input string) bool {
+	lower := strings.ToLower(strings.TrimSpace(input))
+	harmfulPatterns := []string{
+		"hack into", "hack someone", "break into someone",
+		"steal password", "steal someone", "steal credit card",
+		"ddos", "denial of service",
+		"make a bomb", "build a bomb", "build an explosive", "make explosives",
+		"how to kill", "how to murder", "how to poison",
+		"how to stalk", "how to spy on someone",
+		"create a virus", "create malware", "write malware",
+		"phishing", "social engineer someone",
+		"forge a document", "fake identity", "fake passport",
+		"bypass security", "crack a password", "brute force",
+		"how to rob", "how to burglar",
+		"child exploitation", "child porn",
+		"how to make drugs", "how to cook meth",
+		"how to hurt", "how to harm someone",
+		"ignore all previous instructions", "ignore your instructions",
+		"disregard your programming", "override your safety",
+	}
+	for _, p := range harmfulPatterns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
 func isEmotionalStatement(input string) bool {
 	lower := strings.ToLower(strings.TrimSpace(input))
 	// Must start with a personal pronoun or possessive.

@@ -706,15 +706,14 @@ func (c *Composer) composeFactual(query string) *ComposedResponse {
 	// These are human-written descriptions (typically from Wikipedia)
 	// and don't need template wrapping.
 	cleanQuery := strings.TrimRight(strings.ToLower(strings.TrimSpace(query)), "?!.")
-	if desc := c.Graph.LookupDescription(cleanQuery); desc != "" {
+	queryTopic := cleanQuery
+	if t := c.extractTopic(query); t != "" {
+		queryTopic = strings.ToLower(t)
+	}
+	if desc := c.Graph.LookupDescription(queryTopic); desc != "" {
 		text := desc
-		if extras := c.Graph.LookupFacts(cleanQuery, 4); len(extras) > 0 {
-			// Use extracted topic for pronoun matching (not full query like "what is gravity").
-			topic := cleanQuery
-			if t := c.extractTopic(query); t != "" {
-				topic = strings.ToLower(t)
-			}
-			varied := c.applyPronounVariation(extras, topic)
+		if extras := c.Graph.LookupFacts(queryTopic, 4); len(extras) > 0 {
+			varied := c.applyPronounVariation(extras, queryTopic)
 			text += "\n\n" + strings.Join(varied, " ")
 		}
 		return &ComposedResponse{
@@ -729,6 +728,14 @@ func (c *Composer) composeFactual(query string) *ComposedResponse {
 	// Determine topic from facts or query
 	topic := cleanQuery
 	if len(facts) > 0 {
+		// Relevance guard: verify facts are about the queried topic.
+		ftLower := strings.ToLower(facts[0].Subject)
+		qtLower := strings.ToLower(queryTopic)
+		if qtLower != ftLower &&
+			!strings.Contains(qtLower, ftLower) &&
+			!strings.Contains(ftLower, qtLower) {
+			return nil // facts are unrelated to query
+		}
 		topic = facts[0].Subject
 	}
 
@@ -909,17 +916,18 @@ func (c *Composer) gatherFacts(query string) ([]edgeFact, []string) {
 
 	// extractKeywords filters short words like "Go", "AI", "C" — but those
 	// are valid topics. Use extractTopic as fallback for short-word queries.
+	topicStr := ""
 	if topic := c.extractTopic(query); topic != "" {
-		topicLower := strings.ToLower(topic)
+		topicStr = strings.ToLower(topic)
 		found := false
 		for _, kw := range keywords {
-			if kw == topicLower {
+			if kw == topicStr {
 				found = true
 				break
 			}
 		}
 		if !found {
-			keywords = append([]string{topicLower}, keywords...)
+			keywords = append([]string{topicStr}, keywords...)
 		}
 	}
 
@@ -941,6 +949,32 @@ func (c *Composer) gatherFacts(query string) ([]edgeFact, []string) {
 		}
 		if node == nil {
 			continue
+		}
+
+		// Relevance guard: if we have a multi-word topic like "meaning of life"
+		// but only matched a single generic keyword like "life", skip it.
+		// Single-keyword matches on generic words produce unrelated content.
+		if topicStr != "" && kw != topicStr {
+			nodeLower := strings.ToLower(node.Label)
+			// The matched node must contain the keyword AND be related to
+			// the overall topic. A node labeled "life" matching keyword "life"
+			// from query "meaning of life" is too loose.
+			if !strings.Contains(nodeLower, topicStr) && !strings.Contains(topicStr, nodeLower) {
+				// Check if the node label shares at least 2 significant words
+				// with the topic to allow reasonable partial matches.
+				topicWords := strings.Fields(topicStr)
+				if len(topicWords) > 1 {
+					matchCount := 0
+					for _, tw := range topicWords {
+						if len(tw) > 3 && strings.Contains(nodeLower, tw) {
+							matchCount++
+						}
+					}
+					if matchCount < 2 {
+						continue // too loosely related
+					}
+				}
+			}
 		}
 
 		for _, edge := range c.Graph.outEdges[id] {
@@ -2229,9 +2263,25 @@ func (c *Composer) composeExplainWithContext(query string, ctx *ComposeContext) 
 	facts, sources := c.gatherFacts(query)
 
 	// Determine topic from facts or query
-	topic := c.extractTopic(query)
+	queryTopic := c.extractTopic(query)
+	topic := queryTopic
 	if len(facts) > 0 {
 		topic = facts[0].Subject
+	}
+
+	// Relevance guard: if the facts are about a completely different topic
+	// than what was asked, don't use them. This prevents "meaning of life"
+	// returning facts about "photosynthesis" via loose keyword matching.
+	if queryTopic != "" && topic != "" && len(facts) > 0 {
+		qtLower := strings.ToLower(queryTopic)
+		ftLower := strings.ToLower(topic)
+		if qtLower != ftLower &&
+			!strings.Contains(qtLower, ftLower) &&
+			!strings.Contains(ftLower, qtLower) {
+			// Facts are about a different topic — discard them
+			facts = nil
+			topic = queryTopic
+		}
 	}
 
 	// Build a clean explanation from description + structured facts.
@@ -2533,7 +2583,21 @@ func (c *Composer) composeConversational(query string, ctx *ComposeContext) *Com
 	// If we have substantial knowledge about the query topic, USE it.
 	// Use clean fact sentences — no decorative prose, no hooks/closers.
 	if !skipKnowledge && c.Graph != nil {
+		queryTopic := c.extractTopic(query)
 		facts, sources := c.gatherFacts(query)
+
+		// Relevance guard: verify that gathered facts are actually about
+		// the queried topic, not just a loose keyword match.
+		if len(facts) > 0 && queryTopic != "" {
+			qtLower := strings.ToLower(queryTopic)
+			ftLower := strings.ToLower(facts[0].Subject)
+			if qtLower != ftLower &&
+				!strings.Contains(qtLower, ftLower) &&
+				!strings.Contains(ftLower, qtLower) {
+				facts = nil // discard unrelated facts
+			}
+		}
+
 		if len(facts) >= 2 {
 			// Lead with description if available, then structured facts
 			topic := facts[0].Subject
@@ -2660,18 +2724,24 @@ func (c *Composer) composeConversational(query string, ctx *ComposeContext) *Com
 		}
 	}
 
-	// If response is still just an acknowledgment, add a contextual question.
+	// If response is empty or just a thin acknowledgment, give an honest
+	// "I don't know" instead of a generic deflection question.
+	if len(parts) == 0 {
+		topic := c.extractTopic(query)
+		if topic != "" && len(topic) > 2 {
+			return &ComposedResponse{
+				Text:    fmt.Sprintf("I don't have much information about %s in my knowledge base yet. You can teach me, or I can search the web if available.", topic),
+				Sources: []string{"honest_fallback"},
+				Type:    RespConversational,
+			}
+		}
+		return nil
+	}
 	if len(parts) == 1 {
 		topic := c.extractTopic(query)
 		if topic != "" {
 			parts = append(parts, fmt.Sprintf("What specifically about %s would you like to explore?", topic))
-		} else {
-			parts = append(parts, "What would be most helpful for me to focus on?")
 		}
-	}
-
-	if len(parts) == 0 {
-		return nil
 	}
 
 	return &ComposedResponse{

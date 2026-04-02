@@ -356,20 +356,35 @@ func cleanTopic(topic string) string {
 
 // extractTopicFromQuery pulls the main content words from a query.
 func extractTopicFromQuery(lower string) string {
-	// Strip common signal words
+	// Strip common signal words and conversational filler
 	strip := []string{
 		"write me", "write an", "write a", "help me", "can you",
 		"please", "i want", "i need", "could you", "would you",
 		"tell me about", "explain", "teach me about", "brainstorm",
 		"ideas for", "create a", "compose a", "draft a",
 		"email", "letter", "message", "poem", "story",
+		"i'm feeling", "i am feeling", "i feel",
+		"any advice", "any tips", "any suggestions", "any help",
+		"what should i do", "what can i do", "what do i do",
+		"any ideas", "any thoughts",
 	}
 	result := lower
 	for _, s := range strip {
 		result = strings.ReplaceAll(result, s, "")
 	}
 	result = strings.TrimSpace(result)
-	result = strings.Trim(result, "?!.,")
+	result = strings.Trim(result, "?!.,;:")
+	result = strings.TrimSpace(result)
+
+	// If the result is still too long or contains comma-separated clauses,
+	// take only the first meaningful phrase.
+	if idx := strings.Index(result, ","); idx > 0 && idx < len(result)-1 {
+		candidate := strings.TrimSpace(result[:idx])
+		if len(candidate) >= 3 {
+			result = candidate
+		}
+	}
+
 	return strings.TrimSpace(result)
 }
 
@@ -1025,6 +1040,25 @@ func (te *ThinkingEngine) generateSuggestions(topic string, keywords []string) [
 	clean := extractTopicFromQuery(topic)
 	if clean == "" || len(clean) > 40 {
 		clean = "this"
+	}
+
+	// For emotional states (stressed, anxious, sad, overwhelmed, etc.),
+	// use empathetic suggestions instead of task-oriented templates.
+	emotionalStates := map[string]bool{
+		"stressed": true, "stress": true, "anxious": true, "anxiety": true,
+		"sad": true, "depressed": true, "overwhelmed": true, "tired": true,
+		"lonely": true, "angry": true, "frustrated": true, "worried": true,
+		"scared": true, "bored": true, "lost": true, "stuck": true,
+		"burned out": true, "exhausted": true, "unmotivated": true,
+	}
+	if emotionalStates[clean] {
+		return []string{
+			"Take a few slow, deep breaths. Even 60 seconds of focused breathing can shift your state.",
+			"Step outside for a short walk if you can — movement and fresh air help reset your mind.",
+			"Write down what's on your mind, even just a few sentences. Getting it out of your head helps.",
+			"Reach out to someone you trust, even just to say hello. Connection matters.",
+			"Remember that this feeling is temporary. You've gotten through hard moments before.",
+		}
 	}
 
 	suggestions := []string{

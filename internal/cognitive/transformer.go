@@ -403,21 +403,31 @@ func (t *TextTransformer) prosify(text string) string {
 // -----------------------------------------------------------------------
 
 func (t *TextTransformer) simplify(text string) string {
-	// Remove filler words
+	// Replace complex words with simpler equivalents
 	words := strings.Fields(text)
 	var filtered []string
 	for i, w := range words {
 		clean := strings.ToLower(stripPunctuation(w))
+
+		// Remove filler words
 		if fillerWords[clean] {
-			// If this filler starts a sentence (after period), skip it
-			// but also capitalize the next word
 			if i+1 < len(words) && (i == 0 || transformEndsWithPunct(words[i-1])) {
-				// skip filler, capitalize next word
 				continue
 			}
 			continue
 		}
-		filtered = append(filtered, w)
+
+		// Replace complex vocabulary with simpler words
+		if simple, ok := hardToSimple[clean]; ok {
+			suffix := trailingPunctuation(w)
+			replacement := simple
+			if len(w) > 0 && unicode.IsUpper(rune(w[0])) {
+				replacement = transformCapFirst(replacement)
+			}
+			filtered = append(filtered, replacement+suffix)
+		} else {
+			filtered = append(filtered, w)
+		}
 	}
 
 	if len(filtered) == 0 {
@@ -434,10 +444,96 @@ func (t *TextTransformer) simplify(text string) string {
 	// Ensure proper capitalization after sentence boundaries
 	result = fixCapitalization(result)
 
-	// Expand contractions for clarity
-	result = expandContractions(result)
+	// Break long sentences at conjunctions for readability
+	result = breakLongSentences(result)
 
 	return strings.TrimSpace(result)
+}
+
+// hardToSimple maps complex/academic words to simpler equivalents.
+var hardToSimple = map[string]string{
+	"implementation":  "setup",
+	"aforementioned":  "previous",
+	"necessitates":    "needs",
+	"utilization":     "use",
+	"utilize":         "use",
+	"facilitate":      "help",
+	"commence":        "start",
+	"terminate":       "end",
+	"subsequently":    "then",
+	"approximately":   "about",
+	"demonstrate":     "show",
+	"comprehend":      "understand",
+	"endeavor":        "try",
+	"ascertain":       "find out",
+	"constitute":      "make up",
+	"sufficient":      "enough",
+	"insufficient":    "not enough",
+	"consequently":    "so",
+	"nevertheless":    "still",
+	"notwithstanding": "despite",
+	"furthermore":     "also",
+	"additionally":    "also",
+	"predominantly":   "mostly",
+	"substantial":     "large",
+	"fundamental":     "basic",
+	"fundamentally":   "basically",
+	"acquisition":     "getting",
+	"modification":    "change",
+	"configuration":   "setup",
+	"functionality":   "features",
+	"methodology":     "method",
+	"paradigm":        "model",
+	"comprehensive":   "complete",
+	"preliminary":     "early",
+	"subsequent":      "next",
+	"prior":           "before",
+	"regarding":       "about",
+	"pertaining":      "about",
+	"endeavour":       "try",
+	"accumulate":      "gather",
+	"disseminate":     "spread",
+	"elucidate":       "explain",
+	"ameliorate":      "improve",
+	"exacerbate":      "worsen",
+	"proliferate":     "spread",
+	"promulgate":      "announce",
+	"requisite":       "needed",
+	"recursive":       "repeating",
+}
+
+// breakLongSentences splits sentences longer than ~25 words at natural
+// conjunction points (and, but, which, where) for easier reading.
+func breakLongSentences(text string) string {
+	sents := transformSplitSentences(text)
+	var result []string
+	for _, sent := range sents {
+		words := strings.Fields(sent)
+		if len(words) <= 25 {
+			result = append(result, sent)
+			continue
+		}
+		// Find a good split point near the middle
+		conjunctions := []string{" which ", " where ", " although ", " because ", " while "}
+		split := false
+		for _, conj := range conjunctions {
+			if idx := strings.Index(sent, conj); idx > 20 {
+				first := strings.TrimSpace(sent[:idx]) + "."
+				second := strings.TrimSpace(sent[idx+len(conj):])
+				if len(second) > 5 {
+					second = transformCapFirst(second) + "."
+					second = strings.TrimSuffix(second, "..")
+					result = append(result, first, second)
+					split = true
+					break
+				}
+			}
+		}
+		if !split {
+			result = append(result, sent)
+		}
+	}
+	return strings.Join(result, " ")
 }
 
 // -----------------------------------------------------------------------
@@ -724,9 +820,12 @@ var casualToFormal = map[string]string{
 	"keep":      "retain",
 	"seem":      "appear",
 	"look":      "examine",
+	"send":      "forward",
 	"kids":      "children",
 	"guy":       "individual",
 	"guys":      "individuals",
+	"dude":      "colleague",
+	"bro":       "colleague",
 	"cool":      "acceptable",
 	"okay":      "satisfactory",
 	"ok":        "satisfactory",
@@ -756,6 +855,25 @@ var casualToFormal = map[string]string{
 	"anyways":   "regardless",
 	"a lot":     "considerably",
 	"lots of":   "numerous",
+	// Text-speak
+	"u":     "you",
+	"ur":    "your",
+	"thx":   "thank you",
+	"pls":   "please",
+	"plz":   "please",
+	"asap":  "at your earliest convenience",
+	"btw":   "additionally",
+	"fyi":   "for your information",
+	"imo":   "in my opinion",
+	"tbh":   "to be honest",
+	"idk":   "I am unsure",
+	"lol":   "",
+	"lmao":  "",
+	"haha":  "",
+	"hey":   "hello",
+	"hi":    "hello",
+	"yo":    "hello",
+	"sup":   "hello",
 }
 
 var formalToCasual = map[string]string{

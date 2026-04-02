@@ -339,13 +339,27 @@ func tryQuickResponse(query string) string {
 
 // RespondWithPath generates a response using the specified path level.
 func (r *FastPathResponder) RespondWithPath(conv *Conversation, query string, path QueryPath) (string, error) {
-	// Crystal pre-check: check ResponseCrystals BEFORE any path classification
-	// or LLM call. This gives ~1ms responses for previously-answered queries.
-	if r.ResponseCrystals != nil {
-		if cached, ok := r.ResponseCrystals.Lookup(query); ok {
-			conv.User(query)
-			conv.Assistant(cached)
-			return cached, nil
+	// Crystal pre-check: check ResponseCrystals for previously-answered queries.
+	// Skip for knowledge/explain queries — these should always go through the
+	// fresh knowledge pipeline to avoid serving stale cross-topic responses.
+	if r.ResponseCrystals != nil && !isExplicitTaskPrompt(query) {
+		lower := strings.ToLower(strings.TrimSpace(query))
+		isKnowledgeQuery := strings.HasPrefix(lower, "what is") ||
+			strings.HasPrefix(lower, "what are") ||
+			strings.HasPrefix(lower, "who is") ||
+			strings.HasPrefix(lower, "who was") ||
+			strings.HasPrefix(lower, "explain") ||
+			strings.HasPrefix(lower, "define") ||
+			strings.HasPrefix(lower, "describe") ||
+			strings.HasPrefix(lower, "tell me about") ||
+			strings.HasPrefix(lower, "why is") ||
+			strings.HasPrefix(lower, "how does")
+		if !isKnowledgeQuery {
+			if cached, ok := r.ResponseCrystals.Lookup(query); ok {
+				conv.User(query)
+				conv.Assistant(cached)
+				return cached, nil
+			}
 		}
 	}
 

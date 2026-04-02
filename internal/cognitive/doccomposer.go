@@ -704,6 +704,14 @@ func (dc *DocComposer) buildSlots(params DocParams) map[string]string {
 			}
 			slots["facts"] = strings.Join(lines, "\n")
 		}
+	} else if params.Subject != "" && params.Subject != "the matter at hand" {
+		// When no explicit facts are given, generate body content from the subject.
+		bodyTemplates := []string{
+			"I would like to discuss " + params.Subject + " with you. Please let me know your availability to review this matter in detail.",
+			"I am reaching out regarding " + params.Subject + ". I believe this is an important matter that warrants our attention and would appreciate your input.",
+			"I wanted to bring " + params.Subject + " to your attention. I would welcome the opportunity to discuss the details and next steps at your convenience.",
+		}
+		slots["facts"] = bodyTemplates[dc.rng.Intn(len(bodyTemplates))]
 	} else {
 		slots["facts"] = ""
 	}

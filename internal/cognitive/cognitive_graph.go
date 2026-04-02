@@ -238,7 +238,10 @@ func (cg *CognitiveGraph) LookupDescription(topic string) string {
 			}
 		}
 	}
-	if len(ids) == 0 && len(lower) >= 4 {
+	// Only use partial matching for single-concept queries (e.g., "einstein"
+	// matching "albert einstein"). Multi-word abstract phrases like "meaning
+	// of life" should NOT partial-match to unrelated nodes via shared words.
+	if len(ids) == 0 && len(lower) >= 4 && !strings.Contains(lower, " of ") {
 		ids = cg.partialLabelMatch(lower)
 	}
 

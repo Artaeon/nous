@@ -1165,15 +1165,25 @@ func main() {
 		var answer string
 		if compiled, ok := actions.TryCompiled(input); ok {
 			answer = compiled
+			if os.Getenv("NOUS_TRACE") != "" {
+				fmt.Fprintf(os.Stderr, "  [REPL] TryCompiled HIT len=%d\n", len(answer))
+			}
 			reasoner.Conv.User(input)
 			reasoner.Conv.Assistant(answer)
+		} else if os.Getenv("NOUS_TRACE") != "" {
+			fmt.Fprintf(os.Stderr, "  [REPL] TryCompiled MISS\n")
 		}
 
 		// Try NLU/ActionRouter — handles all 51 tools deterministically (0ms).
 		// Supports multi-intent: "do X and Y" splits into separate actions.
 		// Only falls through to Composer if the action needs language generation.
 		nluResult := nlu.UnderstandMultiWithContext(input, reasoner.Conv)
-		if answer == "" && nluResult.Confidence >= 0.5 {
+		// Accept the NLU result if confidence >= 0.5, OR if the intent is one
+		// that has specific handler logic (greeting, farewell, affirmation)
+		// where even low-confidence classification should be trusted over
+		// the generic Composer path.
+		socialIntents := nluResult.Intent == "greeting" || nluResult.Intent == "farewell" || nluResult.Intent == "affirmation"
+		if answer == "" && (nluResult.Confidence >= 0.5 || socialIntents) {
 			if len(nluResult.SubResults) > 0 {
 				// Multi-intent: execute each sub-result and combine responses
 				var parts []string
@@ -1190,6 +1200,7 @@ func main() {
 				}
 			} else {
 				actionResult := actions.Execute(nluResult, reasoner.Conv)
+				// nluResult already used for multi-intent check above
 				if actionResult.DirectResponse != "" {
 					answer = actionResult.DirectResponse
 					reasoner.Conv.User(input)
@@ -1201,6 +1212,10 @@ func main() {
 		// Composer engine: generates ALL responses without any LLM.
 		// Zero external dependencies. Instant. Unique every time.
 		if answer == "" && actions.Composer != nil {
+			if os.Getenv("NOUS_TRACE") != "" {
+				fmt.Fprintf(os.Stderr, "  [REPL] composer path (nlu conf=%.3f intent=%s action=%s)\n",
+					nluResult.Confidence, nluResult.Intent, nluResult.Action)
+			}
 			respType := actions.ClassifyForComposer(input)
 			ctx := actions.BuildComposeContext()
 			resp := actions.Composer.Compose(input, respType, ctx)

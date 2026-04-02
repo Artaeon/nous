@@ -717,14 +717,6 @@ func (ar *ActionRouter) extractTranslateArgs(raw string, args map[string]string)
 
 // handleCalculate extracts a math expression from natural language and evaluates it.
 func (ar *ActionRouter) handleCalculate(nlu *NLUResult) *ActionResult {
-	if ar.Tools == nil {
-		return &ActionResult{DirectResponse: "calculator unavailable", Source: "calculator"}
-	}
-	tool, err := ar.Tools.Get("calculator")
-	if err != nil {
-		return &ActionResult{DirectResponse: "calculator not found", Source: "calculator"}
-	}
-
 	// Extract the math expression from natural language
 	expr := nlu.Entities["expression"]
 	if expr == "" {
@@ -752,11 +744,22 @@ func (ar *ActionRouter) handleCalculate(nlu *NLUResult) *ActionResult {
 	// Convert English operator words to symbols
 	expr = convertMathWords(expr)
 
-	result, err := tool.Execute(map[string]string{"expression": expr})
+	// Try the calculator tool first.
+	if ar.Tools != nil {
+		if tool, err := ar.Tools.Get("calculator"); err == nil {
+			result, err := tool.Execute(map[string]string{"expression": expr})
+			if err == nil {
+				return &ActionResult{DirectResponse: fmt.Sprintf("%s = %s", expr, result), Source: "calculator"}
+			}
+		}
+	}
+
+	// Fallback: use the built-in math evaluator directly.
+	result, err := evaluateMath(expr)
 	if err != nil {
 		return &ActionResult{DirectResponse: fmt.Sprintf("Could not calculate: %v", err), Source: "calculator"}
 	}
-	return &ActionResult{DirectResponse: fmt.Sprintf("%s = %s", expr, result), Source: "calculator"}
+	return &ActionResult{DirectResponse: fmt.Sprintf("%s = %s", expr, result), Source: "computed"}
 }
 
 // handlePassword generates passwords, passphrases, or PINs based on the request.

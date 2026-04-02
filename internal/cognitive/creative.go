@@ -470,16 +470,41 @@ func (ce *CreativeEngine) Reflect(topic string, question string) string {
 	}
 
 	// Fallback: use description from knowledge graph.
+	// Only use if the description is actually about the topic (not a loose
+	// partial match like "life" matching photosynthesis for "meaning of life").
 	if ce.Graph != nil {
 		desc := ce.Graph.LookupDescription(topic)
 		if len(desc) >= 40 {
-			facts := ce.getTopicFacts(topic)
-			var parts []string
-			parts = append(parts, desc)
-			if len(facts) > 0 {
-				parts = append(parts, strings.Join(ce.limitSlice(facts, 3), " "))
+			// Relevance check: the description's first sentence should mention the topic
+			descLower := strings.ToLower(desc)
+			topicLower := strings.ToLower(topic)
+			relevant := strings.Contains(descLower[:min(len(descLower), 200)], topicLower)
+			if !relevant {
+				// Check if significant words from the topic appear
+				topicWords := strings.Fields(topicLower)
+				matchCount := 0
+				for _, tw := range topicWords {
+					if len(tw) > 3 && strings.Contains(descLower[:min(len(descLower), 200)], tw) {
+						matchCount++
+					}
+				}
+				sigWords := 0
+				for _, tw := range topicWords {
+					if len(tw) > 3 {
+						sigWords++
+					}
+				}
+				relevant = sigWords > 0 && matchCount >= sigWords/2+1
 			}
-			return strings.Join(parts, "\n\n")
+			if relevant {
+				facts := ce.getTopicFacts(topic)
+				var parts []string
+				parts = append(parts, desc)
+				if len(facts) > 0 {
+					parts = append(parts, strings.Join(ce.limitSlice(facts, 3), " "))
+				}
+				return strings.Join(parts, "\n\n")
+			}
 		}
 	}
 
@@ -491,7 +516,7 @@ func (ce *CreativeEngine) Reflect(topic string, question string) string {
 	if len(facts) == 1 {
 		return facts[0]
 	}
-	return fmt.Sprintf("I don't have detailed information about %s yet.", topic)
+	return fmt.Sprintf("That's a profound question. I don't have a detailed perspective on %s in my knowledge base, but it's one of humanity's deepest questions — worth reflecting on from many angles.", topic)
 }
 
 // classifyQueryType determines the type of query for discourse planning.
