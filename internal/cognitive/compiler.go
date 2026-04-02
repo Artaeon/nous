@@ -288,6 +288,16 @@ func (cc *CognitiveCompiler) Compile(input string, response string, intent strin
 
 	tmpl := extractTemplate(response, entities)
 
+	// Topic-awareness guard: if the template still contains topic-specific
+	// content that isn't slotted, it's too specific to generalize across
+	// topics. E.g., a response about "photosynthesis" containing "chlorophyll"
+	// and "plants" would wrongly appear for a "gravity" query.
+	if topicVal, ok := entities["topic"]; ok && topicVal != "" {
+		if containsTopicSpecificContent(tmpl, topicVal) {
+			return nil
+		}
+	}
+
 	// Build slot definitions from the pattern's slot names.
 	var slotDefs []SlotDef
 	for _, name := range pattern.Slots {
@@ -445,6 +455,16 @@ func (cc *CognitiveCompiler) Execute(handler *CompiledHandler, slots map[string]
 		result = strings.ReplaceAll(result, placeholder, val)
 	}
 
+	// Post-fill validation: verify that the filled response actually
+	// mentions the topic. This catches cross-topic contamination where
+	// a handler compiled for "photosynthesis" gets filled with "gravity"
+	// but the response body still discusses chlorophyll and sunlight.
+	if topicVal, ok := slots["topic"]; ok && topicVal != "" && len(result) > 100 {
+		if !strings.Contains(strings.ToLower(result), strings.ToLower(topicVal)) {
+			return "" // response doesn't mention the filled topic
+		}
+	}
+
 	// Update usage counters.
 	cc.mu.Lock()
 	handler.Uses++
@@ -452,6 +472,56 @@ func (cc *CognitiveCompiler) Execute(handler *CompiledHandler, slots map[string]
 	cc.mu.Unlock()
 
 	return result
+}
+
+// containsTopicSpecificContent checks if a template contains domain-specific
+// words that belong to one particular topic but aren't slotted. Such templates
+// can't generalize across topics.
+func containsTopicSpecificContent(tmpl string, topic string) bool {
+	if tmpl == "" || topic == "" {
+		return false
+	}
+	// If the template still mentions the topic literally (not slotted), it's fine
+	lower := strings.ToLower(tmpl)
+	topicLower := strings.ToLower(topic)
+
+	// Check for domain-specific vocabulary that wouldn't apply to other topics.
+	// If the template has {topic} slots AND >200 chars of content, check
+	// whether the content is too specific to the original topic.
+	if !strings.Contains(lower, "{topic}") && strings.Contains(lower, topicLower) {
+		// Topic is literally embedded, not slotted — too specific
+		return true
+	}
+
+	// Template is > 200 chars with content unrelated to {topic} — likely
+	// a full paragraph response that can't generalize
+	if len(tmpl) > 200 && strings.Contains(tmpl, "{topic}") {
+		// Count how many words are NOT part of generic connectors
+		words := strings.Fields(lower)
+		contentWords := 0
+		for _, w := range words {
+			if len(w) > 5 && w != "{topic}" && !genericWords[w] {
+				contentWords++
+			}
+		}
+		// If >30% of words are content-specific, template is too specific
+		if len(words) > 0 && float64(contentWords)/float64(len(words)) > 0.3 {
+			return true
+		}
+	}
+
+	return false
+}
+
+// genericWords are words that appear in any topic's response.
+var genericWords = map[string]bool{
+	"which": true, "their": true, "there": true, "these": true,
+	"those": true, "being": true, "where": true, "about": true,
+	"would": true, "could": true, "should": true, "through": true,
+	"between": true, "during": true, "before": true, "after": true,
+	"under": true, "above": true, "below": true, "other": true,
+	"every": true, "while": true, "since": true, "because": true,
+	"although": true, "however": true, "therefore": true,
 }
 
 // ---------------------------------------------------------------------------

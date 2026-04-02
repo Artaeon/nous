@@ -156,10 +156,13 @@ func NewActionRouter() *ActionRouter {
 // handler was found, or empty string and false if no match.
 // This is the fast path: O(n) regex match, no neural computation.
 func (ar *ActionRouter) TryCompiled(input string) (string, bool) {
-	// Disabled: the cognitive compiler caches full response text keyed by
-	// regex patterns, causing cross-topic contamination (e.g., "What is
-	// gravity?" returns the photosynthesis paragraph). Will be re-enabled
-	// with topic-aware validation in a future update.
+	// Cognitive compiler disabled: the topic validation guards in Compile()
+	// and Execute() prevent cross-topic contamination for NEW handlers,
+	// but existing in-session handlers from the Composer path still produce
+	// wrong results because the Composer generates knowledge paragraphs
+	// that get compiled with overly broad patterns. Re-enabling requires
+	// intent-scoped matching so "explain" patterns don't match "greeting"
+	// queries, and vice versa.
 	return "", false
 }
 
@@ -167,10 +170,46 @@ func (ar *ActionRouter) TryCompiled(input string) (string, bool) {
 // compiler so it can extract a pattern and compile a deterministic handler.
 // Called asynchronously after every successful response generation.
 func (ar *ActionRouter) LearnResponse(input, response string, nlu *NLUResult) {
-	// Disabled: cognitive compiler caches full response text keyed by regex
-	// patterns, causing cross-topic contamination. Will be re-enabled with
-	// topic-aware validation.
-	return
+	if ar.CogCompiler == nil || nlu == nil {
+		return
+	}
+
+	// Only compile responses from high-quality, stable sources.
+	// Dynamic/tool/knowledge sources produce topic-specific content that
+	// can't generalize across different topics.
+	switch nlu.Action {
+	case "respond":
+		// Conversational responses can be compiled — they're generic
+	case "llm_chat":
+		// LLM responses can be compiled — they're adaptable
+	default:
+		// All other actions (tools, knowledge, creative, etc.) produce
+		// topic-specific content that shouldn't be cached as templates.
+		return
+	}
+
+	// Require the response to be substantial but not too long
+	words := strings.Fields(response)
+	if len(words) < 5 || len(words) > 50 {
+		return
+	}
+
+	// Require a topic entity — the compiler needs it for slot extraction
+	topic := nlu.Entities["topic"]
+	if topic == "" {
+		return
+	}
+
+	// Verify the response mentions the topic (sanity check)
+	if !strings.Contains(strings.ToLower(response), strings.ToLower(topic)) {
+		return
+	}
+
+	entities := nlu.Entities
+	handler := ar.CogCompiler.Compile(input, response, nlu.Intent, entities)
+	if handler != nil {
+		ar.CogCompiler.Save()
+	}
 }
 
 // ActionChain represents a sequence of actions to execute in order.
