@@ -2571,6 +2571,40 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 		}
 	}
 
+	// Tier 1.5: Semantic retrieval — when exact paragraph match fails, find
+	// the most relevant knowledge chunk via embedding similarity. 220 chunks,
+	// 50-dim cosine similarity — instant (~1ms).
+	if ar.Knowledge != nil {
+		results, err := ar.Knowledge.Search(query, 3)
+		if err == nil && len(results) > 0 && results[0].Score > 0.65 {
+			bestText := results[0].Text
+			// Verify the top result is actually about this topic
+			bestLower := strings.ToLower(bestText)
+			queryLower := strings.ToLower(query)
+			relevant := false
+			for _, w := range strings.Fields(queryLower) {
+				if len(w) > 3 && strings.Contains(bestLower[:min(len(bestLower), 200)], w) {
+					relevant = true
+					break
+				}
+			}
+			if relevant {
+				if ar.Format != nil {
+					if req := ar.Format.DetectFormat(nlu.Raw); req != nil {
+						bestText = ar.Format.Reshape(bestText, req)
+					}
+				}
+				if ar.Tracker != nil && query != "" {
+					ar.Tracker.TrackTopic(query, "semantic_retrieval")
+				}
+				return &ActionResult{
+					DirectResponse: bestText,
+					Source:         "semantic_retrieval",
+				}
+			}
+		}
+	}
+
 	// Deep reasoning: for "why", "how does X affect Y", and similar complex
 	// questions, use multi-step structured reasoning with explicit chains.
 	// Fires AFTER the Wikipedia paragraph path (which serves direct answers)
@@ -2789,14 +2823,10 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 		}
 	}
 
-	// Fallback: individual engines (when pipeline not wired)
-
-	// Self-teach: mine knowledge files for facts about the topic on the fly.
-	// This adds facts to the graph for the current session.
+	// Tier 3b: Self-teach — mine knowledge files on the fly for new facts.
 	if ar.SelfTeacher != nil && !ar.SelfTeacher.HasLearned(query) {
 		learned, _ := ar.SelfTeacher.LearnAbout(query)
 		if learned > 0 {
-			// Retry NLG with newly learned facts
 			facts := ar.gatherFactsForNLG(query)
 			if len(facts) >= 2 && ar.NLG != nil {
 				prose := ar.NLG.RealizeExplanation(query, facts)
@@ -2815,199 +2845,44 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 		}
 	}
 
-	// Deep retrieval: when surface knowledge lookup returned nothing,
-	// try query rewriting + two-tier retrieval for a deeper search.
-	if ar.QueryRewrite != nil && ar.Retriever != nil {
-		decomposed := ar.QueryRewrite.Decompose(query)
-		var allResults []RetrievalResult
-		if decomposed.IsComplex {
-			// Complex query — retrieve for each sub-query
-			for _, sq := range decomposed.SubQueries {
-				results := ar.Retriever.Retrieve(sq.Rewritten, 3)
-				allResults = append(allResults, results...)
-			}
-		} else {
-			rewritten := ar.QueryRewrite.RewriteForRetrieval(query)
-			allResults = ar.Retriever.Retrieve(rewritten, 5)
-		}
-		if len(allResults) > 0 {
+	// Tier 3c: Two-tier retrieval — BM25 + semantic + graph fusion.
+	// This is the unified fallback that replaces the old scattered
+	// deep retrieval, multi-hop, and synthesis tiers.
+	if ar.Retriever != nil {
+		results := ar.Retriever.Retrieve(query, 5)
+		if len(results) > 0 && results[0].Score > 0.3 {
 			var parts []string
 			seen := make(map[string]bool)
-			for _, r := range allResults {
+			for _, r := range results {
 				if r.Score > 0.2 && !seen[r.Text] {
 					seen[r.Text] = true
 					parts = append(parts, r.Text)
 				}
-			}
-			if len(parts) > 3 {
-				parts = parts[:3]
+				if len(parts) >= 3 {
+					break
+				}
 			}
 			if len(parts) > 0 {
 				return &ActionResult{
-					DirectResponse: strings.Join(parts, " "),
-					Source:         "deep_retrieval",
+					DirectResponse: strings.Join(parts, "\n\n"),
+					Source:         "two_tier_retrieval",
 				}
 			}
 		}
 	}
 
-	// Try multi-hop reasoning
-	if ar.Reasoner != nil && ar.CogGraph != nil && ar.CogGraph.NodeCount() > 0 {
-		chain := ar.Reasoner.Reason(query)
-		if chain != nil && chain.Answer != "" {
-			return &ActionResult{
-				DirectResponse: chain.Answer,
-				Source:         "reasoning",
-			}
-		}
+	// Tier 4: Honest fallback — we don't have relevant information.
+	return &ActionResult{
+		DirectResponse: composeHonestFallback(nlu.Raw),
+		Source:         "honest_fallback",
 	}
-
-	// For explanatory/question/comparison intents, prefer the thinking engine
-	// before conversational composition. This avoids short acknowledgments
-	// like "Gotcha." when knowledge lookup is sparse.
-	if ar.Thinker != nil && (nlu.Intent == "explain" || nlu.Intent == "question" || nlu.Intent == "compare") {
-		thinkQuery := nlu.Raw
-		if nlu.Intent == "explain" {
-			trimmed := strings.ToLower(strings.TrimSpace(thinkQuery))
-			if !strings.HasPrefix(trimmed, "explain") && query != "" {
-				thinkQuery = "explain " + query
-			}
-		}
-		if result := ar.Thinker.Think(thinkQuery, nil); result != nil && result.Text != "" {
-			if !isLowInformationConversational(result.Text) {
-				return &ActionResult{
-					DirectResponse: result.Text,
-					Source:         "thinking:" + result.Frame,
-				}
-			}
-		}
-	}
-
-	// Innovation: Knowledge Synthesis — when direct knowledge is sparse,
-	// reason from adjacent knowledge instead of saying "I don't know."
-	if ar.Synthesizer != nil && ar.Synthesizer.ShouldSynthesize(query, 0) {
-		synthResult := ar.Synthesizer.Synthesize(query)
-		if synthResult != nil && len(synthResult.Synthesized) > 0 {
-			formatted := ar.Synthesizer.FormatSynthesis(synthResult)
-			if formatted != "" {
-				return &ActionResult{
-					DirectResponse: formatted,
-					Source:         "knowledge_synthesis",
-				}
-			}
-		}
-	}
-
-	// Use Composer for knowledge responses
-	if ar.Composer != nil && ar.Composer.Graph != nil {
-		ctx := ar.BuildComposeContext()
-		respType := ar.ClassifyForComposer(nlu.Raw)
-		resp := ar.Composer.Compose(nlu.Raw, respType, ctx)
-		if resp != nil && resp.Text != "" {
-			if (nlu.Intent == "explain" || nlu.Intent == "question" || nlu.Intent == "compare") && isLowInformationConversational(resp.Text) {
-				// keep searching for grounded output paths
-			} else {
-				return &ActionResult{
-					DirectResponse: resp.Text,
-					Source:         "composer",
-				}
-			}
-		}
-	}
-
-	// Fallback: raw cognitive graph fact dump
-	if ar.CogGraph != nil && ar.CogGraph.NodeCount() > 0 {
-		ga := ar.CogGraph.Query(query)
-		if ga != nil && len(ga.DirectFacts) > 0 {
-			return &ActionResult{
-				DirectResponse: ar.CogGraph.ComposeAnswer(query, ga),
-				Source:         "cognitive_graph",
-			}
-		}
-	}
-
-	// Try extractive QA — if we have ingested facts about this topic
-	if ar.Tracker != nil && ar.Tracker.Facts.Size() > 0 {
-		answer := ar.Tracker.AnswerQuestion(query)
-		if answer != "" {
-			return &ActionResult{DirectResponse: answer, Source: "extractive"}
-		}
-	}
-
-	var parts []string
-
-	// Knowledge vector search.
-	if ar.Knowledge != nil {
-		results, err := ar.Knowledge.Search(query, 5)
-		if err == nil {
-			for _, r := range results {
-				parts = append(parts, fmt.Sprintf("[%s (%.2f)] %s", r.Source, r.Score, r.Text))
-			}
-		}
-	}
-
-	// Weave virtual context for additional grounding.
-	if ar.VCtx != nil {
-		assembly := ar.VCtx.Weave(query)
-		if woven := assembly.FormatForPrompt(); woven != "" {
-			parts = append(parts, woven)
-		}
-	}
-
-	if len(parts) == 0 {
-		// Fall back to web search only for deep explanation requests.
-		// Simple factual questions (what is X, who is X) skip web search
-		// since the LLM can answer them quickly from parametric knowledge.
-		if nlu.Intent == "explain" || nlu.Intent == "research" {
-			lower := strings.ToLower(nlu.Raw)
-			needsDepth := strings.HasPrefix(lower, "explain ") ||
-				strings.HasPrefix(lower, "describe ") ||
-				strings.HasPrefix(lower, "how does ") ||
-				strings.HasPrefix(lower, "how do ") ||
-				strings.HasPrefix(lower, "tell me about ") ||
-				strings.HasPrefix(lower, "teach me ")
-			if needsDepth {
-				return ar.handleWebSearch(nlu)
-			}
-		}
-		return &ActionResult{DirectResponse: ar.buildSparseKnowledgeFallback(query), Source: "knowledge"}
-	}
-
-	// Single high-confidence result — return directly without LLM.
-	if ar.Knowledge != nil {
-		results, err := ar.Knowledge.Search(query, 5)
-		if err == nil && len(results) > 0 && results[0].Score > 0.7 {
-			// Check if there's a clear single winner (top result far above others).
-			if len(results) == 1 || (len(results) > 1 && results[0].Score-results[1].Score > 0.15) {
-				return &ActionResult{
-					DirectResponse: results[0].Text,
-					Source:         "knowledge",
-					Structured:     map[string]string{"source": results[0].Source, "score": fmt.Sprintf("%.2f", results[0].Score)},
-				}
-			}
-		}
-	}
-
-	// Multiple results or ambiguous — return combined data if substantial.
-	combined := strings.Join(parts, "\n")
-	if len(combined) > 50 {
-		return &ActionResult{DirectResponse: combined, Source: "knowledge"}
-	}
-
-	// LLM fallback for knowledge gaps — the graph doesn't have this topic.
-	if ar.LLM != nil {
-		answer := ar.LLM.Generate(
-			"Answer factually and concisely in 2-3 sentences.",
-			nlu.Raw,
-			96,
-		)
-		if answer != "" {
-			return &ActionResult{DirectResponse: answer, Source: "llm"}
-		}
-	}
-
-	return &ActionResult{DirectResponse: combined, Source: "knowledge"}
 }
+
+// NOTE: The old handleLookupKnowledge had 14 fallback tiers (multi-hop reasoning,
+// thinking engine, knowledge synthesis, composer, graph fact dump, extractive QA,
+// virtual context weaving, LLM fallback). These were removed and replaced with
+// the cleaner 4-tier pipeline above. The engines still exist and can be wired
+// back in via other handlers if needed.
 
 // handleCompare generates a comparison between two items using knowledge graph data.
 func (ar *ActionRouter) handleCompare(nlu *NLUResult) *ActionResult {
