@@ -612,6 +612,17 @@ func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResul
 			nlu.Raw, result.DirectResponse,
 			nlu.Intent, sentiment, topic, true,
 		)
+
+		// Conversation-to-graph learning: extract factual knowledge
+		// from substantive responses back into the knowledge graph.
+		// The system gets smarter with every conversation.
+		if ar.CogGraph != nil && len(result.DirectResponse) > 100 &&
+			(result.Source == "knowledge_text" || result.Source == "semantic_retrieval" ||
+				result.Source == "nlg" || result.Source == "knowledge") {
+			go ar.ConvLearner.LearnFactsFromResponse(
+				result.DirectResponse, topic, ar.CogGraph,
+			)
+		}
 	}
 
 	// Strip filler from all outputs — "As an AI...", empty hedges, etc.

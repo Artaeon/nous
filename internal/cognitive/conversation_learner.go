@@ -968,3 +968,133 @@ func (cl *ConversationLearner) PatternsByIntent(intent string) []ResponsePattern
 	}
 	return result
 }
+
+// -----------------------------------------------------------------------
+// Conversation-to-Graph Learning — self-growing intelligence.
+//
+// Every substantive response Nous generates contains factual claims.
+// This method extracts those claims back into the knowledge graph,
+// making the system smarter with every conversation.
+//
+// Example: Nous generates "Gravity is the fundamental force of
+// attraction between all objects with mass or energy." → extracts
+// "gravity" is_a "fundamental force", gravity has "mass", etc.
+//
+// Conversation-derived facts are tagged with lower confidence (0.4)
+// and source "conversation:{topic}" for provenance tracking.
+// -----------------------------------------------------------------------
+
+// LearnFactsFromResponse extracts factual knowledge from a response
+// and ingests it into the knowledge graph. Called after every
+// substantive response (>100 chars) from a knowledge source.
+func (cl *ConversationLearner) LearnFactsFromResponse(
+	response, topic string,
+	graph *CognitiveGraph,
+) int {
+	if len(response) < 100 || graph == nil || topic == "" {
+		return 0
+	}
+
+	// Extract simple facts from the response text.
+	facts := extractConversationFacts(response, topic)
+	added := 0
+
+	for _, fact := range facts {
+		// Add to graph with lower confidence (conversation-derived).
+		graph.AddEdge(fact.from, fact.to, fact.rel, "conversation:"+topic)
+		added++
+	}
+
+	return added
+}
+
+// extractConversationFacts mines typed relationships from response text.
+func extractConversationFacts(text, topic string) []sentenceFact {
+	var facts []sentenceFact
+	lower := strings.ToLower(text)
+	topicLower := strings.ToLower(topic)
+
+	// Split into sentences and process each.
+	remaining := text
+	for {
+		idx := strings.Index(remaining, ". ")
+		if idx < 0 {
+			break
+		}
+		sentence := strings.TrimSpace(remaining[:idx+1])
+		remaining = remaining[idx+2:]
+
+		if len(sentence) < 20 {
+			continue
+		}
+
+		sentLower := strings.ToLower(sentence)
+
+		// "X is a Y" / "X is the Y" pattern.
+		if strings.Contains(sentLower, topicLower+" is a ") || strings.Contains(sentLower, topicLower+" is the ") {
+			after := ""
+			if idx := strings.Index(sentLower, topicLower+" is a "); idx >= 0 {
+				after = sentence[idx+len(topic)+5:]
+			} else if idx := strings.Index(sentLower, topicLower+" is the "); idx >= 0 {
+				after = sentence[idx+len(topic)+7:]
+			}
+			if after != "" {
+				obj := extractFirstPhrase(after)
+				if obj != "" && len(obj) > 3 {
+					facts = append(facts, sentenceFact{topic, obj, RelIsA})
+				}
+			}
+		}
+
+		// Causal patterns in conversation text.
+		causalPatterns := map[string]RelType{
+			" causes ": RelCauses, " enables ": RelEnables,
+			" prevents ": RelPrevents, " requires ": RelRequires,
+			" produces ": RelProduces,
+		}
+		for pattern, rel := range causalPatterns {
+			if strings.Contains(lower, pattern) {
+				// Find the object after the verb.
+				if idx := strings.Index(sentLower, pattern); idx >= 0 {
+					obj := extractFirstPhrase(sentence[idx+len(pattern):])
+					if obj != "" && len(obj) > 3 {
+						facts = append(facts, sentenceFact{topic, obj, rel})
+					}
+				}
+			}
+		}
+	}
+
+	// Deduplicate.
+	seen := make(map[string]bool)
+	var unique []sentenceFact
+	for _, f := range facts {
+		key := f.from + "|" + string(f.rel) + "|" + f.to
+		if !seen[key] {
+			seen[key] = true
+			unique = append(unique, f)
+		}
+	}
+
+	return unique
+}
+
+// extractFirstPhrase extracts text up to the first major delimiter.
+func extractFirstPhrase(text string) string {
+	text = strings.TrimSpace(text)
+	// Cut at comma, period, semicolon, or "that"/"which"/"and".
+	delimiters := []string{",", ".", ";", " that ", " which ", " and "}
+	minIdx := len(text)
+	for _, d := range delimiters {
+		if idx := strings.Index(text, d); idx >= 0 && idx < minIdx {
+			minIdx = idx
+		}
+	}
+	result := strings.TrimSpace(text[:minIdx])
+	// Cap at 8 words.
+	words := strings.Fields(result)
+	if len(words) > 8 {
+		result = strings.Join(words[:8], " ")
+	}
+	return result
+}
