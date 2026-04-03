@@ -96,7 +96,7 @@ func (pe *PersonaEngine) Answer(query, personaName string) *PersonaAnswer {
 		if desc != "" {
 			return &PersonaAnswer{
 				Persona:    persona.Name,
-				Response:   fmt.Sprintf("From a %s perspective: %s", persona.DisplayName, desc),
+				Response:   fmt.Sprintf("From %s %s perspective: %s", articleFor(persona.DisplayName), persona.DisplayName, desc),
 				Facts:      []string{desc},
 				Confidence: 0.5,
 				Domains:    domains,
@@ -107,7 +107,7 @@ func (pe *PersonaEngine) Answer(query, personaName string) *PersonaAnswer {
 			if para := findKnowledgeParagraph(pe.KnowledgeDir, topic); para != "" {
 				return &PersonaAnswer{
 					Persona:    persona.Name,
-					Response:   fmt.Sprintf("From a %s perspective: %s", persona.DisplayName, para),
+					Response:   fmt.Sprintf("From %s %s perspective: %s", articleFor(persona.DisplayName), persona.DisplayName, para),
 					Facts:      []string{para},
 					Confidence: 0.7,
 					Domains:    domains,
@@ -120,7 +120,7 @@ func (pe *PersonaEngine) Answer(query, personaName string) *PersonaAnswer {
 			if wikiResult != nil && wikiResult.Paragraph != "" {
 				return &PersonaAnswer{
 					Persona:    persona.Name,
-					Response:   fmt.Sprintf("From a %s perspective: %s", persona.DisplayName, wikiResult.Paragraph),
+					Response:   fmt.Sprintf("From %s %s perspective: %s", articleFor(persona.DisplayName), persona.DisplayName, wikiResult.Paragraph),
 					Facts:      []string{wikiResult.Paragraph},
 					Confidence: 0.6,
 					Domains:    domains,
@@ -129,7 +129,7 @@ func (pe *PersonaEngine) Answer(query, personaName string) *PersonaAnswer {
 		}
 		return &PersonaAnswer{
 			Persona:    persona.Name,
-			Response:   fmt.Sprintf("As a %s, I don't have enough information about %s in my knowledge base.", persona.DisplayName, topic),
+			Response:   fmt.Sprintf("As %s %s, I don't have enough information about %s in my knowledge base.", articleFor(persona.DisplayName), persona.DisplayName, topic),
 			Confidence: 0.1,
 			Disclaimer: fmt.Sprintf("Topic '%s' not well covered in %s domain.", topic, persona.DisplayName),
 		}
@@ -138,15 +138,15 @@ func (pe *PersonaEngine) Answer(query, personaName string) *PersonaAnswer {
 	// Prefer paragraph narration over raw graph edge listing.
 	if pe.KnowledgeDir != "" {
 		if para := findKnowledgeParagraph(pe.KnowledgeDir, topic); para != "" {
-			// Frame with persona's preferred verb if available.
-			frame := "From a %s perspective"
+			// Frame with persona's perspective.
+			var frame string
 			if len(persona.FrameVerbs) > 0 {
-				verb := persona.FrameVerbs[persona.QueriesHandled%len(persona.FrameVerbs)]
-				frame = fmt.Sprintf("As a %s, let me %s this", persona.DisplayName, verb)
+				fv := persona.FrameVerbs[persona.QueriesHandled%len(persona.FrameVerbs)]
+				frame = fmt.Sprintf("From %s %s perspective, %s %s", articleFor(persona.DisplayName), persona.DisplayName, topic, fv)
 			} else {
-				frame = fmt.Sprintf(frame, persona.DisplayName)
+				frame = fmt.Sprintf("From %s %s perspective", articleFor(persona.DisplayName), persona.DisplayName)
 			}
-			response := fmt.Sprintf("%s: %s", frame, para)
+			response := fmt.Sprintf("%s. %s", frame, para)
 			pe.RecordInteraction(persona.Name, topic, facts)
 			return &PersonaAnswer{
 				Persona:    persona.Name,
@@ -368,9 +368,9 @@ func (pe *PersonaEngine) composePersonaResponse(topic string, facts []string, pe
 	// Opening frame.
 	if len(persona.FrameVerbs) > 0 {
 		frame := persona.FrameVerbs[len(topic)%len(persona.FrameVerbs)]
-		fmt.Fprintf(&b, "From a %s perspective, %s %s. ", persona.DisplayName, topic, frame)
+		fmt.Fprintf(&b, "From %s %s perspective, %s %s. ", articleFor(persona.DisplayName), persona.DisplayName, topic, frame)
 	} else {
-		fmt.Fprintf(&b, "As a %s: ", persona.DisplayName)
+		fmt.Fprintf(&b, "As %s %s: ", articleFor(persona.DisplayName), persona.DisplayName)
 	}
 
 	maxFacts := 5
