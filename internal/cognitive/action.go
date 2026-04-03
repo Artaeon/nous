@@ -240,8 +240,17 @@ type ChainStep struct {
 func (ar *ActionRouter) Execute(nlu *NLUResult, conv *Conversation) *ActionResult {
 	// Safety guard: refuse requests that involve harmful activities.
 	if isHarmfulRequest(nlu.Raw) {
+		// Self-harm needs a compassionate response, not a refusal.
+		lower := strings.ToLower(nlu.Raw)
+		if strings.Contains(lower, "hurt myself") || strings.Contains(lower, "end my life") ||
+			strings.Contains(lower, "kill myself") || strings.Contains(lower, "suicide") {
+			return &ActionResult{
+				DirectResponse: "I hear you, and I want you to know that your life matters. Please reach out to a crisis helpline — in the US, call or text 988 (Suicide & Crisis Lifeline). You don't have to go through this alone.",
+				Source:         "safety_compassion",
+			}
+		}
 		return &ActionResult{
-			DirectResponse: "I can't help with that. I'm designed to be helpful, but I need to avoid assisting with activities that could harm others. Is there something else I can help you with?",
+			DirectResponse: "I can't help with that. I'm designed to be helpful, but I need to decline requests that could lead to harm. Is there something else I can help you with?",
 			Source:         "safety",
 		}
 	}
@@ -4705,22 +4714,46 @@ func sentenceOverlaps(sentence, existingLower string) bool {
 func isHarmfulRequest(input string) bool {
 	lower := strings.ToLower(strings.TrimSpace(input))
 	harmfulPatterns := []string{
-		"hack into", "hack someone", "break into someone",
+		// Hacking and unauthorized access.
+		"hack into", "hack someone", "hack a computer", "hack a phone",
+		"hack a website", "hack an account", "hack a server",
+		"break into someone", "break into a system",
 		"steal password", "steal someone", "steal credit card",
 		"ddos", "denial of service",
+		// Weapons and violence.
 		"make a bomb", "build a bomb", "build an explosive", "make explosives",
+		"make a weapon", "build a weapon", "create a weapon",
+		"make a gun", "build a gun", "3d print a gun",
 		"how to kill", "how to murder", "how to poison",
-		"how to stalk", "how to spy on someone",
+		"how to stab", "how to shoot", "how to strangle",
+		"how to hurt", "how to harm someone", "how to injure",
+		// Stalking and surveillance.
+		"how to stalk", "how to spy on someone", "how to track someone",
+		"how to follow someone", "how to surveil",
+		// Malware and exploits.
 		"create a virus", "create malware", "write malware",
+		"write a virus", "write ransomware", "write a trojan",
+		"write an exploit", "create an exploit",
 		"phishing", "social engineer someone",
+		// Fraud and forgery.
 		"forge a document", "fake identity", "fake passport",
+		"counterfeit", "forge a check", "fake a diploma",
+		// Security attacks.
 		"bypass security", "crack a password", "brute force",
-		"how to rob", "how to burglar",
-		"child exploitation", "child porn",
-		"how to make drugs", "how to cook meth",
-		"how to hurt", "how to harm someone",
+		"exploit a vulnerability", "sql injection attack",
+		// Theft.
+		"how to rob", "how to burglar", "how to shoplift", "how to pickpocket",
+		// CSAM.
+		"child exploitation", "child porn", "child abuse material",
+		// Drug manufacturing.
+		"how to make drugs", "how to cook meth", "how to make fentanyl",
+		"how to synthesize", "how to manufacture drugs",
+		// Self-harm.
+		"how to hurt myself", "how to end my life",
+		// Prompt injection.
 		"ignore all previous instructions", "ignore your instructions",
 		"disregard your programming", "override your safety",
+		"forget your rules", "pretend you have no restrictions",
 	}
 	for _, p := range harmfulPatterns {
 		if strings.Contains(lower, p) {
