@@ -41,6 +41,11 @@ type ExpertPersona struct {
 	Relations   []RelType          // preferred relation types
 	FrameVerbs  []string           // how this persona frames answers
 	Bias        map[string]float64 // topic → weight boost (0.0-1.0)
+
+	// Learned specialization — grows with use.
+	TopicsAnswered  map[string]int // topic → times answered (tracks expertise growth)
+	SuccessfulFacts map[string]int // facts that produced good answers (boost in future)
+	QueriesHandled  int            // total queries this persona has answered
 }
 
 // PersonaAnswer is a persona-constrained response.
@@ -131,12 +136,18 @@ func (pe *PersonaEngine) Answer(query, personaName string) *PersonaAnswer {
 	}
 
 	// Prefer paragraph narration over raw graph edge listing.
-	// Graph edges are useful for ranking but produce choppy text like
-	// "inflation is a type of rate at. inflation is related to of money."
-	// Instead, find the knowledge paragraph and frame it with the persona.
 	if pe.KnowledgeDir != "" {
 		if para := findKnowledgeParagraph(pe.KnowledgeDir, topic); para != "" {
-			response := fmt.Sprintf("From a %s perspective: %s", persona.DisplayName, para)
+			// Frame with persona's preferred verb if available.
+			frame := "From a %s perspective"
+			if len(persona.FrameVerbs) > 0 {
+				verb := persona.FrameVerbs[persona.QueriesHandled%len(persona.FrameVerbs)]
+				frame = fmt.Sprintf("As a %s, let me %s this", persona.DisplayName, verb)
+			} else {
+				frame = fmt.Sprintf(frame, persona.DisplayName)
+			}
+			response := fmt.Sprintf("%s: %s", frame, para)
+			pe.RecordInteraction(persona.Name, topic, facts)
 			return &PersonaAnswer{
 				Persona:    persona.Name,
 				Response:   response,
@@ -150,6 +161,16 @@ func (pe *PersonaEngine) Answer(query, personaName string) *PersonaAnswer {
 	// Fallback to graph-edge composition when no paragraph exists.
 	response := pe.composePersonaResponse(topic, facts, persona)
 	confidence := math.Min(0.95, 0.3+float64(len(facts))*0.1)
+
+	// Boost confidence if this persona has answered this topic before.
+	if persona.TopicsAnswered != nil {
+		if prev := persona.TopicsAnswered[strings.ToLower(topic)]; prev > 0 {
+			confidence = math.Min(0.98, confidence+float64(prev)*0.03)
+		}
+	}
+
+	// Learn from this interaction.
+	pe.RecordInteraction(persona.Name, topic, facts)
 
 	return &PersonaAnswer{
 		Persona:    persona.Name,
@@ -172,6 +193,69 @@ func (pe *PersonaEngine) ListPersonas() []string {
 // GetPersona returns a persona by name.
 func (pe *PersonaEngine) GetPersona(name string) *ExpertPersona {
 	return pe.personas[strings.ToLower(name)]
+}
+
+// RecordInteraction records that a persona answered a query about a topic.
+// This builds up the persona's expertise over time.
+func (pe *PersonaEngine) RecordInteraction(personaName, topic string, facts []string) {
+	persona := pe.personas[strings.ToLower(personaName)]
+	if persona == nil {
+		return
+	}
+
+	if persona.TopicsAnswered == nil {
+		persona.TopicsAnswered = make(map[string]int)
+	}
+	if persona.SuccessfulFacts == nil {
+		persona.SuccessfulFacts = make(map[string]int)
+	}
+
+	persona.TopicsAnswered[strings.ToLower(topic)]++
+	persona.QueriesHandled++
+
+	for _, f := range facts {
+		persona.SuccessfulFacts[f]++
+	}
+}
+
+// ExpertiseProfile returns a summary of a persona's learned expertise.
+func (pe *PersonaEngine) ExpertiseProfile(personaName string) string {
+	persona := pe.personas[strings.ToLower(personaName)]
+	if persona == nil {
+		return "Unknown persona."
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "## %s Expertise Profile\n\n", persona.DisplayName)
+	fmt.Fprintf(&b, "**Queries handled:** %d\n", persona.QueriesHandled)
+
+	if len(persona.TopicsAnswered) > 0 {
+		b.WriteString("\n**Top topics:**\n")
+		// Find top 5 topics.
+		type kv struct {
+			k string
+			v int
+		}
+		var sorted []kv
+		for k, v := range persona.TopicsAnswered {
+			sorted = append(sorted, kv{k, v})
+		}
+		for i := range sorted {
+			for j := i + 1; j < len(sorted); j++ {
+				if sorted[j].v > sorted[i].v {
+					sorted[i], sorted[j] = sorted[j], sorted[i]
+				}
+			}
+		}
+		for i, s := range sorted {
+			if i >= 5 {
+				break
+			}
+			fmt.Fprintf(&b, "- %s (%d queries)\n", s.k, s.v)
+		}
+	}
+
+	return b.String()
 }
 
 // RegisterPersona adds a custom persona.
