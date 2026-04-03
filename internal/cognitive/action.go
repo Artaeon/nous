@@ -1082,6 +1082,19 @@ func (ar *ActionRouter) handleRespond(nlu *NLUResult) *ActionResult {
 			if ar.CogGraph != nil {
 				facts, _ := ar.Composer.gatherFacts(nlu.Raw)
 				if len(facts) == 0 {
+					// Try knowledge synthesis before honest fallback.
+					if ar.Synthesizer != nil {
+						topic := extractMainTopic(nlu.Raw)
+						if ar.Synthesizer.ShouldSynthesize(topic, 0) {
+							synthResult := ar.Synthesizer.Synthesize(topic)
+							if synthResult != nil && len(synthResult.Synthesized) > 0 {
+								return &ActionResult{
+									DirectResponse: ar.Synthesizer.FormatSynthesis(synthResult),
+									Source:         "knowledge_synthesis",
+								}
+							}
+						}
+					}
 					return &ActionResult{
 						DirectResponse: composeHonestFallback(nlu.Raw),
 						Source:         "honest_fallback",
@@ -2974,18 +2987,30 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 		}
 	}
 
-	// Tier 5: Honest fallback — we don't have relevant information.
+	// Tier 5: Knowledge Synthesis — reason from adjacent knowledge.
+	// Instead of "I don't know", synthesize qualified insights from related
+	// topics in the graph using generalization, analogy, causal chains, etc.
+	if ar.Synthesizer != nil && query != "" {
+		if ar.Synthesizer.ShouldSynthesize(query, 0) {
+			synthResult := ar.Synthesizer.Synthesize(query)
+			if synthResult != nil && len(synthResult.Synthesized) > 0 {
+				formatted := ar.Synthesizer.FormatSynthesis(synthResult)
+				if formatted != "" {
+					return &ActionResult{
+						DirectResponse: formatted,
+						Source:         "knowledge_synthesis",
+					}
+				}
+			}
+		}
+	}
+
+	// Tier 6: Honest fallback — we don't have relevant information.
 	return &ActionResult{
 		DirectResponse: composeHonestFallback(nlu.Raw),
 		Source:         "honest_fallback",
 	}
 }
-
-// NOTE: The old handleLookupKnowledge had 14 fallback tiers (multi-hop reasoning,
-// thinking engine, knowledge synthesis, composer, graph fact dump, extractive QA,
-// virtual context weaving, LLM fallback). These were removed and replaced with
-// the cleaner 4-tier pipeline above. The engines still exist and can be wired
-// back in via other handlers if needed.
 
 // handleCompare generates a comparison between two items using knowledge graph data.
 func (ar *ActionRouter) handleCompare(nlu *NLUResult) *ActionResult {
