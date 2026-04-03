@@ -67,6 +67,20 @@ func (mte *MemoryTriggerEngine) Scan(input string, currentTopics []string) []Mem
 		return nil
 	}
 
+	// Skip memory scanning for trivial inputs — greetings, farewells,
+	// affirmations should never trigger "you were asking about hello".
+	lower := strings.ToLower(strings.TrimSpace(input))
+	trivialPrefixes := []string{
+		"hello", "hi", "hey", "good morning", "good evening", "good afternoon",
+		"goodbye", "bye", "see you", "good night", "thanks", "thank you",
+		"ok", "yes", "no", "sure", "cool", "great", "nice", "awesome",
+	}
+	for _, tp := range trivialPrefixes {
+		if strings.HasPrefix(lower, tp) && len(strings.Fields(lower)) <= 4 {
+			return nil
+		}
+	}
+
 	var all []MemoryTrigger
 
 	// Run all scan types and collect candidates
