@@ -3093,9 +3093,31 @@ func (c *Composer) composeOpinion(query string, ctx *ComposeContext) *ComposedRe
 	}
 
 	if len(parts) <= 1 {
-		// No facts or opinion to draw on — give a thoughtful generic response
+		// No facts or opinion to draw on — construct a reasoned response
+		// from the question structure itself rather than giving a generic dodge.
 		topic := c.extractTopic(query)
-		if topic != "" {
+		lower := strings.ToLower(query)
+
+		// Detect specific opinion patterns and give structured answers.
+		if topic != "" && (strings.Contains(lower, "replace") || strings.Contains(lower, "take over")) {
+			parts = append(parts, fmt.Sprintf(
+				"I think %s will transform many fields, but replacement is rarely total. "+
+					"History shows new tools augment human capability more often than they replace it entirely. "+
+					"The real question is which specific tasks change, and how people adapt.",
+				topic))
+		} else if topic != "" && (strings.Contains(lower, "good") || strings.Contains(lower, "bad") || strings.Contains(lower, "dangerous")) {
+			parts = append(parts, fmt.Sprintf(
+				"Like most powerful things, %s has both potential and risk. "+
+					"The outcome depends on how it's developed, regulated, and used. "+
+					"I lean toward cautious optimism — the benefits are real, but so are the risks.",
+				topic))
+		} else if topic != "" && (strings.Contains(lower, "future") || strings.Contains(lower, "will")) {
+			parts = append(parts, fmt.Sprintf(
+				"Predicting the future of %s is hard, but the trajectory is clear: "+
+					"the technology is advancing fast, adoption is accelerating, and "+
+					"the consequences — both good and bad — will be significant.",
+				topic))
+		} else if topic != "" {
 			parts = append(parts, fmt.Sprintf(c.pick(genericOpinions), topic))
 		} else {
 			parts = append(parts, c.pick(thoughtfulGeneric))
