@@ -462,6 +462,13 @@ func main() {
 		actions.MultiHop = cognitive.NewMultiHopReasoner(actions.CogGraph)
 	}
 
+	// On-demand Wikipedia loader — infinite knowledge growth.
+	// When Nous doesn't know a topic, fetches Wikipedia, extracts facts,
+	// adds to graph, and answers in the same turn (~200ms first time, 1ms after).
+	if actions.CogGraph != nil {
+		actions.WikiLoader = cognitive.NewWikipediaLoader(actions.CogGraph)
+	}
+
 	// Innovation systems
 	actions.Socratic = cognitive.NewSocraticEngine()
 	actions.Crystallizer = cognitive.NewInsightCrystallizer()

@@ -126,6 +126,7 @@ type ActionRouter struct {
 	CausalInfer    *CausalInferenceEngine
 	Expander       *KnowledgeExpander
 	DispatchPipe   *DispatchPipeline
+	WikiLoader     *WikipediaLoader
 
 	// Micro language model — knowledge-grounded sentence generation
 	MicroModel interface {
@@ -2951,7 +2952,29 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 		}
 	}
 
-	// Tier 4: Honest fallback — we don't have relevant information.
+	// Tier 4: On-demand Wikipedia — fetch article, extract facts, answer.
+	// This is the "infinite knowledge" tier: if the topic exists on Wikipedia,
+	// Nous learns about it in ~200ms and knows it forever.
+	if ar.WikiLoader != nil && query != "" {
+		result := ar.WikiLoader.FetchAndLearn(query)
+		if result != nil && result.Paragraph != "" {
+			response := result.Paragraph
+			if ar.Format != nil {
+				if req := ar.Format.DetectFormat(nlu.Raw); req != nil {
+					response = ar.Format.Reshape(response, req)
+				}
+			}
+			if ar.Tracker != nil {
+				ar.Tracker.TrackTopic(query, "wikipedia_ondemand")
+			}
+			return &ActionResult{
+				DirectResponse: response,
+				Source:         "wikipedia_ondemand",
+			}
+		}
+	}
+
+	// Tier 5: Honest fallback — we don't have relevant information.
 	return &ActionResult{
 		DirectResponse: composeHonestFallback(nlu.Raw),
 		Source:         "honest_fallback",
