@@ -119,6 +119,10 @@ type activatedNode struct {
 }
 
 func (g *GraphRAGEngine) activate(topic string) []activatedNode {
+	if g.Graph == nil {
+		return nil
+	}
+
 	var activated []activatedNode
 	visited := make(map[string]bool)
 

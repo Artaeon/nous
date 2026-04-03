@@ -4247,6 +4247,9 @@ func (ar *ActionRouter) handlePersona(nlu *NLUResult) *ActionResult {
 	if ar.Personas == nil {
 		if ar.CogGraph != nil {
 			ar.Personas = NewPersonaEngine(ar.CogGraph)
+			if ar.SelfTeacher != nil {
+				ar.Personas.KnowledgeDir = ar.SelfTeacher.KnowledgeDir()
+			}
 		} else {
 			return &ActionResult{
 				DirectResponse: "Expert persona engine not available.",

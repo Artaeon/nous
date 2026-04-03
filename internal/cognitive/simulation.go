@@ -94,13 +94,22 @@ func (se *SimulationEngine) Simulate(scenario string, steps int) *SimulationResu
 	// Extract the core hypothesis from the scenario.
 	hypothesis := extractHypothesis(scenario)
 
+	// Extract the core entity from the hypothesis for graph lookup.
+	// "gravity didn't exist" → "gravity"
+	// "renewable energy becomes cheaper" → "renewable energy"
+	coreEntity := extractCoreEntity(hypothesis)
+
 	// Track all entities we encounter.
 	entitySet := make(map[string]bool)
 
-	// Run the initial causal analysis.
+	// Run the initial causal analysis on the core entity.
 	var allEffects []CausalEffect
 	if se.Causal != nil {
-		chain := se.Causal.WhatIf(hypothesis)
+		chain := se.Causal.WhatIf(coreEntity)
+		if chain == nil && coreEntity != hypothesis {
+			// Try the full hypothesis if core entity didn't match.
+			chain = se.Causal.WhatIf(hypothesis)
+		}
 		if chain != nil {
 			allEffects = chain.Effects
 		}
@@ -256,6 +265,37 @@ func extractHypothesis(scenario string) string {
 	return strings.TrimRight(strings.TrimSpace(scenario), "?.!")
 }
 
+// extractCoreEntity pulls the subject noun from a hypothesis clause.
+// "gravity didn't exist" → "gravity"
+// "renewable energy becomes cheaper than coal" → "renewable energy"
+// "the internet disappeared" → "internet"
+func extractCoreEntity(hypothesis string) string {
+	lower := strings.ToLower(strings.TrimSpace(hypothesis))
+
+	// Strip trailing verb phrases: "didn't exist", "were removed", "stopped working"
+	verbPhrases := []string{
+		" didn't exist", " did not exist", " doesn't exist",
+		" were removed", " was removed", " is removed",
+		" stopped working", " stopped", " disappeared",
+		" were never discovered", " was never discovered",
+		" never existed", " ceased to exist",
+		" becomes cheaper", " became cheaper",
+		" were eliminated", " was eliminated",
+		" collapsed", " failed", " broke down",
+	}
+	for _, vp := range verbPhrases {
+		if idx := strings.Index(lower, vp); idx > 0 {
+			lower = strings.TrimSpace(lower[:idx])
+			break
+		}
+	}
+
+	// Strip leading articles.
+	lower = stripLeadingFillers(lower)
+
+	return strings.TrimSpace(lower)
+}
+
 // gatherEffectsFromGraph creates synthetic effects from graph edges
 // when the causal reasoner has no direct causal edges to traverse.
 func (se *SimulationEngine) gatherEffectsFromGraph(topic string) []CausalEffect {
@@ -383,7 +423,7 @@ func (se *SimulationEngine) composeStepSummary(step int, topic string, effects [
 		}
 		first = false
 		humanRel := humanizeRelation(rel)
-		fmt.Fprintf(&b, "%s %s %s.", strings.Title(topic), humanRel, strings.Join(entities, ", "))
+		fmt.Fprintf(&b, "%s %s %s.", capFirst(topic), humanRel, strings.Join(entities, ", "))
 	}
 
 	if len(connections) > 0 {

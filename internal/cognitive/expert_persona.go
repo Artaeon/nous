@@ -26,8 +26,9 @@ import (
 
 // PersonaEngine manages expert personas over the knowledge graph.
 type PersonaEngine struct {
-	graph    *CognitiveGraph
-	personas map[string]*ExpertPersona
+	graph        *CognitiveGraph
+	personas     map[string]*ExpertPersona
+	KnowledgeDir string // path to knowledge text files for paragraph fallback
 }
 
 // ExpertPersona defines an expert perspective with domain constraints.
@@ -84,7 +85,7 @@ func (pe *PersonaEngine) Answer(query, personaName string) *PersonaAnswer {
 	facts, domains := pe.gatherPersonaFacts(topic, persona)
 
 	if len(facts) == 0 {
-		// Try the graph description as fallback.
+		// Fallback 1: graph description.
 		desc := pe.graph.LookupDescription(topic)
 		if desc != "" {
 			return &PersonaAnswer{
@@ -93,6 +94,18 @@ func (pe *PersonaEngine) Answer(query, personaName string) *PersonaAnswer {
 				Facts:      []string{desc},
 				Confidence: 0.5,
 				Domains:    domains,
+			}
+		}
+		// Fallback 2: knowledge paragraph files (real Wikipedia text).
+		if pe.KnowledgeDir != "" {
+			if para := findKnowledgeParagraph(pe.KnowledgeDir, topic); para != "" {
+				return &PersonaAnswer{
+					Persona:    persona.Name,
+					Response:   fmt.Sprintf("From a %s perspective: %s", persona.DisplayName, para),
+					Facts:      []string{para},
+					Confidence: 0.7,
+					Domains:    domains,
+				}
 			}
 		}
 		return &PersonaAnswer{
