@@ -191,15 +191,31 @@ func (wl *WikipediaLoader) fetchWikipedia(topic string) (extract, title string, 
 // Text processing helpers
 // -----------------------------------------------------------------------
 
-// extractLeadParagraph returns the first 3 sentences of text.
+// extractLeadParagraph returns the first 4-6 sentences of text, ensuring
+// a minimum word count for consistent response quality across topics.
 func extractLeadParagraph(text, title string) string {
 	sentences := strings.SplitAfter(text, ". ")
-	maxSentences := 3
+
+	// Start with 4 sentences, extend up to 6 if the paragraph is too short.
+	maxSentences := 4
 	if len(sentences) < maxSentences {
 		maxSentences = len(sentences)
 	}
 
 	lead := strings.TrimSpace(strings.Join(sentences[:maxSentences], ""))
+
+	// If the paragraph is under 80 words, extend to 6 sentences for consistency.
+	if len(strings.Fields(lead)) < 80 && maxSentences < len(sentences) {
+		extended := maxSentences + 2
+		if extended > len(sentences) {
+			extended = len(sentences)
+		}
+		if extended > 6 {
+			extended = 6
+		}
+		lead = strings.TrimSpace(strings.Join(sentences[:extended], ""))
+	}
+
 	if lead == "" {
 		return text
 	}
