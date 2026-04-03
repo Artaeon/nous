@@ -1777,6 +1777,24 @@ func (n *NLU) postClassifyCorrections(lower string, r *NLUResult) {
 		}
 	}
 
+	// "creative" with opinion/think signals → conversation (routes to opinion composer)
+	// "do you think AI will replace humans" should not go to creative handler.
+	if r.Intent == "creative" && r.Entities["creative_type"] == "reflect" {
+		opinionSignals := []string{
+			"do you think", "what do you think", "what's your opinion",
+			"what is your opinion", "your thoughts on", "your take on",
+			"your view on", "do you believe", "what do you believe",
+			"would you say", "how do you feel about",
+		}
+		for _, sig := range opinionSignals {
+			if strings.Contains(lower, sig) {
+				r.Intent = "conversation"
+				r.Action = "respond"
+				break
+			}
+		}
+	}
+
 	// "transform" when input contains "summarize this:" → keep as transform
 	// but the summarizer intercept in Execute() will handle it
 
