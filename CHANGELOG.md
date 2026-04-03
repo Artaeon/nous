@@ -2,6 +2,69 @@
 
 All notable changes to Nous are documented here.
 
+## [1.2.0] - 2026-04-03
+
+### Revolutionary — Dream Mode (Autonomous Background Reasoning)
+- **5 dream operations** — Wander (random graph walks for cross-domain connections), Expand (Wikipedia fetches for conversation topics), Infer (causal edge discovery), Reflect (conversation pattern analysis), Synthesize (cross-domain insight generation).
+- **Background processing** — `StartBackground()`/`StopBackground()` for continuous autonomous reasoning. Adaptive scheduling with `DreamCycleInterval()` (more active at night).
+- **Morning briefing integration** — `MorningBriefingInsights()` surfaces overnight discoveries.
+- **Dream report** — Tracks cycles, connections found, topics expanded, insights generated.
+
+### Revolutionary — Deep Research Agent
+- **Autonomous multi-step investigation** — Decomposes topic into sub-domains, fetches knowledge across all, discovers causal chains, cross-references connections, produces structured report.
+- **Configurable depth** — Quick (5 sub-topics), Standard (10), Deep (15).
+- **6-phase pipeline** — Decompose → Fetch → Infer → Connect → Extract → Report.
+- **Graph-based decomposition** — Uses existing knowledge graph edges plus heuristic sub-topics.
+- **Cross-topic connection discovery** — Multi-hop reasoning between all sub-topic pairs.
+
+### Revolutionary — Simulation Engine
+- **What-if scenario reasoning** — Chains CausalReasoner + MultiHopReasoner + InnerCouncil for hypothetical scenario exploration.
+- **Multi-step propagation** — Effects distributed across steps with confidence decay (0.95^n).
+- **Paragraph narration** — Rich step descriptions from knowledge paragraphs, not just graph edges.
+- **Hypothesis extraction** — Parses natural language scenarios into core entities and causal effects.
+- **Removal simulation** — `--remove` flag for "what if X disappeared" scenarios.
+
+### Revolutionary — Expert Personas
+- **7 domain experts** — Physicist, Historian, Economist, Psychologist, Engineer, Biologist, Philosopher.
+- **Domain-constrained knowledge** — Each persona filters facts through its domain lens.
+- **Multi-tier fallback** — Graph facts → description → knowledge paragraphs → Wikipedia on-demand → honest fallback.
+- **Paragraph narration** — Prefers rich prose over raw graph edge listing.
+
+### Revolutionary — Inner Council Debate
+- **Multi-round deliberation** — Perspectives argue, concede, challenge, and synthesize across rounds.
+- **5 perspectives** — Pragmatist, Historian, Empath, Architect, Skeptic.
+- **Consensus detection** — Early termination when no perspective shifts occur.
+- **Debate moves** — Strengthen (with evidence), Concede (acknowledge opponent), Challenge (raise counter), Synthesize (merge viewpoints).
+
+### Revolutionary — Predictive Personal Intelligence
+- **Topic prediction** — Recency-weighted scoring with exponential decay (1-week half-life).
+- **Temporal patterns** — Peak hour and day detection from interaction history.
+- **Recurring interests** — Cross-week topic persistence tracking.
+- **Anomaly detection** — New interests (appeared recently) and fading interests (gone silent).
+
+### Revolutionary — Cognitive Profiling
+- **Learns thinking patterns** — Preferred depth (brief/standard/detailed), learning style (breadth-first/depth-first), reasoning style (analytical/intuitive).
+- **Temporal analysis** — Peak activity hours, most active day.
+- **Domain mapping** — Top domains, strong domains (deep engagement), blind spots (mentioned but unexplored).
+- **Adaptive responses** — `AdaptResponse()` adjusts output to match user's cognitive style.
+
+### Added
+- **GraphRAG engine** — Spreading activation BFS (0.5 decay/hop, max 3 hops) with fact ranking by relevance, relation type boost, depth penalty, and diversity filtering.
+- **Causal inference engine** — 4 strategies: temporal ordering → enables, dependency chains → requires, contradiction → prevents, production chains → enables.
+- **Knowledge expander** — Recursive frontier discovery finds referenced-but-unknown topics. Multi-generation gap filling with candidate extraction (proper nouns, domain terms, exemplars).
+- **Wikipedia on-demand loader** — Fetches Wikipedia REST API, extracts facts via `ArticleToFacts()`, adds to knowledge graph. Session cache for efficiency.
+- **Conversation-to-graph learning** — `LearnFactsFromResponse()` extracts typed triples from Nous's own responses. Every conversation permanently enriches the knowledge graph.
+- **Dispatch pipeline** — Priority-tagged, phase-based routing (PreDispatch, Routing, Dispatch, PostDispatch). Bypass rules for simulation/persona intents.
+- **Causal chain training** — `ExtractCausalEdgesFromKnowledge()` and `GenerateCausalChainPairs()` produce forward chains, counterfactual, and branching training data for Mamba SSM.
+- **New causal relation types** — `prevents`, `enables`, `requires`, `produces` with NLG templates.
+- **10+ fact extraction patterns** — Complex clause patterns: "without X, Y cannot Z", "essential for Y", "contributes to Y".
+- **CLI subcommands** — `nous dream N`, `nous research <topic> --depth`, `nous simulate <scenario> --steps --remove`, `nous expand --generations --dry-run`, `nous infer`.
+
+### Fixed
+- NLU explain-verb queries without math reclassified from compute to explain
+- Frontier extraction noise (possessives, articles, generic terms) cleaned up
+- REPL routing for simulation/persona queries via DispatchPipeline bypass rules
+
 ## [1.1.0] - 2026-04-01
 
 ### Revolutionary — Mamba SSM Architecture

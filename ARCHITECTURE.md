@@ -1,13 +1,15 @@
 # Nous (νοῦς) — Architecture Reference
 
 **Native Orchestration of Unified Streams**
-Version 1.1.0 | Go 1.22+ | Zero External Dependencies | ~19MB Static Binary | 52 Built-in Tools | Mamba SSM
+Version 1.2.0 | Go 1.22+ | Zero External Dependencies | ~20MB Static Binary | 175 Cognitive Modules | 52 Built-in Tools | Mamba SSM
 
 ---
 
 ## Overview
 
-Nous is a fully local AI assistant powered by a pure cognitive engine — no external models required. A deterministic NLU engine with 30+ intent categories and 52 built-in tools handles queries through pattern matching, knowledge graphs, and compositional generation. A cognitive compiler progressively compiles query patterns into deterministic handlers (~0ms), and a custom Mamba SSM with knowledge-constrained decoding generates neural responses with zero hallucination. The Thinking Engine handles remaining open-ended queries with frame-based generation and discourse planning, all running in ~50 MB RAM.
+Nous is a **cognitive operating system** — a fully local AI powered by 175 cognitive modules across 235,000 lines of pure Go. No external models required. A deterministic NLU engine with 51 intent categories (98.2% accuracy) and 52 built-in tools handles queries through pattern matching, knowledge graphs, and compositional generation. A cognitive compiler progressively compiles query patterns into deterministic handlers (~0ms), and a custom Mamba SSM with knowledge-constrained decoding generates neural responses with zero hallucination.
+
+Beyond reactive Q&A, Nous features autonomous reasoning systems: **Dream Mode** (background knowledge discovery), **Deep Research** (multi-step investigation), **Simulation Engine** (what-if causal scenarios), **Expert Personas** (7 domain-constrained experts), **Inner Council** (5-perspective multi-round debate), **Predictive Intelligence** (anticipates user needs), **Cognitive Profiling** (learns user thinking patterns), **Causal Inference** (discovers cause-effect from graph structure), and **GraphRAG** (spreading activation retrieval). All running in ~50 MB RAM.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -218,7 +220,7 @@ Month 3:  98% instant (500 crystals, full vocabulary cached)
 
 ## Self-Improvement Architecture
 
-Nous has 8 interconnected learning systems:
+Nous has 12 interconnected learning and reasoning systems:
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -260,7 +262,126 @@ Nous has 8 interconnected learning systems:
 │     Per-source quality EMA for virtual context                   │
 │     Dynamic budget rebalancing — bad sources get less budget     │
 │                                                                  │
+│  9. Dream Mode (Autonomous Background Reasoning)                 │
+│     5 operations: Wander, Expand, Infer, Reflect, Synthesize    │
+│     Wander: random graph walks → cross-domain connections       │
+│     Expand: Wikipedia fetches for recent conversation topics    │
+│     Infer: causal edge discovery from graph structure           │
+│     Reflect: conversation pattern analysis from episodes        │
+│     Synthesize: 2-hop cross-domain insight generation           │
+│     Adaptive scheduling (more active at night)                  │
+│     Morning briefing integration                                │
+│                                                                  │
+│  10. Conversation-to-Graph Learning                              │
+│     Extracts typed triples from responses and user messages      │
+│     "X is a Y" → is_a edge, "X causes Y" → causes edge         │
+│     Every conversation permanently enriches knowledge graph     │
+│                                                                  │
+│  11. Wikipedia On-Demand Expansion                               │
+│     Unknown topics → Wikipedia REST API → ArticleToFacts()       │
+│     Extracted facts added to knowledge graph permanently        │
+│     Session cache prevents duplicate fetches                    │
+│                                                                  │
+│  12. Knowledge Frontier Expansion                                │
+│     Scans graph for referenced-but-unknown topics               │
+│     Multi-generation recursive gap filling                      │
+│     Candidate extraction: proper nouns, domain terms, exemplars │
+│                                                                  │
 └──────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Autonomous Reasoning Systems
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                    AUTONOMOUS SYSTEMS                              │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Dream Mode (background)                                         │
+│  ├── Runs continuously or on-demand (nous dream N)               │
+│  ├── 5 operations weighted by random selection                   │
+│  ├── Wander → Expand → Infer → Reflect → Synthesize             │
+│  └── Morning briefing surfaces overnight discoveries             │
+│                                                                  │
+│  Deep Research Agent (on-demand)                                 │
+│  ├── Decompose topic into sub-domains (graph + heuristic)        │
+│  ├── Fetch knowledge for each sub-topic (Wikipedia)              │
+│  ├── Run causal inference on expanded graph                      │
+│  ├── Find cross-topic connections (multi-hop pairs)              │
+│  ├── Extract key findings (most connected, causal chains)        │
+│  └── Compose structured research report                          │
+│                                                                  │
+│  Simulation Engine (on-demand)                                   │
+│  ├── Parse scenario → hypothesis + core entity                   │
+│  ├── Forward causal propagation with confidence decay            │
+│  ├── Multi-hop graph traversal for secondary effects             │
+│  ├── Inner council evaluation from 5 perspectives                │
+│  └── Structured report with step-by-step analysis                │
+│                                                                  │
+│  Inner Council (per-query, selectively invoked)                  │
+│  ├── 5 perspectives: Pragmatist, Historian, Empath, Architect,   │
+│  │   Skeptic                                                     │
+│  ├── Multi-round debate with moves: strengthen, concede,         │
+│  │   challenge, synthesize                                       │
+│  ├── Consensus detection → early termination                     │
+│  └── Arbiter synthesis → dominant perspective + recommended tone  │
+│                                                                  │
+│  Expert Personas (on-demand)                                     │
+│  ├── 7 experts: physicist, historian, economist, psychologist,    │
+│  │   engineer, biologist, philosopher                            │
+│  ├── Domain-constrained knowledge filtering                      │
+│  ├── Multi-tier fallback: graph → paragraphs → Wikipedia         │
+│  └── Paragraph narration preference over graph edge listing      │
+│                                                                  │
+│  Causal Inference Engine (startup + on-demand)                   │
+│  ├── Temporal ordering: founded_in year → enables                │
+│  ├── Dependency chains: foundational nodes → requires            │
+│  ├── Inhibition: contradicts → prevents                          │
+│  └── Production chains: produces X + requires X → enables        │
+│                                                                  │
+│  GraphRAG (per-query)                                            │
+│  ├── Spreading activation BFS (0.5 decay/hop, max 3 hops)       │
+│  ├── Fact ranking: relevance × relation boost × depth penalty    │
+│  └── Diversity filtering: max 2 facts per topic                  │
+│                                                                  │
+│  Predictive Intelligence (on-demand)                             │
+│  ├── Topic prediction with exponential decay (1-week half-life)  │
+│  ├── Temporal pattern detection (peak hours, most active day)    │
+│  ├── Recurring interest tracking (cross-week persistence)        │
+│  └── Anomaly detection (new interests, fading interests)         │
+│                                                                  │
+│  Cognitive Profiling (on-demand, cached 1 hour)                  │
+│  ├── Preferred depth: brief / standard / detailed                │
+│  ├── Learning pattern: breadth-first / depth-first / mixed       │
+│  ├── Reasoning style: analytical / intuitive / balanced          │
+│  ├── Peak activity hours, most active day                        │
+│  └── Strong domains, blind spots, engagement metrics             │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Dispatch Pipeline
+
+The dispatch pipeline replaces sequential intercepts with priority-tagged, phase-based routing:
+
+```
+Phase 1: PreDispatch
+  └── Safety firewall, reference resolution, entity extraction
+
+Phase 2: Routing
+  └── TagIntents() — multi-intent detection
+  └── ApplyBypassRules() — simulate/persona bypass Socratic/empathy
+
+Phase 3: Dispatch
+  └── simulate → Simulation Engine
+  └── persona  → Expert Personas
+  └── research → Deep Research Agent
+  └── default  → ActionRouter → Execute()
+
+Phase 4: PostDispatch
+  └── Compiler learning, conversation-to-graph learning
 ```
 
 ---
