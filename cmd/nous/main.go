@@ -483,6 +483,12 @@ func main() {
 	// Code generator — template-based code generation
 	actions.CodeGen = cognitive.NewCodeGenerator()
 
+	// Dispatch pipeline — priority-tagged, bypass-aware routing for
+	// innovation intents (simulate, persona) that need to bypass
+	// the sequential empathy/Socratic intercepts in Execute().
+	actions.DispatchPipe = cognitive.NewDispatchPipeline()
+	actions.DispatchPipe.RegisterDefaultStages(actions)
+
 	// Micro language model — load Mamba (preferred) or transformer
 	mambaModelPath := filepath.Join(nousDir, "mamba.bin")
 	microModelPath := filepath.Join(nousDir, "micromodel.bin")
@@ -1200,6 +1206,22 @@ func main() {
 		// Supports multi-intent: "do X and Y" splits into separate actions.
 		// Only falls through to Composer if the action needs language generation.
 		nluResult := nlu.UnderstandMultiWithContext(input, reasoner.Conv)
+
+		// Innovation pipeline: simulate/persona/code intents go through
+		// the DispatchPipeline which has bypass-aware routing, preventing
+		// these queries from being swallowed by empathy/Socratic intercepts.
+		pipelineIntents := map[string]bool{
+			"simulate": true, "persona": true,
+		}
+		if answer == "" && pipelineIntents[nluResult.Intent] && actions.DispatchPipe != nil {
+			pipeResult := actions.DispatchPipe.Execute(nluResult, reasoner.Conv, actions)
+			if pipeResult != nil && pipeResult.DirectResponse != "" {
+				answer = pipeResult.DirectResponse
+				reasoner.Conv.User(input)
+				reasoner.Conv.Assistant(answer)
+			}
+		}
+
 		// Accept the NLU result if confidence >= 0.5, OR if the intent is one
 		// that has specific handler logic (greeting, farewell, affirmation)
 		// where even low-confidence classification should be trusted over
