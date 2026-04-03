@@ -96,7 +96,7 @@ func (pe *PersonaEngine) Answer(query, personaName string) *PersonaAnswer {
 		if desc != "" {
 			return &PersonaAnswer{
 				Persona:    persona.Name,
-				Response:   fmt.Sprintf("From %s %s perspective: %s", articleFor(persona.DisplayName), persona.DisplayName, desc),
+				Response:   fmt.Sprintf("From %s perspective: %s", articleFor(persona.DisplayName), desc),
 				Facts:      []string{desc},
 				Confidence: 0.5,
 				Domains:    domains,
@@ -107,7 +107,7 @@ func (pe *PersonaEngine) Answer(query, personaName string) *PersonaAnswer {
 			if para := findKnowledgeParagraph(pe.KnowledgeDir, topic); para != "" {
 				return &PersonaAnswer{
 					Persona:    persona.Name,
-					Response:   fmt.Sprintf("From %s %s perspective: %s", articleFor(persona.DisplayName), persona.DisplayName, para),
+					Response:   fmt.Sprintf("From %s perspective: %s", articleFor(persona.DisplayName), para),
 					Facts:      []string{para},
 					Confidence: 0.7,
 					Domains:    domains,
@@ -120,7 +120,7 @@ func (pe *PersonaEngine) Answer(query, personaName string) *PersonaAnswer {
 			if wikiResult != nil && wikiResult.Paragraph != "" {
 				return &PersonaAnswer{
 					Persona:    persona.Name,
-					Response:   fmt.Sprintf("From %s %s perspective: %s", articleFor(persona.DisplayName), persona.DisplayName, wikiResult.Paragraph),
+					Response:   fmt.Sprintf("From %s perspective: %s", articleFor(persona.DisplayName), wikiResult.Paragraph),
 					Facts:      []string{wikiResult.Paragraph},
 					Confidence: 0.6,
 					Domains:    domains,
@@ -129,7 +129,7 @@ func (pe *PersonaEngine) Answer(query, personaName string) *PersonaAnswer {
 		}
 		return &PersonaAnswer{
 			Persona:    persona.Name,
-			Response:   fmt.Sprintf("As %s %s, I don't have enough information about %s in my knowledge base.", articleFor(persona.DisplayName), persona.DisplayName, topic),
+			Response:   fmt.Sprintf("As %s, I don't have enough information about %s in my knowledge base.", articleFor(persona.DisplayName), topic),
 			Confidence: 0.1,
 			Disclaimer: fmt.Sprintf("Topic '%s' not well covered in %s domain.", topic, persona.DisplayName),
 		}
@@ -142,9 +142,9 @@ func (pe *PersonaEngine) Answer(query, personaName string) *PersonaAnswer {
 			var frame string
 			if len(persona.FrameVerbs) > 0 {
 				fv := persona.FrameVerbs[persona.QueriesHandled%len(persona.FrameVerbs)]
-				frame = fmt.Sprintf("From %s %s perspective, %s %s", articleFor(persona.DisplayName), persona.DisplayName, topic, fv)
+				frame = fmt.Sprintf("From %s perspective, %s %s", articleFor(persona.DisplayName), topic, fv)
 			} else {
-				frame = fmt.Sprintf("From %s %s perspective", articleFor(persona.DisplayName), persona.DisplayName)
+				frame = fmt.Sprintf("From %s perspective", articleFor(persona.DisplayName))
 			}
 			response := fmt.Sprintf("%s. %s", frame, para)
 			pe.RecordInteraction(persona.Name, topic, facts)
@@ -368,9 +368,9 @@ func (pe *PersonaEngine) composePersonaResponse(topic string, facts []string, pe
 	// Opening frame.
 	if len(persona.FrameVerbs) > 0 {
 		frame := persona.FrameVerbs[len(topic)%len(persona.FrameVerbs)]
-		fmt.Fprintf(&b, "From %s %s perspective, %s %s. ", articleFor(persona.DisplayName), persona.DisplayName, topic, frame)
+		fmt.Fprintf(&b, "From %s perspective, %s %s. ", articleFor(persona.DisplayName), topic, frame)
 	} else {
-		fmt.Fprintf(&b, "As %s %s: ", articleFor(persona.DisplayName), persona.DisplayName)
+		fmt.Fprintf(&b, "As %s: ", articleFor(persona.DisplayName))
 	}
 
 	maxFacts := 5
