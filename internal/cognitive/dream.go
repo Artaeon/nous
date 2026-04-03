@@ -48,13 +48,15 @@ type DreamEngine struct {
 	running     bool
 	stopCh      chan struct{}
 	rng         *rand.Rand
+	seen        map[string]bool // deduplication: entity-pair keys already discovered
 
 	// Stats
-	CyclesRun      int
+	CyclesRun        int
 	ConnectionsFound int
-	TopicsExpanded int
+	TopicsExpanded   int
 	InsightsGenerated int
-	LastDreamTime  time.Time
+	Suppressed       int // discoveries filtered by quality scoring
+	LastDreamTime    time.Time
 }
 
 // DreamDiscovery is something the dream engine found autonomously.
@@ -63,6 +65,7 @@ type DreamDiscovery struct {
 	Summary    string    // human-readable description
 	Entities   []string  // entities involved
 	Confidence float64   // 0.0-1.0
+	Surprise   float64   // 0.0-1.0 — how unexpected is this discovery
 	Timestamp  time.Time
 	Novel      bool      // true if this is genuinely new (not in graph before)
 }
@@ -93,6 +96,7 @@ func NewDreamEngine(
 		WikiLoader:  wikiLoader,
 		Expander:    expander,
 		rng:         rand.New(rand.NewSource(time.Now().UnixNano())),
+		seen:        make(map[string]bool),
 	}
 }
 
@@ -132,6 +136,26 @@ func (de *DreamEngine) Dream(cycles int) *DreamReport {
 			discovery = de.dreamSynthesize()
 		}
 
+		if discovery != nil {
+			// Quality gate: compute surprise score and deduplicate.
+			discovery.Surprise = de.scoreSurprise(discovery)
+			key := de.discoveryKey(discovery)
+			de.mu.Lock()
+			isDuplicate := de.seen[key]
+			if !isDuplicate {
+				de.seen[key] = true
+			}
+			de.mu.Unlock()
+
+			// Filter: suppress low-surprise or duplicate discoveries.
+			qualityScore := discovery.Confidence*0.4 + discovery.Surprise*0.6
+			if isDuplicate || qualityScore < 0.25 {
+				de.mu.Lock()
+				de.Suppressed++
+				de.mu.Unlock()
+				discovery = nil
+			}
+		}
 		if discovery != nil {
 			de.mu.Lock()
 			de.discoveries = append(de.discoveries, *discovery)
@@ -465,6 +489,128 @@ func (de *DreamEngine) dreamSynthesize() *DreamDiscovery {
 }
 
 // -----------------------------------------------------------------------
+// Quality scoring — surprise, novelty, and deduplication.
+// -----------------------------------------------------------------------
+
+// scoreSurprise computes how surprising/unexpected a discovery is (0.0-1.0).
+// Higher surprise = cross-domain connections, entities that are far apart in
+// the graph, topics with few shared neighbors.
+func (de *DreamEngine) scoreSurprise(d *DreamDiscovery) float64 {
+	if d == nil || len(d.Entities) < 2 {
+		return 0.3 // baseline for single-entity discoveries
+	}
+
+	surprise := 0.0
+
+	// 1. Cross-domain bonus: entities from different domains are more surprising.
+	if len(d.Entities) >= 2 {
+		d1 := getDomain(de.Graph, d.Entities[0])
+		d2 := getDomain(de.Graph, d.Entities[len(d.Entities)-1])
+		if d1 != "" && d2 != "" && d1 != d2 {
+			surprise += 0.4 // big bonus for cross-domain
+		}
+	}
+
+	// 2. Graph distance bonus: entities with fewer shared neighbors are more surprising.
+	if len(d.Entities) >= 2 {
+		e1 := de.Graph.EdgesFrom(d.Entities[0])
+		e2 := de.Graph.EdgesFrom(d.Entities[len(d.Entities)-1])
+		shared := 0
+		n1 := make(map[string]bool)
+		for _, e := range e1 {
+			n1[de.Graph.NodeLabel(e.To)] = true
+		}
+		for _, e := range e2 {
+			if n1[de.Graph.NodeLabel(e.To)] {
+				shared++
+			}
+		}
+		if shared <= 1 {
+			surprise += 0.3 // few shared neighbors = surprising
+		} else if shared <= 3 {
+			surprise += 0.1
+		}
+	}
+
+	// 3. Entity rarity bonus: less-connected entities are more surprising to find connections to.
+	for _, ent := range d.Entities {
+		edges := de.Graph.EdgesFrom(ent)
+		if len(edges) <= 2 {
+			surprise += 0.15 // rare/isolated entities
+			break
+		}
+	}
+
+	// 4. Type bonus: insights and connections are more interesting than patterns.
+	switch d.Type {
+	case "insight":
+		surprise += 0.2
+	case "connection":
+		surprise += 0.1
+	}
+
+	return math.Min(1.0, surprise)
+}
+
+// discoveryKey produces a deduplication key from the entities involved.
+func (de *DreamEngine) discoveryKey(d *DreamDiscovery) string {
+	if len(d.Entities) == 0 {
+		return d.Summary
+	}
+	// Sort entity names for order-independent dedup.
+	sorted := make([]string, len(d.Entities))
+	copy(sorted, d.Entities)
+	for i := range sorted {
+		for j := i + 1; j < len(sorted); j++ {
+			if sorted[j] < sorted[i] {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+			}
+		}
+	}
+	return d.Type + ":" + strings.Join(sorted, "+")
+}
+
+// TopDiscoveries returns the N highest-quality discoveries (by confidence * surprise).
+func (de *DreamEngine) TopDiscoveries(n int) []DreamDiscovery {
+	de.mu.Lock()
+	defer de.mu.Unlock()
+
+	if len(de.discoveries) == 0 {
+		return nil
+	}
+
+	// Score and sort.
+	type scored struct {
+		idx   int
+		score float64
+	}
+	var all []scored
+	for i, d := range de.discoveries {
+		s := d.Confidence*0.3 + d.Surprise*0.5
+		if d.Novel {
+			s += 0.2
+		}
+		all = append(all, scored{i, s})
+	}
+	for i := range all {
+		for j := i + 1; j < len(all); j++ {
+			if all[j].score > all[i].score {
+				all[i], all[j] = all[j], all[i]
+			}
+		}
+	}
+
+	var top []DreamDiscovery
+	for _, s := range all {
+		if len(top) >= n {
+			break
+		}
+		top = append(top, de.discoveries[s.idx])
+	}
+	return top
+}
+
+// -----------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------
 
@@ -484,9 +630,21 @@ func extractDreamTopic(input string) string {
 }
 
 func isDifferentDomain(a, b string) bool {
-	// Simple heuristic: if both are short (likely concepts not sentences),
-	// they might be from different domains.
-	return len(a) < 30 && len(b) < 30
+	// Both must be concept-length strings (not sentences).
+	if len(a) > 40 || len(b) > 40 {
+		return false
+	}
+	// Consider different if they don't share common word stems.
+	aWords := strings.Fields(strings.ToLower(a))
+	bWords := strings.Fields(strings.ToLower(b))
+	for _, aw := range aWords {
+		for _, bw := range bWords {
+			if aw == bw && len(aw) > 3 {
+				return false // shared significant word = likely same domain
+			}
+		}
+	}
+	return true
 }
 
 func getDomain(graph *CognitiveGraph, label string) string {
@@ -527,8 +685,12 @@ func FormatDreamReport(report *DreamReport) string {
 			if d.Novel {
 				novelTag = " [NEW]"
 			}
-			fmt.Fprintf(&b, "%d. **[%s]** %s (confidence: %.0f%%)%s\n",
-				i+1, d.Type, d.Summary, d.Confidence*100, novelTag)
+			surpriseTag := ""
+			if d.Surprise >= 0.6 {
+				surpriseTag = " [SURPRISING]"
+			}
+			fmt.Fprintf(&b, "%d. **[%s]** %s (confidence: %.0f%%, surprise: %.0f%%)%s%s\n",
+				i+1, d.Type, d.Summary, d.Confidence*100, d.Surprise*100, novelTag, surpriseTag)
 		}
 	}
 
@@ -568,6 +730,7 @@ func (de *DreamEngine) Stats() map[string]interface{} {
 		"connections_found": de.ConnectionsFound,
 		"topics_expanded":   de.TopicsExpanded,
 		"total_discoveries": len(de.discoveries),
+		"suppressed":        de.Suppressed,
 		"last_dream":        de.LastDreamTime,
 		"running":           de.running,
 	}
