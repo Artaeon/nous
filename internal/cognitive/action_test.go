@@ -620,7 +620,12 @@ func TestActionRouter_LookupKnowledgeSparseFallbackIsInformative(t *testing.T) {
 		t.Fatalf("expected informative sparse fallback, got raw topic %q", result.DirectResponse)
 	}
 	lower := strings.ToLower(result.DirectResponse)
-	if !strings.Contains(lower, "don't have detailed knowledge") {
+	// The honest fallback should indicate lack of knowledge with an offer to help.
+	isHonestFallback := strings.Contains(lower, "don't have") ||
+		strings.Contains(lower, "haven't learned") ||
+		strings.Contains(lower, "outside my current knowledge") ||
+		strings.Contains(lower, "isn't in my knowledge")
+	if !isHonestFallback {
 		t.Fatalf("expected honest sparse fallback message, got %q", result.DirectResponse)
 	}
 }

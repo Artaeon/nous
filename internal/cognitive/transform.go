@@ -111,6 +111,15 @@ func NewTextTransformEngine() *TextTransformEngine {
 			"lousy":   "unsatisfactory",
 			"crappy":  "unsatisfactory",
 
+			// Informal address
+			"dude":  "colleague",
+			"bro":   "colleague",
+			"guys":  "individuals",
+			"guy":   "individual",
+			"kids":  "children",
+			"buddy": "colleague",
+			"pal":   "colleague",
+
 			// Size
 			"huge": "substantial",
 			"tiny": "minimal",
