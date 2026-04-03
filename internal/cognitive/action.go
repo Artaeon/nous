@@ -4290,6 +4290,7 @@ func (ar *ActionRouter) handlePersona(nlu *NLUResult) *ActionResult {
 			if ar.SelfTeacher != nil {
 				ar.Personas.KnowledgeDir = ar.SelfTeacher.KnowledgeDir()
 			}
+			ar.Personas.WikiLoader = ar.WikiLoader
 		} else {
 			return &ActionResult{
 				DirectResponse: "Expert persona engine not available.",

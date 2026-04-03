@@ -28,7 +28,8 @@ import (
 type PersonaEngine struct {
 	graph        *CognitiveGraph
 	personas     map[string]*ExpertPersona
-	KnowledgeDir string // path to knowledge text files for paragraph fallback
+	KnowledgeDir string           // path to knowledge text files for paragraph fallback
+	WikiLoader   *WikipediaLoader // on-demand Wikipedia loading for unknown topics
 }
 
 // ExpertPersona defines an expert perspective with domain constraints.
@@ -108,6 +109,19 @@ func (pe *PersonaEngine) Answer(query, personaName string) *PersonaAnswer {
 				}
 			}
 		}
+		// Fallback 3: on-demand Wikipedia fetch.
+		if pe.WikiLoader != nil {
+			wikiResult := pe.WikiLoader.FetchAndLearn(topic)
+			if wikiResult != nil && wikiResult.Paragraph != "" {
+				return &PersonaAnswer{
+					Persona:    persona.Name,
+					Response:   fmt.Sprintf("From a %s perspective: %s", persona.DisplayName, wikiResult.Paragraph),
+					Facts:      []string{wikiResult.Paragraph},
+					Confidence: 0.6,
+					Domains:    domains,
+				}
+			}
+		}
 		return &PersonaAnswer{
 			Persona:    persona.Name,
 			Response:   fmt.Sprintf("As a %s, I don't have enough information about %s in my knowledge base.", persona.DisplayName, topic),
@@ -116,6 +130,24 @@ func (pe *PersonaEngine) Answer(query, personaName string) *PersonaAnswer {
 		}
 	}
 
+	// Prefer paragraph narration over raw graph edge listing.
+	// Graph edges are useful for ranking but produce choppy text like
+	// "inflation is a type of rate at. inflation is related to of money."
+	// Instead, find the knowledge paragraph and frame it with the persona.
+	if pe.KnowledgeDir != "" {
+		if para := findKnowledgeParagraph(pe.KnowledgeDir, topic); para != "" {
+			response := fmt.Sprintf("From a %s perspective: %s", persona.DisplayName, para)
+			return &PersonaAnswer{
+				Persona:    persona.Name,
+				Response:   response,
+				Facts:      facts,
+				Confidence: math.Min(0.95, 0.5+float64(len(facts))*0.05),
+				Domains:    domains,
+			}
+		}
+	}
+
+	// Fallback to graph-edge composition when no paragraph exists.
 	response := pe.composePersonaResponse(topic, facts, persona)
 	confidence := math.Min(0.95, 0.3+float64(len(facts))*0.1)
 
