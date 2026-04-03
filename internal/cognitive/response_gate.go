@@ -190,10 +190,16 @@ func isSubstantiveTurn(query string) bool {
 }
 
 func repairLowValue(query string) string {
-	// Generate a response that at least engages with the query
+	// Generate a response that at least engages with the query.
 	topic := extractMainTopic(query)
 	if topic != "" {
-		return fmt.Sprintf("Let me think about %s. What specifically would you like to explore?", topic)
+		repairs := []string{
+			fmt.Sprintf("Let me think about %s. What angle interests you most?", topic),
+			fmt.Sprintf("Good question about %s. Can you narrow it down a bit?", topic),
+			fmt.Sprintf("I'd like to help with %s. What part matters most to you?", topic),
+			fmt.Sprintf("That's a broad topic. Which aspect of %s should I focus on?", topic),
+		}
+		return repairs[len(topic)%len(repairs)]
 	}
 	return "That's worth exploring further. What angle are you most interested in?"
 }

@@ -1386,15 +1386,26 @@ func (g *GenerativeEngine) composeHook(topic string) string {
 
 // composeElaboration generates a bridge sentence referencing the topic.
 func (g *GenerativeEngine) composeElaboration(topic string) string {
-	return capitalizeFirst(topic) + " has several key aspects."
+	return g.pick([]string{
+		"There is much to explore about " + topic + ".",
+		"Several dimensions of " + topic + " stand out.",
+		"A closer look reveals what makes " + topic + " distinctive.",
+		capitalizeFirst(topic) + " can be understood through its defining traits.",
+		"The story of " + topic + " unfolds across multiple dimensions.",
+		"What follows are the essential threads of " + topic + ".",
+	})
 }
 
 // composeTransition generates a section transition from the topic name.
 func (g *GenerativeEngine) composeTransition(topic string) string {
 	return g.pick([]string{
-		capitalizeFirst(topic) + " also has other aspects.",
+		"There is more to " + topic + " than meets the eye.",
 		"Beyond this, " + topic + " has further dimensions.",
 		capitalizeFirst(topic) + " extends into other areas.",
+		"Equally important is what " + topic + " connects to.",
+		"Another thread worth following involves " + topic + ".",
+		"Digging deeper into " + topic + " reveals more.",
+		capitalizeFirst(topic) + " touches on additional territory.",
 	})
 }
 
@@ -1413,7 +1424,13 @@ func (g *GenerativeEngine) composeInsight(topic string, theme string) string {
 	case "The Bigger Picture":
 		themeNoun = "connections"
 	}
-	return "These " + themeNoun + " define " + topic + "."
+	closings := []string{
+		"These " + themeNoun + " define " + topic + ".",
+		"Together, these " + themeNoun + " shape what " + topic + " is.",
+		"This paints a clearer picture of " + topic + ".",
+		capitalizeFirst(topic) + " is best understood through these " + themeNoun + ".",
+	}
+	return g.pick(closings)
 }
 
 // -----------------------------------------------------------------------

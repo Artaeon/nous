@@ -2740,7 +2740,14 @@ func (c *Composer) composeConversational(query string, ctx *ComposeContext) *Com
 	if len(parts) == 1 {
 		topic := c.extractTopic(query)
 		if topic != "" {
-			parts = append(parts, fmt.Sprintf("What specifically about %s would you like to explore?", topic))
+			followUps := []string{
+				fmt.Sprintf("Want me to dig deeper into %s?", topic),
+				fmt.Sprintf("I can tell you more about %s if you're curious.", topic),
+				fmt.Sprintf("There's more to %s — just ask.", topic),
+				fmt.Sprintf("Shall I elaborate on %s?", topic),
+				fmt.Sprintf("Ask me anything else about %s.", topic),
+			}
+			parts = append(parts, followUps[len(topic)%len(followUps)])
 		}
 	}
 

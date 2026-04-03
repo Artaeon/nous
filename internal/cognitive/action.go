@@ -1016,7 +1016,7 @@ func (ar *ActionRouter) handleRespond(nlu *NLUResult) *ActionResult {
 		}
 		// No continuation data — give an honest response
 		return &ActionResult{
-			DirectResponse: "I don't have more to add on that topic yet. What would you like to explore?",
+			DirectResponse: "I don't have more to add on that topic yet. Try asking about something specific, or I can search the web.",
 			Source:         "fallback",
 		}
 	}
