@@ -1268,6 +1268,9 @@ func runSimulate(args []string, actions *cognitive.ActionRouter) bool {
 		actions.Council,
 		actions.MultiHop,
 	)
+	if actions.SelfTeacher != nil {
+		sim.KnowledgeDir = actions.SelfTeacher.KnowledgeDir()
+	}
 
 	var result *cognitive.SimulationResult
 	if *removal {

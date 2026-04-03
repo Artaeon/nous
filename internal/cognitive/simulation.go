@@ -30,11 +30,12 @@ import (
 
 // SimulationEngine runs "what if" scenarios over the knowledge graph.
 type SimulationEngine struct {
-	Graph    *CognitiveGraph
-	Causal   *GraphCausalReasoner
-	Council  *InnerCouncil
-	MultiHop *MultiHopReasoner
-	Episodic *memory.EpisodicMemory
+	Graph        *CognitiveGraph
+	Causal       *GraphCausalReasoner
+	Council      *InnerCouncil
+	MultiHop     *MultiHopReasoner
+	Episodic     *memory.EpisodicMemory
+	KnowledgeDir string // path to knowledge/*.txt for paragraph narration
 }
 
 // SimulationStep is one step forward in the simulation.
@@ -410,25 +411,34 @@ func (se *SimulationEngine) composeStepSummary(step int, topic string, effects [
 		return b.String()
 	}
 
-	// Group effects by relation type for cleaner prose.
-	relGroups := make(map[string][]string)
-	for _, e := range effects {
-		relGroups[e.Relation] = append(relGroups[e.Relation], e.Entity)
-	}
-
-	first := true
-	for rel, entities := range relGroups {
-		if !first {
+	// For each effect, try to find a knowledge paragraph to narrate it.
+	// This transforms bare "gravity causes tides" into rich Wikipedia prose.
+	for i, e := range effects {
+		if i > 0 {
 			b.WriteString(" ")
 		}
-		first = false
-		humanRel := humanizeRelation(rel)
-		fmt.Fprintf(&b, "%s %s %s.", capFirst(topic), humanRel, strings.Join(entities, ", "))
-	}
 
-	if len(connections) > 0 {
-		b.WriteString(" Connections: ")
-		b.WriteString(strings.Join(connections, "; "))
+		humanRel := humanizeRelation(e.Relation)
+
+		// Try knowledge paragraph narration for richer output.
+		if se.KnowledgeDir != "" {
+			// Look up the effect entity in knowledge paragraphs.
+			entityName := e.Entity
+			// Clean up long entity names (sentence fragments from extraction).
+			if words := strings.Fields(entityName); len(words) > 6 {
+				entityName = strings.Join(words[:6], " ")
+			}
+			if para := findKnowledgeParagraph(se.KnowledgeDir, entityName); para != "" {
+				firstSent := firstSentenceOf(para)
+				if len(firstSent) > 20 {
+					fmt.Fprintf(&b, "%s %s %s. %s", capFirst(topic), humanRel, entityName, firstSent)
+					continue
+				}
+			}
+		}
+
+		// Fallback: bare relation description.
+		fmt.Fprintf(&b, "%s %s %s.", capFirst(topic), humanRel, e.Entity)
 	}
 
 	return b.String()

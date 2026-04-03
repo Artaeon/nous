@@ -4213,6 +4213,9 @@ func (ar *ActionRouter) handleSimulate(nlu *NLUResult) *ActionResult {
 		// Try to build one on the fly from available engines.
 		if ar.CogGraph != nil && ar.CausalReasoner != nil {
 			ar.Simulation = NewSimulationEngine(ar.CogGraph, ar.CausalReasoner, ar.Council, ar.MultiHop)
+			if ar.SelfTeacher != nil {
+				ar.Simulation.KnowledgeDir = ar.SelfTeacher.KnowledgeDir()
+			}
 		} else {
 			return &ActionResult{
 				DirectResponse: "Simulation engine not available. Requires knowledge graph and causal reasoner.",
