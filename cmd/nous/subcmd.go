@@ -49,6 +49,10 @@ func SubcommandRouter(args []string, nlu *cognitive.NLU, actions *cognitive.Acti
 		return runExpand(args[1:], actions)
 	case "infer":
 		return runInfer(args[1:], actions)
+	case "dream":
+		return runDream(args[1:], actions)
+	case "research":
+		return runResearch(args[1:], actions)
 	default:
 		return false
 	}
@@ -1375,11 +1379,82 @@ func runInfer(args []string, actions *cognitive.ActionRouter) bool {
 		}
 	}
 
-	// Save the updated graph.
 	if actions.CogGraph != nil {
 		actions.CogGraph.Save()
 		fmt.Println("\nKnowledge graph saved.")
 	}
 
+	return true
+}
+
+// --- dream subcommand ---
+
+func runDream(args []string, actions *cognitive.ActionRouter) bool {
+	cycles := 50
+	if len(args) > 0 {
+		if n, err := fmt.Sscanf(args[0], "%d", &cycles); n == 0 || err != nil {
+			cycles = 50
+		}
+	}
+
+	dream := cognitive.NewDreamEngine(
+		actions.CogGraph,
+		actions.EpisodicMem,
+		actions.CausalInfer,
+		actions.WikiLoader,
+		actions.Expander,
+	)
+
+	fmt.Printf("Dreaming (%d cycles)...\n\n", cycles)
+	report := dream.Dream(cycles)
+	if report == nil {
+		fmt.Println("Dream engine not available.")
+		return true
+	}
+
+	fmt.Print(cognitive.FormatDreamReport(report))
+
+	if actions.CogGraph != nil {
+		actions.CogGraph.Save()
+	}
+	return true
+}
+
+// --- research subcommand ---
+
+func runResearch(args []string, actions *cognitive.ActionRouter) bool {
+	depth := "standard"
+	remaining := args
+
+	if len(args) >= 2 && args[0] == "--depth" {
+		depth = args[1]
+		remaining = args[2:]
+	}
+
+	topic := strings.Join(remaining, " ")
+	if topic == "" {
+		fmt.Fprintln(os.Stderr, "usage: nous research [--depth quick|standard|deep] <topic>")
+		os.Exit(1)
+	}
+
+	agent := cognitive.NewDeepResearchAgent(
+		actions.CogGraph,
+		actions.WikiLoader,
+		actions.CausalInfer,
+		actions.MultiHop,
+	)
+
+	fmt.Printf("Researching %q (depth: %s)...\n\n", topic, depth)
+	result := agent.Research(topic, depth)
+	if result == nil {
+		fmt.Println("Research failed.")
+		return true
+	}
+
+	fmt.Print(result.Report)
+
+	if actions.CogGraph != nil {
+		actions.CogGraph.Save()
+	}
 	return true
 }
