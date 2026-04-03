@@ -1841,6 +1841,13 @@ func (n *NLU) postClassifyCorrections(lower string, r *NLUResult) {
 		r.Intent = "persona"
 		r.Entities["persona"] = personaName
 	}
+
+	// Weather queries misclassified as explain/question:
+	// "what is the weather in Paris", "weather in Tokyo", "how's the weather"
+	if r.Intent != "weather" && strings.Contains(lower, "weather") {
+		r.Intent = "weather"
+		r.Action = "weather"
+	}
 }
 
 // isCodeRequest detects if a query is asking for code generation.
