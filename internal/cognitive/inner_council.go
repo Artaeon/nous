@@ -166,9 +166,9 @@ func (ic *InnerCouncil) consultPragmatist(input string, topics []string) Council
 	if totalFacts == 0 {
 		return CouncilOpinion{
 			Perspective: PerspPragmatist,
-			Assessment:  "No facts found for these topics. Cannot provide a grounded answer.",
+			Assessment:  "This topic isn't well covered in our knowledge base yet.",
 			Confidence:  0.15,
-			KeyInsight:  "Knowledge gap.",
+			KeyInsight:  "Limited factual grounding available.",
 			Priority:    0.3,
 		}
 	}

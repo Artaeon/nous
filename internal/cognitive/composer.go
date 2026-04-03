@@ -3072,10 +3072,24 @@ func (c *Composer) composeOpinion(query string, ctx *ComposeContext) *ComposedRe
 		}
 	}
 
-	// Add the council's synthesis as additional perspective.
+	// Add the council's synthesis as additional perspective,
+	// but filter out internal system language that shouldn't be user-facing.
 	if ctx != nil && ctx.CouncilResult != nil && ctx.CouncilResult.Synthesis != "" {
-		parts = append(parts, ctx.CouncilResult.Synthesis)
-		sources = append(sources, "inner_council")
+		synth := ctx.CouncilResult.Synthesis
+		// Skip if the synthesis contains internal assessment language.
+		skipPhrases := []string{"no facts found", "cannot provide", "knowledge gap", "not well covered"}
+		shouldSkip := false
+		synthLower := strings.ToLower(synth)
+		for _, sp := range skipPhrases {
+			if strings.Contains(synthLower, sp) {
+				shouldSkip = true
+				break
+			}
+		}
+		if !shouldSkip {
+			parts = append(parts, synth)
+			sources = append(sources, "inner_council")
+		}
 	}
 
 	if len(parts) <= 1 {
