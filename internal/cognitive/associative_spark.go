@@ -419,24 +419,48 @@ func (se *SparkEngine) buildExplanation(source, target string, pathLabels []stri
 
 	hops := len(pathLabels) - 1 // number of edges in the path
 
+	// Filter out non-meaningful intermediaries (years, numbers, very short labels).
+	var cleanPath []string
+	for _, label := range pathLabels {
+		if len(label) < 3 {
+			continue
+		}
+		// Skip pure years or numbers.
+		isNumber := true
+		for _, r := range label {
+			if r < '0' || r > '9' {
+				isNumber = false
+				break
+			}
+		}
+		if isNumber {
+			continue
+		}
+		cleanPath = append(cleanPath, label)
+	}
+	if len(cleanPath) < 2 {
+		cleanPath = pathLabels // fall back to original if filtering removed too much
+	}
+	hops = len(cleanPath) - 1
+
 	switch {
 	case hops <= 3 && hops >= 2:
 		// Short path: "Interesting — [source] connects to [target] through [middle]."
-		middles := pathLabels[1 : len(pathLabels)-1]
+		middles := cleanPath[1 : len(cleanPath)-1]
 		return fmt.Sprintf("%s %s connects to %s through %s.",
 			opening, source, target, strings.Join(middles, " and "))
 
 	case hops == 4:
 		// Medium path: "[source] relates to [mid1], which [rel] [mid2], which connects to [target]."
-		mid1 := pathLabels[1]
-		mid2 := pathLabels[2]
+		mid1 := cleanPath[1]
+		mid2 := cleanPath[2]
 		verb := relationVerb(relations[2])
 		return fmt.Sprintf("%s %s relates to %s, which %s %s, which connects to %s.",
 			opening, source, mid1, verb, mid2, target)
 
 	default:
 		// Long path: summarize the chain.
-		middles := pathLabels[1 : len(pathLabels)-1]
+		middles := cleanPath[1 : len(cleanPath)-1]
 		chain := strings.Join(middles, " → ")
 		return fmt.Sprintf("%s %s connects to %s through a chain: %s.",
 			opening, source, target, chain)
