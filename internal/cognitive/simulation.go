@@ -560,10 +560,35 @@ func (se *SimulationEngine) composeReport(result *SimulationResult) string {
 		b.WriteString("\n")
 	}
 
+	// Risk assessment.
+	b.WriteString("## Risk Assessment\n\n")
+	totalEffects := 0
+	highConfSteps := 0
+	for _, step := range result.Steps {
+		totalEffects += len(step.Effects)
+		if step.Confidence >= 0.7 {
+			highConfSteps++
+		}
+	}
+	severity := "low"
+	if totalEffects > 10 {
+		severity = "critical"
+	} else if totalEffects > 5 {
+		severity = "high"
+	} else if totalEffects > 2 {
+		severity = "moderate"
+	}
+	fmt.Fprintf(&b, "- **Severity:** %s (%d total effects across %d steps)\n", severity, totalEffects, len(result.Steps))
+	fmt.Fprintf(&b, "- **Predictability:** %d/%d steps above 70%% confidence\n", highConfSteps, len(result.Steps))
+	if totalEffects > 5 {
+		b.WriteString("- **Cascading risk:** High — effects propagate through multiple systems\n")
+	}
+	b.WriteString("\n")
+
 	// Final verdict
 	b.WriteString("## Verdict\n\n")
 	b.WriteString(result.FinalVerdict)
-	b.WriteString("\n")
+	b.WriteString("\n\n---\n*Simulation based on knowledge graph traversal and causal inference. All effects are traceable.*\n")
 
 	return b.String()
 }
