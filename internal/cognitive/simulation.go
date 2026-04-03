@@ -250,10 +250,10 @@ func extractHypothesis(scenario string) string {
 	}
 	for _, p := range prefixes {
 		if strings.HasPrefix(lower, p) {
-			return strings.TrimSpace(scenario[len(p):])
+			return strings.TrimRight(strings.TrimSpace(scenario[len(p):]), "?.!")
 		}
 	}
-	return strings.TrimRight(strings.TrimSpace(scenario), "?.")
+	return strings.TrimRight(strings.TrimSpace(scenario), "?.!")
 }
 
 // gatherEffectsFromGraph creates synthetic effects from graph edges
