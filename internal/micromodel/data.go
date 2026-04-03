@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -886,6 +887,54 @@ func extractSentenceObject(sentence, topic string) string {
 	}
 
 	return ""
+}
+
+// ExtractCausalEdgesFromKnowledge scans knowledge text files for causal
+// relationships and returns them as adjacency lists keyed by subject.
+// Used by GenerateCausalChainPairs to create multi-hop training sequences.
+func ExtractCausalEdgesFromKnowledge(knowledgeDir string) map[string][][3]string {
+	edges := make(map[string][][3]string)
+
+	files, err := filepath.Glob(filepath.Join(knowledgeDir, "*.txt"))
+	if err != nil || len(files) == 0 {
+		return edges
+	}
+
+	causalPatterns := []struct {
+		re       *regexp.Regexp
+		relation string
+	}{
+		{regexp.MustCompile(`(?i)(.{3,40}?)\s+causes?\s+(.{3,40}?)(?:\.|,|;)`), "causes"},
+		{regexp.MustCompile(`(?i)(.{3,40}?)\s+enables?\s+(.{3,40}?)(?:\.|,|;)`), "enables"},
+		{regexp.MustCompile(`(?i)(.{3,40}?)\s+produces?\s+(.{3,40}?)(?:\.|,|;)`), "produces"},
+		{regexp.MustCompile(`(?i)(.{3,40}?)\s+prevents?\s+(.{3,40}?)(?:\.|,|;)`), "prevents"},
+		{regexp.MustCompile(`(?i)(.{3,40}?)\s+requires?\s+(.{3,40}?)(?:\.|,|;)`), "requires"},
+		{regexp.MustCompile(`(?i)(.{3,40}?)\s+leads?\s+to\s+(.{3,40}?)(?:\.|,|;)`), "causes"},
+		{regexp.MustCompile(`(?i)(.{3,40}?)\s+results?\s+in\s+(.{3,40}?)(?:\.|,|;)`), "causes"},
+	}
+
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		text := string(data)
+		for _, pat := range causalPatterns {
+			matches := pat.re.FindAllStringSubmatch(text, -1)
+			for _, m := range matches {
+				if len(m) >= 3 {
+					subj := strings.TrimSpace(m[1])
+					obj := strings.TrimSpace(m[2])
+					if len(subj) > 2 && len(obj) > 2 {
+						triple := [3]string{subj, pat.relation, obj}
+						edges[subj] = append(edges[subj], triple)
+					}
+				}
+			}
+		}
+	}
+
+	return edges
 }
 
 // -----------------------------------------------------------------------

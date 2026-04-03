@@ -79,6 +79,15 @@ func trainMamba(args []string) {
 	paraPairs := micromodel.ExtractParagraphPairs(*knowledgeDir, 600)
 	pairs = append(pairs, paraPairs...)
 	fmt.Printf("  Paragraph pairs: %d\n", len(paraPairs))
+
+	// Add causal chain pairs for multi-hop causal reasoning.
+	// These teach the Mamba SSM to model causal state propagation:
+	// A causes B causes C → multi-sentence explanations.
+	causalEdges := micromodel.ExtractCausalEdgesFromKnowledge(*knowledgeDir)
+	causalPairs := micromodel.GenerateCausalChainPairs(causalEdges)
+	pairs = append(pairs, causalPairs...)
+	fmt.Printf("  Causal chain pairs: %d\n", len(causalPairs))
+
 	fmt.Printf("  Total: %d training pairs\n", len(pairs))
 
 	if len(pairs) == 0 {
