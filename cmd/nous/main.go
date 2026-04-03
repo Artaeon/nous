@@ -440,6 +440,14 @@ func main() {
 		actions.SelfTeacher = cognitive.NewSelfTeach(knowledgePath, actions.CogGraph)
 	}
 
+	// Causal knowledge bootstrap — seeds common-sense causal edges for simulation.
+	if actions.CogGraph != nil {
+		bootstrapped := cognitive.BootstrapCausalKnowledge(actions.CogGraph)
+		if bootstrapped > 0 {
+			fmt.Fprintf(os.Stderr, "  bootstrapped %d causal edges (infrastructure, nature, economy, technology)\n", bootstrapped)
+		}
+	}
+
 	// Causal inference — discovers implicit causal edges from graph topology
 	if actions.CogGraph != nil {
 		actions.CausalInfer = cognitive.NewCausalInferenceEngine(actions.CogGraph)
