@@ -614,3 +614,290 @@ func perspectiveName(p Perspective) string {
 		return "Unknown"
 	}
 }
+
+// -----------------------------------------------------------------------
+// Multi-Round Debate — perspectives respond to each other.
+//
+// Unlike the standard single-pass Deliberate, DebateRounds lets
+// perspectives see each other's opinions and refine their positions.
+// Each round, perspectives can:
+//   - Strengthen: add evidence for their position
+//   - Concede: lower confidence and defer to stronger arguments
+//   - Challenge: raise specific objections to another perspective
+//   - Synthesize: propose a combined position
+// -----------------------------------------------------------------------
+
+// DebateResult captures the full multi-round debate.
+type DebateResult struct {
+	Rounds       []DebateRound
+	FinalOpinions []CouncilOpinion
+	Consensus    string      // the point of agreement (if any)
+	Dissent      string      // remaining disagreement (if any)
+	Dominant     Perspective // which perspective won after all rounds
+	Confidence   float64     // aggregate confidence
+	Trace        string      // full debate trace
+}
+
+// DebateRound captures one round of the debate.
+type DebateRound struct {
+	Round    int
+	Moves    []DebateMove
+	Shifting bool   // did any perspective change position?
+	Summary  string // one-line summary of the round
+}
+
+// DebateMove is a single perspective's action in a round.
+type DebateMove struct {
+	Perspective Perspective
+	MoveType    string  // "strengthen", "concede", "challenge", "synthesize"
+	Target      Perspective // who they're responding to (for challenge)
+	Argument    string
+	NewConfidence float64
+}
+
+// Debate runs a multi-round deliberation where perspectives interact.
+// More expensive than Deliberate but produces deeper reasoning.
+func (ic *InnerCouncil) Debate(input string, nluResult *NLUResult, ctx *ComposeContext, rounds int) *DebateResult {
+	if rounds < 1 {
+		rounds = 1
+	}
+	if rounds > 5 {
+		rounds = 5 // diminishing returns after 5 rounds
+	}
+
+	// Start with standard opinion gathering.
+	var topics []string
+	if nluResult != nil {
+		for _, v := range nluResult.Entities {
+			topics = append(topics, v)
+		}
+	}
+	if ctx != nil {
+		topics = append(topics, ctx.RecentTopics...)
+	}
+
+	var subtext *SubtextAnalysis
+	var sparks []AssociativeSpark
+	if ctx != nil {
+		subtext = ctx.Subtext
+		sparks = ctx.Sparks
+	}
+
+	// Initial opinions (round 0).
+	opinions := []CouncilOpinion{
+		ic.consultPragmatist(input, topics),
+		ic.consultHistorian(input),
+		ic.consultEmpath(input, subtext),
+		ic.consultArchitect(input, topics, sparks),
+	}
+	skeptic := ic.consultSkeptic(input, opinions)
+	opinions = append(opinions, skeptic)
+
+	result := &DebateResult{
+		Rounds: make([]DebateRound, 0, rounds),
+	}
+
+	var traceLines []string
+	traceLines = append(traceLines, "Initial positions established")
+
+	// Run debate rounds.
+	for r := 0; r < rounds; r++ {
+		round := DebateRound{Round: r + 1}
+		anyShift := false
+
+		// Each perspective evaluates others and may adjust.
+		for i := range opinions {
+			move := ic.debateMove(&opinions[i], opinions, r)
+			if move != nil {
+				round.Moves = append(round.Moves, *move)
+				// Apply the move.
+				if move.NewConfidence != opinions[i].Confidence {
+					anyShift = true
+				}
+				opinions[i].Confidence = move.NewConfidence
+				if move.Argument != "" {
+					opinions[i].Assessment = move.Argument
+				}
+			}
+		}
+
+		round.Shifting = anyShift
+		round.Summary = ic.summarizeRound(round)
+		result.Rounds = append(result.Rounds, round)
+
+		traceLines = append(traceLines, fmt.Sprintf("Round %d: %s", r+1, round.Summary))
+
+		// Early termination: if no perspective shifted, consensus reached.
+		if !anyShift {
+			traceLines = append(traceLines, "Consensus reached — no further shifts")
+			break
+		}
+	}
+
+	result.FinalOpinions = opinions
+
+	// Find dominant perspective (highest confidence * priority).
+	bestScore := 0.0
+	for _, o := range opinions {
+		score := o.Confidence * o.Priority
+		if score > bestScore {
+			bestScore = score
+			result.Dominant = o.Perspective
+		}
+	}
+	result.Confidence = bestScore
+
+	// Build consensus and dissent.
+	result.Consensus, result.Dissent = ic.findConsensusAndDissent(opinions)
+	result.Trace = strings.Join(traceLines, " -> ")
+
+	return result
+}
+
+// debateMove determines how a perspective responds to the current state.
+func (ic *InnerCouncil) debateMove(self *CouncilOpinion, all []CouncilOpinion, round int) *DebateMove {
+	// Find the strongest other opinion.
+	var strongest *CouncilOpinion
+	for i := range all {
+		if all[i].Perspective == self.Perspective {
+			continue
+		}
+		if strongest == nil || (all[i].Confidence*all[i].Priority) > (strongest.Confidence*strongest.Priority) {
+			strongest = &all[i]
+		}
+	}
+
+	if strongest == nil {
+		return nil
+	}
+
+	strongestScore := strongest.Confidence * strongest.Priority
+	selfScore := self.Confidence * self.Priority
+
+	// Decision logic:
+	switch {
+	case selfScore >= strongestScore*1.3:
+		// We're significantly stronger — strengthen our position.
+		return &DebateMove{
+			Perspective:   self.Perspective,
+			MoveType:      "strengthen",
+			Argument:      self.Assessment, // keep position
+			NewConfidence: math.Min(0.95, self.Confidence+0.05),
+		}
+
+	case strongestScore >= selfScore*1.5:
+		// Other perspective is much stronger — concede.
+		concession := fmt.Sprintf("Deferring to %s: %s",
+			perspectiveName(strongest.Perspective), strongest.KeyInsight)
+		return &DebateMove{
+			Perspective:   self.Perspective,
+			MoveType:      "concede",
+			Target:        strongest.Perspective,
+			Argument:      concession,
+			NewConfidence: math.Max(0.1, self.Confidence-0.15),
+		}
+
+	case self.Perspective == PerspSkeptic && self.Priority >= 0.4:
+		// Skeptic challenges the dominant perspective.
+		challenge := fmt.Sprintf("Challenging %s: %s But consider — %s",
+			perspectiveName(strongest.Perspective), strongest.KeyInsight, self.KeyInsight)
+		return &DebateMove{
+			Perspective:   PerspSkeptic,
+			MoveType:      "challenge",
+			Target:        strongest.Perspective,
+			Argument:      challenge,
+			NewConfidence: self.Confidence,
+		}
+
+	case round >= 2 && math.Abs(selfScore-strongestScore) < 0.15:
+		// Close match in later rounds — propose synthesis.
+		synthesis := fmt.Sprintf("Combining with %s: %s — while also noting %s",
+			perspectiveName(strongest.Perspective), strongest.KeyInsight, self.KeyInsight)
+		return &DebateMove{
+			Perspective:   self.Perspective,
+			MoveType:      "synthesize",
+			Target:        strongest.Perspective,
+			Argument:      synthesis,
+			NewConfidence: math.Min(0.9, (self.Confidence+strongest.Confidence)/2+0.1),
+		}
+
+	default:
+		// Hold position.
+		return &DebateMove{
+			Perspective:   self.Perspective,
+			MoveType:      "strengthen",
+			Argument:      self.Assessment,
+			NewConfidence: self.Confidence,
+		}
+	}
+}
+
+func (ic *InnerCouncil) summarizeRound(round DebateRound) string {
+	if len(round.Moves) == 0 {
+		return "no moves"
+	}
+
+	concessions := 0
+	challenges := 0
+	syntheses := 0
+	for _, m := range round.Moves {
+		switch m.MoveType {
+		case "concede":
+			concessions++
+		case "challenge":
+			challenges++
+		case "synthesize":
+			syntheses++
+		}
+	}
+
+	var parts []string
+	if concessions > 0 {
+		parts = append(parts, fmt.Sprintf("%d concession(s)", concessions))
+	}
+	if challenges > 0 {
+		parts = append(parts, fmt.Sprintf("%d challenge(s)", challenges))
+	}
+	if syntheses > 0 {
+		parts = append(parts, fmt.Sprintf("%d synthesis(es)", syntheses))
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "all positions held")
+	}
+
+	return strings.Join(parts, ", ")
+}
+
+func (ic *InnerCouncil) findConsensusAndDissent(opinions []CouncilOpinion) (string, string) {
+	// Consensus: perspectives with confidence > 0.5 and similar key insights.
+	var highConf []CouncilOpinion
+	var lowConf []CouncilOpinion
+	for _, o := range opinions {
+		if o.Confidence >= 0.5 {
+			highConf = append(highConf, o)
+		} else if o.Confidence >= 0.3 {
+			lowConf = append(lowConf, o)
+		}
+	}
+
+	consensus := ""
+	if len(highConf) > 0 {
+		var parts []string
+		for _, o := range highConf {
+			parts = append(parts, fmt.Sprintf("%s (%.0f%%): %s",
+				perspectiveName(o.Perspective), o.Confidence*100, o.KeyInsight))
+		}
+		consensus = strings.Join(parts, "; ")
+	}
+
+	dissent := ""
+	// If skeptic still has concerns, that's dissent.
+	for _, o := range opinions {
+		if o.Perspective == PerspSkeptic && o.Priority >= 0.4 && o.Confidence >= 0.4 {
+			dissent = o.KeyInsight
+			break
+		}
+	}
+
+	return consensus, dissent
+}
