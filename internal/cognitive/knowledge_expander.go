@@ -253,11 +253,15 @@ var (
 	// Capitalized multi-word names: "Albert Einstein", "World War II"
 	properNounRe = regexp.MustCompile(`\b([A-Z][a-z]+(?:\s+(?:of|the|and|in|de|von|van)\s+)?(?:[A-Z][a-z]+)+)\b`)
 
-	// Domain terms in specific patterns: "X is a Y", "X theory", "X principle"
-	domainTermRe = regexp.MustCompile(`(?i)\b(\w+(?:\s+\w+)?)\s+(?:theory|principle|law|effect|equation|model|theorem|hypothesis|paradox|phenomenon|mechanism|algorithm|protocol|technique|method)\b`)
+	// Domain terms: "X theory", "Euler's theorem", "quantum effect"
+	// Handles possessives ([\w']+) and up to 3 preceding words.
+	domainTermRe = regexp.MustCompile(`(?i)\b([\w']+(?:\s+[\w']+){0,3})\s+(?:theory|principle|law|effect|equation|model|theorem|hypothesis|paradox|phenomenon|mechanism|algorithm|protocol|technique|method)\b`)
 
 	// Terms after "such as", "including", "for example"
 	exemplarRe = regexp.MustCompile(`(?i)(?:such as|including|for example|e\.g\.|like)\s+(.{5,100}?)(?:\.|;|$)`)
+
+	// Paragraph-initial subjects: "Gravity is the...", "DNA is a..."
+	paraSubjectRe = regexp.MustCompile(`(?:^|\n\n)([A-Z][\w\s'-]{2,50}?)\s+(?:is|are|was|were)\s+`)
 )
 
 func extractCandidateTopics(paragraph string) []string {
@@ -267,19 +271,59 @@ func extractCandidateTopics(paragraph string) []string {
 	addTopic := func(t string) {
 		t = strings.TrimSpace(t)
 		t = strings.Trim(t, ".,;:!?()\"'")
+
+		// Strip possessive fragments: "'s theorem" → discard
+		if strings.HasPrefix(t, "s ") || strings.HasPrefix(t, "'s ") {
+			return
+		}
+
+		// Strip leading articles/determiners/conjunctions.
+		stripPrefixes := []string{
+			"the ", "a ", "an ", "this ", "that ", "these ", "those ",
+			"and ", "or ", "but ", "to ", "of ", "in ", "by ", "for ", "with ",
+		}
+		changed := true
+		for changed {
+			changed = false
+			lower := strings.ToLower(t)
+			for _, p := range stripPrefixes {
+				if strings.HasPrefix(lower, p) {
+					t = strings.TrimSpace(t[len(p):])
+					changed = true
+					break
+				}
+			}
+		}
+
 		if len(t) < 3 || len(t) > 60 {
 			return
 		}
+
+		// Must start with a letter.
+		if len(t) > 0 && !unicode.IsLetter(rune(t[0])) {
+			return
+		}
+
+		// Reject topics that are just common words or sentence fragments.
+		words := strings.Fields(strings.ToLower(t))
+		if len(words) > 0 && isStopPhrase(words[0]) {
+			return
+		}
+
 		lower := strings.ToLower(t)
 		if seen[lower] {
 			return
 		}
-		// Skip common words that aren't topics.
 		if isStopPhrase(lower) {
 			return
 		}
 		seen[lower] = true
 		topics = append(topics, t)
+	}
+
+	// Paragraph-initial subjects (highest quality).
+	for _, m := range paraSubjectRe.FindAllStringSubmatch(paragraph, -1) {
+		addTopic(strings.TrimSpace(m[1]))
 	}
 
 	// Proper nouns.
@@ -289,16 +333,16 @@ func extractCandidateTopics(paragraph string) []string {
 
 	// Domain terms.
 	for _, m := range domainTermRe.FindAllStringSubmatch(paragraph, -1) {
-		addTopic(m[0]) // full match including "theory" etc.
+		full := m[0]
+		// Clean possessive: "Euler's theorem" is fine, but strip leading noise.
+		addTopic(full)
 	}
 
 	// Exemplar lists.
 	for _, m := range exemplarRe.FindAllStringSubmatch(paragraph, -1) {
-		// Split comma-separated lists.
 		items := strings.Split(m[1], ",")
 		for _, item := range items {
 			item = strings.TrimSpace(item)
-			// Split on "and" too.
 			for _, sub := range strings.Split(item, " and ") {
 				addTopic(strings.TrimSpace(sub))
 			}
@@ -317,6 +361,17 @@ func isStopPhrase(s string) bool {
 		"more": true, "less": true, "than": true, "also": true,
 		"both": true, "all": true, "any": true, "its": true,
 		"their": true, "not": true, "can": true, "may": true,
+		"s": true, "is": true, "was": true, "are": true,
+		"were": true, "has": true, "had": true, "have": true,
+		"a": true, "an": true, "and": true, "or": true,
+		"for": true, "with": true, "by": true, "to": true,
+		// Too generic to be useful as frontier topics.
+		"technique": true, "theory": true, "principle": true,
+		"method": true, "process": true, "system": true,
+		"model": true, "approach": true, "concept": true,
+		"substance": true, "material": true, "structure": true,
+		"mechanism": true, "function": true, "property": true,
+		"type": true, "form": true, "kind": true,
 	}
 	return stops[s]
 }
