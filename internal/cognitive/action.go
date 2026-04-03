@@ -119,6 +119,11 @@ type ActionRouter struct {
 	ProseComposer  *ProseComposer
 	CodeGen        *CodeGenerator
 
+	// Innovation engines — simulation, personas, GraphRAG
+	Simulation  *SimulationEngine
+	Personas    *PersonaEngine
+	GraphRAG    *GraphRAGEngine
+
 	// Micro language model — knowledge-grounded sentence generation
 	MicroModel interface {
 		GenerateSentence(subject, relation, object string) string
@@ -752,6 +757,13 @@ func (ar *ActionRouter) dispatch(nlu *NLUResult, conv *Conversation) *ActionResu
 			if compResult := ar.handleCompute(nlu); compResult != nil && !strings.HasPrefix(compResult.DirectResponse, "cannot compute") {
 				return compResult
 			}
+			// Last resort: if the input has no math, try knowledge lookup.
+			// Catches misclassifications like "what is the periodic table?"
+			if !containsDigit(strings.ToLower(nlu.Raw)) {
+				if knResult := ar.handleLookupKnowledge(nlu); knResult != nil && knResult.Source != "honest_fallback" {
+					return knResult
+				}
+			}
 		}
 		return result
 	case "password":
@@ -772,6 +784,10 @@ func (ar *ActionRouter) dispatch(nlu *NLUResult, conv *Conversation) *ActionResu
 		return ar.handleCreative(nlu)
 	case "code", "codegen":
 		return ar.handleCodeGen(nlu)
+	case "simulate":
+		return ar.handleSimulate(nlu)
+	case "persona":
+		return ar.handlePersona(nlu)
 	default:
 		// Try thinking engine for unknown actions
 		return ar.handleLLMChat(nlu, conv)
@@ -2476,11 +2492,19 @@ func findKnowledgeParagraph(knowledgeDir, topic string) string {
 	}
 
 	// Strategy 3: full-phrase containment — the first sentence contains
-	// the entire topic phrase (not just a single word).
+	// the entire topic phrase near the beginning (subject position).
+	// For single-word topics, require it in the first 60 chars to avoid
+	// tangential mentions ("consciousness" in a Virginia Woolf article).
 	for _, p := range knowledgeParagraphCache {
 		firstSent := firstSentenceOf(p)
 		firstLower := strings.ToLower(firstSent)
-		if strings.Contains(firstLower, topicLower) {
+		idx := strings.Index(firstLower, topicLower)
+		if idx < 0 {
+			continue
+		}
+		// Multi-word topics: any position in the first sentence is fine.
+		// Single-word topics: require subject position (first 60 chars).
+		if strings.Contains(topicLower, " ") || idx < 60 {
 			return p
 		}
 	}
@@ -2615,14 +2639,17 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 	// 50-dim cosine similarity — instant (~1ms).
 	if ar.Knowledge != nil {
 		results, err := ar.Knowledge.Search(query, 3)
-		if err == nil && len(results) > 0 && results[0].Score > 0.65 {
+		if err == nil && len(results) > 0 && results[0].Score > 0.50 {
 			bestText := results[0].Text
-			// Verify the top result is actually about this topic
+			// Verify the top result is actually about this topic.
+			// Check the first 400 chars (not just 200) to catch topics
+			// mentioned after an introductory clause.
 			bestLower := strings.ToLower(bestText)
 			queryLower := strings.ToLower(query)
 			relevant := false
+			checkLen := min(len(bestLower), 400)
 			for _, w := range strings.Fields(queryLower) {
-				if len(w) > 3 && strings.Contains(bestLower[:min(len(bestLower), 200)], w) {
+				if len(w) > 3 && strings.Contains(bestLower[:checkLen], w) {
 					relevant = true
 					break
 				}
@@ -4174,6 +4201,81 @@ func (ar *ActionRouter) handleTransform(nlu *NLUResult) *ActionResult {
 	return &ActionResult{
 		DirectResponse: result,
 		Source:         "transform",
+	}
+}
+
+// handleSimulate runs a "what if" scenario simulation.
+func (ar *ActionRouter) handleSimulate(nlu *NLUResult) *ActionResult {
+	if ar.Simulation == nil {
+		// Try to build one on the fly from available engines.
+		if ar.CogGraph != nil && ar.CausalReasoner != nil {
+			ar.Simulation = NewSimulationEngine(ar.CogGraph, ar.CausalReasoner, ar.Council, ar.MultiHop)
+		} else {
+			return &ActionResult{
+				DirectResponse: "Simulation engine not available. Requires knowledge graph and causal reasoner.",
+				Source:         "simulate",
+			}
+		}
+	}
+
+	scenario := nlu.Raw
+	steps := 5 // default
+
+	var result *SimulationResult
+	if IsRemovalQuery(scenario) {
+		entity := extractHypothesis(scenario)
+		result = ar.Simulation.SimulateRemoval(entity)
+	} else {
+		result = ar.Simulation.Simulate(scenario, steps)
+	}
+
+	if result == nil {
+		return &ActionResult{
+			DirectResponse: "Could not simulate this scenario. The topic may not be in my knowledge base.",
+			Source:         "simulate",
+		}
+	}
+
+	return &ActionResult{
+		DirectResponse: result.Report,
+		Source:         "simulate",
+	}
+}
+
+// handlePersona routes to an expert persona for a domain-constrained answer.
+func (ar *ActionRouter) handlePersona(nlu *NLUResult) *ActionResult {
+	if ar.Personas == nil {
+		if ar.CogGraph != nil {
+			ar.Personas = NewPersonaEngine(ar.CogGraph)
+		} else {
+			return &ActionResult{
+				DirectResponse: "Expert persona engine not available.",
+				Source:         "persona",
+			}
+		}
+	}
+
+	personaName := nlu.Entities["persona"]
+	if personaName == "" {
+		personaName = "physicist" // default
+	}
+
+	answer := ar.Personas.Answer(nlu.Raw, personaName)
+	if answer == nil {
+		return &ActionResult{
+			DirectResponse: "Could not generate a persona response.",
+			Source:         "persona",
+		}
+	}
+
+	response := answer.Response
+	if answer.Disclaimer != "" {
+		response += "\n\n" + answer.Disclaimer
+	}
+
+	return &ActionResult{
+		DirectResponse: response,
+		Source:         fmt.Sprintf("persona:%s", answer.Persona),
 	}
 }
 

@@ -950,6 +950,29 @@ func (n *NLU) classifyIntent(raw, lower string, r *NLUResult) {
 				r.Action = ""
 			}
 
+			// Post-check: explain-verb queries routed to non-knowledge intents.
+			// "What is X?" / "What are X?" / "Explain X" without math should
+			// always route to explain → lookup_knowledge. The neural classifier
+			// sometimes misroutes these to compute, creative, conversation, etc.
+			knowledgeIntents := map[string]bool{
+				"explain": true, "question": true, "compare": true,
+				"greeting": true, "farewell": true, "affirmation": true,
+				"transform": true, "code": true,
+			}
+			if !knowledgeIntents[r.Intent] {
+				if _, hasExpr := r.Entities["expression"]; !hasExpr && !containsDigit(lower) {
+					for _, v := range n.explainVerbs {
+						if strings.HasPrefix(lower, v+" ") || strings.HasPrefix(lower, v+"\t") {
+							r.Intent = "explain"
+							r.Confidence = 0.85
+							r.Entities["topic"] = n.extractTopic(lower, v)
+							r.Action = "" // let mapAction set it
+							break
+						}
+					}
+				}
+			}
+
 			return
 		}
 	}
@@ -1789,6 +1812,17 @@ func (n *NLU) postClassifyCorrections(lower string, r *NLUResult) {
 	if isCodeRequest(lower) {
 		r.Intent = "code"
 	}
+
+	// Simulation: "what if", "simulate", "predict what"
+	if r.Intent != "compute" && r.Intent != "calculate" && IsSimulationQuery(lower) {
+		r.Intent = "simulate"
+	}
+
+	// Expert persona: "as a physicist, ...", "ask the historian"
+	if isPersQ, personaName := IsExpertPersonaQuery(lower); isPersQ {
+		r.Intent = "persona"
+		r.Entities["persona"] = personaName
+	}
 }
 
 // isCodeRequest detects if a query is asking for code generation.
@@ -1992,6 +2026,12 @@ func (n *NLU) mapAction(lower string, r *NLUResult) {
 
 	case "command":
 		r.Action = "llm_chat" // commands need LLM to figure out specifics
+
+	case "simulate":
+		r.Action = "simulate"
+
+	case "persona":
+		r.Action = "persona"
 
 	default:
 		r.Action = "llm_chat"

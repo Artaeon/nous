@@ -43,6 +43,8 @@ func SubcommandRouter(args []string, nlu *cognitive.NLU, actions *cognitive.Acti
 		return runDraft(args[1:])
 	case "code":
 		return runCode(args[1:])
+	case "simulate":
+		return runSimulate(args[1:], actions)
 	default:
 		return false
 	}
@@ -446,6 +448,17 @@ func runTransform(args []string) bool {
 // --- draft subcommand ---
 
 func runDraft(args []string) bool {
+	// Extract the document type (positional arg) before flag parsing.
+	// Go's flag package stops at the first non-flag argument, so
+	// "nous draft email --about foo" would leave --about unparsed
+	// if we didn't consume "email" first.
+	docType := ""
+	flagArgs := args
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		docType = args[0]
+		flagArgs = args[1:]
+	}
+
 	fs := goflag.NewFlagSet("draft", goflag.ContinueOnError)
 	to := fs.String("to", "", "Recipient")
 	about := fs.String("about", "", "Subject/topic")
@@ -454,10 +467,10 @@ func runDraft(args []string) bool {
 	attendees := fs.String("attendees", "", "Meeting attendees (comma-separated)")
 	decisions := fs.String("decisions", "", "Decisions made (comma-separated)")
 	actions := fs.String("actions", "", "Action items (comma-separated)")
-	fs.Parse(args)
+	fs.Parse(flagArgs)
 
-	docType := ""
-	if len(fs.Args()) > 0 {
+	// If docType wasn't a leading positional arg, check remaining args.
+	if docType == "" && len(fs.Args()) > 0 {
 		docType = fs.Args()[0]
 	}
 	if docType == "" {
@@ -1220,5 +1233,50 @@ Examples:
 		len(result.Files), result.Compiled,
 		result.TestsPassed, result.TestsPassed+result.TestsFailed,
 		result.Duration.Round(time.Millisecond))
+	return true
+}
+
+// --- simulate subcommand ---
+
+func runSimulate(args []string, actions *cognitive.ActionRouter) bool {
+	fs := goflag.NewFlagSet("simulate", goflag.ContinueOnError)
+	steps := fs.Int("steps", 5, "Number of simulation steps (1-10)")
+	removal := fs.Bool("remove", false, "Simulate removal of an entity")
+	fs.Parse(args)
+
+	scenario := strings.Join(fs.Args(), " ")
+	if scenario == "" {
+		scenario = readStdin()
+	}
+	if scenario == "" {
+		fmt.Fprintln(os.Stderr, "usage: nous simulate [--steps N] [--remove] <scenario>")
+		fmt.Fprintln(os.Stderr, "examples:")
+		fmt.Fprintln(os.Stderr, "  nous simulate \"What if renewable energy becomes cheaper than coal?\"")
+		fmt.Fprintln(os.Stderr, "  nous simulate --remove \"gravity\"")
+		fmt.Fprintln(os.Stderr, "  nous simulate --steps 3 \"What if Einstein never published relativity?\"")
+		os.Exit(1)
+	}
+
+	// Build simulation engine from action router components.
+	sim := cognitive.NewSimulationEngine(
+		actions.CogGraph,
+		actions.CausalReasoner,
+		actions.Council,
+		actions.MultiHop,
+	)
+
+	var result *cognitive.SimulationResult
+	if *removal {
+		result = sim.SimulateRemoval(scenario)
+	} else {
+		result = sim.Simulate(scenario, *steps)
+	}
+
+	if result == nil {
+		fmt.Fprintln(os.Stderr, "Could not simulate: topic not found in knowledge graph.")
+		os.Exit(1)
+	}
+
+	fmt.Println(result.Report)
 	return true
 }
