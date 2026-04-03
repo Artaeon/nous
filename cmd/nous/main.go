@@ -440,6 +440,28 @@ func main() {
 		actions.SelfTeacher = cognitive.NewSelfTeach(knowledgePath, actions.CogGraph)
 	}
 
+	// Causal inference — discovers implicit causal edges from graph topology
+	if actions.CogGraph != nil {
+		actions.CausalInfer = cognitive.NewCausalInferenceEngine(actions.CogGraph)
+		// Run inference at startup to populate causal edges.
+		inferReport := actions.CausalInfer.InferAll()
+		if inferReport.AddedCount > 0 {
+			fmt.Fprintf(os.Stderr, "  inferred %d causal edges (%d temporal, %d dependency, %d inhibition, %d production)\n",
+				inferReport.AddedCount, inferReport.TemporalCount, inferReport.DependencyCount,
+				inferReport.InhibitionCount, inferReport.ProductionCount)
+		}
+	}
+
+	// Knowledge expander — self-growing knowledge base
+	if actions.CogGraph != nil && actions.SelfTeacher != nil {
+		actions.Expander = cognitive.NewKnowledgeExpander(actions.CogGraph, actions.SelfTeacher, knowledgePath)
+	}
+
+	// MultiHop reasoner — used by simulation, GraphRAG, and persona engines
+	if actions.CogGraph != nil {
+		actions.MultiHop = cognitive.NewMultiHopReasoner(actions.CogGraph)
+	}
+
 	// Innovation systems
 	actions.Socratic = cognitive.NewSocraticEngine()
 	actions.Crystallizer = cognitive.NewInsightCrystallizer()

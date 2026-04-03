@@ -119,10 +119,13 @@ type ActionRouter struct {
 	ProseComposer  *ProseComposer
 	CodeGen        *CodeGenerator
 
-	// Innovation engines — simulation, personas, GraphRAG
-	Simulation  *SimulationEngine
-	Personas    *PersonaEngine
-	GraphRAG    *GraphRAGEngine
+	// Innovation engines — simulation, personas, GraphRAG, causal inference, knowledge expansion
+	Simulation     *SimulationEngine
+	Personas       *PersonaEngine
+	GraphRAG       *GraphRAGEngine
+	CausalInfer    *CausalInferenceEngine
+	Expander       *KnowledgeExpander
+	DispatchPipe   *DispatchPipeline
 
 	// Micro language model — knowledge-grounded sentence generation
 	MicroModel interface {

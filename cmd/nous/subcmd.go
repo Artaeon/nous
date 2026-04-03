@@ -45,6 +45,10 @@ func SubcommandRouter(args []string, nlu *cognitive.NLU, actions *cognitive.Acti
 		return runCode(args[1:])
 	case "simulate":
 		return runSimulate(args[1:], actions)
+	case "expand":
+		return runExpand(args[1:], actions)
+	case "infer":
+		return runInfer(args[1:], actions)
 	default:
 		return false
 	}
@@ -1278,5 +1282,101 @@ func runSimulate(args []string, actions *cognitive.ActionRouter) bool {
 	}
 
 	fmt.Println(result.Report)
+	return true
+}
+
+// --- expand subcommand ---
+
+func runExpand(args []string, actions *cognitive.ActionRouter) bool {
+	fs := goflag.NewFlagSet("expand", goflag.ContinueOnError)
+	generations := fs.Int("generations", 3, "Max expansion generations (1-5)")
+	dryRun := fs.Bool("dry-run", false, "Only discover frontier, don't fill gaps")
+	fs.Parse(args)
+
+	if actions.Expander == nil {
+		fmt.Fprintln(os.Stderr, "Knowledge expander not available. Requires knowledge graph and SelfTeacher.")
+		os.Exit(1)
+	}
+
+	if *dryRun {
+		fmt.Println("Discovering frontier topics...")
+		frontier := actions.Expander.DiscoverFrontier()
+		fmt.Printf("\nFound %d frontier topics (mentioned but not well-covered):\n\n", len(frontier))
+		limit := 50
+		if len(frontier) < limit {
+			limit = len(frontier)
+		}
+		for i, ft := range frontier[:limit] {
+			status := "new"
+			if ft.HasNode {
+				status = fmt.Sprintf("%d edges", ft.EdgeCount)
+			}
+			fmt.Printf("  %3d. %-40s (mentioned %dx, %s, priority %.1f)\n",
+				i+1, ft.Name, ft.Mentions, status, ft.Priority)
+		}
+		if len(frontier) > limit {
+			fmt.Printf("\n  ... and %d more\n", len(frontier)-limit)
+		}
+		return true
+	}
+
+	fmt.Printf("Running knowledge expansion (up to %d generations)...\n\n", *generations)
+	reports := actions.Expander.Expand(*generations)
+	fmt.Print(cognitive.FormatExpansionReport(reports))
+
+	// Run causal inference after expansion to discover new causal edges.
+	if actions.CausalInfer != nil {
+		fmt.Println("\nRunning causal inference on expanded graph...")
+		inferReport := actions.CausalInfer.InferAll()
+		fmt.Printf("Inferred %d new causal edges (%d temporal, %d dependency, %d inhibition, %d production)\n",
+			inferReport.AddedCount, inferReport.TemporalCount, inferReport.DependencyCount,
+			inferReport.InhibitionCount, inferReport.ProductionCount)
+	}
+
+	// Save the updated graph.
+	if actions.CogGraph != nil {
+		actions.CogGraph.Save()
+		fmt.Println("\nKnowledge graph saved.")
+	}
+
+	return true
+}
+
+// --- infer subcommand ---
+
+func runInfer(args []string, actions *cognitive.ActionRouter) bool {
+	if actions.CausalInfer == nil {
+		fmt.Fprintln(os.Stderr, "Causal inference engine not available. Requires knowledge graph.")
+		os.Exit(1)
+	}
+
+	fmt.Println("Running structural causal inference...")
+	report := actions.CausalInfer.InferAll()
+
+	fmt.Printf("\n# Causal Inference Report\n\n")
+	fmt.Printf("- Temporal ordering edges: %d\n", report.TemporalCount)
+	fmt.Printf("- Dependency chain edges:  %d\n", report.DependencyCount)
+	fmt.Printf("- Inhibition edges:        %d\n", report.InhibitionCount)
+	fmt.Printf("- Production chain edges:  %d\n", report.ProductionCount)
+	fmt.Printf("- **Total new edges added: %d**\n\n", report.AddedCount)
+
+	if len(report.Edges) > 0 {
+		fmt.Println("Sample inferred edges:")
+		limit := 20
+		if len(report.Edges) < limit {
+			limit = len(report.Edges)
+		}
+		for _, e := range report.Edges[:limit] {
+			fmt.Printf("  %s —[%s]→ %s (conf=%.2f) %s\n",
+				e.From, e.Relation, e.To, e.Confidence, e.Reason)
+		}
+	}
+
+	// Save the updated graph.
+	if actions.CogGraph != nil {
+		actions.CogGraph.Save()
+		fmt.Println("\nKnowledge graph saved.")
+	}
+
 	return true
 }
