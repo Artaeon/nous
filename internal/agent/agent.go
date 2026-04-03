@@ -50,13 +50,14 @@ type AgentStatus struct {
 // Agent is an autonomous executor that takes goals and works toward them
 // independently, using Nous's tools and knowledge.
 type Agent struct {
-	Tools    *tools.Registry
-	Planner  *Planner
-	Executor *Executor
-	State    *AgentState
-	Reporter *Reporter
-	Config   AgentConfig
-	Brain    *CognitiveBridge // cognitive systems for thinking, not just tool running
+	Tools      *tools.Registry
+	Planner    *Planner
+	Executor   *Executor
+	State      *AgentState
+	Reporter   *Reporter
+	Config     AgentConfig
+	Brain      *CognitiveBridge // cognitive systems for thinking, not just tool running
+	Experience *ExperienceMemory // learns from past executions
 
 	mu        sync.Mutex
 	running   bool
@@ -102,14 +103,19 @@ func NewAgent(toolReg *tools.Registry, config AgentConfig) *Agent {
 	executor.MaxToolCalls = config.MaxToolCalls
 	executor.StepTimeout = config.StepTimeout
 
+	exp := NewExperienceMemory(config.Workspace)
+	planner := NewPlanner(toolNames)
+	planner.Experience = exp
+
 	return &Agent{
-		Tools:    toolReg,
-		Planner:  NewPlanner(toolNames),
-		Executor: executor,
-		State:    state,
-		Reporter: NewReporter(state),
-		Config:   config,
-		resumeCh: make(chan string, 1),
+		Tools:      toolReg,
+		Planner:    planner,
+		Executor:   executor,
+		State:      state,
+		Reporter:   NewReporter(state),
+		Config:     config,
+		Experience: exp,
+		resumeCh:   make(chan string, 1),
 	}
 }
 
@@ -436,6 +442,22 @@ func (a *Agent) executeTask(task *Task) {
 	if result != nil {
 		a.State.AddToolCalls(result.ToolCalls)
 		a.State.RecordResult(task.ID, result.FinalOutput)
+
+		// Record experience for learning.
+		if a.Experience != nil {
+			var toolNames []string
+			for _, step := range task.ToolChain {
+				toolNames = append(toolNames, step.Tool)
+			}
+			a.Experience.Record(ExperienceEntry{
+				GoalType:    goalTypeString(classifyGoal(a.State.CurrentGoal)),
+				ToolChain:   toolNames,
+				Succeeded:   task.Status == TaskCompleted,
+				OutputWords: len(strings.Fields(result.FinalOutput)),
+				Duration:    float64(result.Duration.Milliseconds()),
+				Goal:        a.State.CurrentGoal,
+			})
+		}
 	}
 }
 

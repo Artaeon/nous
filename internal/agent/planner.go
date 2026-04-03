@@ -7,9 +7,10 @@ import (
 )
 
 // Planner decomposes high-level goals into executable plans with phases,
-// tasks, and tool chains. Pure code — no LLM calls.
+// tasks, and tool chains. Uses experience memory to improve over time.
 type Planner struct {
-	toolNames []string // available tool names for chain building
+	toolNames  []string          // available tool names for chain building
+	Experience *ExperienceMemory // learn from past executions (optional)
 }
 
 // NewPlanner creates a goal planner that knows about available tools.
@@ -18,25 +19,67 @@ func NewPlanner(toolNames []string) *Planner {
 }
 
 // DecomposeGoal breaks a high-level goal into an executable plan.
+// If experience memory is available, it consults past outcomes to
+// improve the plan — avoiding tools that fail and preferring those
+// that succeed.
 func (p *Planner) DecomposeGoal(goal string) (*Plan, error) {
 	if strings.TrimSpace(goal) == "" {
 		return nil, fmt.Errorf("empty goal")
 	}
 
-	goalType := classifyGoal(goal)
-	phases := p.buildPhases(goal, goalType)
+	gt := classifyGoal(goal)
+	phases := p.buildPhases(goal, gt)
 
 	if len(phases) == 0 {
 		// Fallback: single-phase generic plan
 		phases = p.genericPhases(goal)
 	}
 
-	return &Plan{
+	// Experience-based refinement: remove tools that consistently fail.
+	if p.Experience != nil {
+		failed := p.Experience.FailedToolsForGoal(goalTypeString(gt))
+		if len(failed) > 0 {
+			failSet := make(map[string]bool)
+			for _, f := range failed {
+				failSet[f] = true
+			}
+			for i := range phases {
+				for j := range phases[i].Tasks {
+					var filtered []ToolStep
+					for _, step := range phases[i].Tasks[j].ToolChain {
+						if !failSet[step.Tool] {
+							filtered = append(filtered, step)
+						}
+					}
+					phases[i].Tasks[j].ToolChain = filtered
+				}
+			}
+		}
+	}
+
+	plan := &Plan{
 		Goal:        goal,
 		Phases:      phases,
 		CreatedAt:   time.Now(),
 		EstDuration: estimateDuration(phases),
-	}, nil
+	}
+
+	// Add experience context to the plan.
+	if p.Experience != nil {
+		similar := p.Experience.SimilarGoalOutcomes(goal)
+		if len(similar) > 0 {
+			successes := 0
+			for _, s := range similar {
+				if s.Succeeded {
+					successes++
+				}
+			}
+			plan.ExperienceNote = fmt.Sprintf("Based on %d similar past goals (%.0f%% success rate)",
+				len(similar), float64(successes)/float64(len(similar))*100)
+		}
+	}
+
+	return plan, nil
 }
 
 // goalType classifies what kind of goal the user described.
@@ -51,6 +94,26 @@ const (
 	goalMonitoring
 	goalGeneric
 )
+
+// goalTypeString returns the string name of a goal type.
+func goalTypeString(gt goalType) string {
+	switch gt {
+	case goalResearch:
+		return "research"
+	case goalWriting:
+		return "writing"
+	case goalAnalysis:
+		return "analysis"
+	case goalPlanning:
+		return "planning"
+	case goalBuilding:
+		return "building"
+	case goalMonitoring:
+		return "monitoring"
+	default:
+		return "generic"
+	}
+}
 
 // classifyGoal determines the goal type from natural language.
 func classifyGoal(goal string) goalType {

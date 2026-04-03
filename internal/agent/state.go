@@ -157,10 +157,11 @@ type Phase struct {
 
 // Plan represents a decomposed goal with phases, tasks, and dependencies.
 type Plan struct {
-	Goal        string        `json:"goal"`
-	Phases      []Phase       `json:"phases"`
-	CreatedAt   time.Time     `json:"created_at"`
-	EstDuration time.Duration `json:"est_duration_ns"`
+	Goal           string        `json:"goal"`
+	Phases         []Phase       `json:"phases"`
+	CreatedAt      time.Time     `json:"created_at"`
+	EstDuration    time.Duration `json:"est_duration_ns"`
+	ExperienceNote string        `json:"experience_note,omitempty"` // insight from past similar goals
 }
 
 // HumanInput records one human-in-the-loop interaction.
