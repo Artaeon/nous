@@ -291,7 +291,18 @@ func extractCoreEntity(hypothesis string) string {
 		}
 	}
 
-	// Strip leading articles.
+	// Strip leading "what if", question words, articles.
+	whatIfPrefixes := []string{
+		"what if ", "what would happen if ", "imagine if ",
+		"suppose ", "hypothetically ", "assuming ",
+	}
+	for _, p := range whatIfPrefixes {
+		if strings.HasPrefix(lower, p) {
+			lower = lower[len(p):]
+			break
+		}
+	}
+
 	lower = stripLeadingFillers(lower)
 
 	return strings.TrimSpace(lower)

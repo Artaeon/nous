@@ -4297,7 +4297,8 @@ func (ar *ActionRouter) handleSimulate(nlu *NLUResult) *ActionResult {
 
 	var result *SimulationResult
 	if IsRemovalQuery(scenario) {
-		entity := extractHypothesis(scenario)
+		hypothesis := extractHypothesis(scenario)
+		entity := extractCoreEntity(hypothesis)
 		result = ar.Simulation.SimulateRemoval(entity)
 	} else {
 		result = ar.Simulation.Simulate(scenario, steps)
