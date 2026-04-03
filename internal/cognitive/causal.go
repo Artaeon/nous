@@ -338,7 +338,7 @@ func (gcr *GraphCausalReasoner) WhatIf(hypothesis string) *CausalChainResult {
 			if visited[edge.To] {
 				continue
 			}
-			if edge.Relation != RelCauses && edge.Relation != RelFollows {
+			if !isCausalRelation(edge.Relation) {
 				continue
 			}
 
@@ -639,4 +639,17 @@ func pearsonCorrelation(x, y []float64) float64 {
 		return 0
 	}
 	return numerator / denominator
+}
+
+// isCausalRelation returns true for relation types that represent
+// causal or consequential connections — used by the simulation engine
+// and GraphCausalReasoner to traverse effect chains.
+func isCausalRelation(rel RelType) bool {
+	switch rel {
+	case RelCauses, RelFollows, RelEnables, RelProduces,
+		RelPrevents, RelRequires:
+		return true
+	default:
+		return false
+	}
 }

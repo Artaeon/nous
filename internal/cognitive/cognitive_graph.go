@@ -54,6 +54,12 @@ const (
 	RelInfluencedBy RelType = "influenced_by" // X was influenced by Y
 	RelDerivedFrom  RelType = "derived_from"  // X is derived from Y
 	RelOppositeOf   RelType = "opposite_of"   // X is the opposite of Y
+
+	// Causal relation types — used by SimulationEngine and CausalInference.
+	RelPrevents RelType = "prevents" // X prevents/inhibits Y
+	RelEnables  RelType = "enables"  // X enables/facilitates Y
+	RelRequires RelType = "requires" // X requires/depends on Y
+	RelProduces RelType = "produces" // X produces/generates Y
 )
 
 // transitiveRels are relation types where A→B→C implies A→C.
@@ -521,6 +527,30 @@ func edgeToNaturalLanguage(subj string, rel RelType, obj string) string {
 			sentence = subj + " cause " + obj + "."
 		} else {
 			sentence = subj + " causes " + obj + "."
+		}
+	case RelPrevents:
+		if plural {
+			sentence = subj + " prevent " + obj + "."
+		} else {
+			sentence = subj + " prevents " + obj + "."
+		}
+	case RelEnables:
+		if plural {
+			sentence = subj + " enable " + obj + "."
+		} else {
+			sentence = subj + " enables " + obj + "."
+		}
+	case RelRequires:
+		if plural {
+			sentence = subj + " require " + obj + "."
+		} else {
+			sentence = subj + " requires " + obj + "."
+		}
+	case RelProduces:
+		if plural {
+			sentence = subj + " produce " + obj + "."
+		} else {
+			sentence = subj + " produces " + obj + "."
 		}
 	default:
 		sentence = subj + " — " + obj + "."
@@ -1105,6 +1135,26 @@ func (cg *CognitiveGraph) edgeToFact(edge *CogEdge) string {
 		return fmt.Sprintf("%s is in the %s domain", subj, obj)
 	case RelDescribedAs:
 		return fmt.Sprintf("%s is %s", subj, obj)
+	case RelPrevents:
+		if plural {
+			return fmt.Sprintf("%s prevent %s", subj, obj)
+		}
+		return fmt.Sprintf("%s prevents %s", subj, obj)
+	case RelEnables:
+		if plural {
+			return fmt.Sprintf("%s enable %s", subj, obj)
+		}
+		return fmt.Sprintf("%s enables %s", subj, obj)
+	case RelRequires:
+		if plural {
+			return fmt.Sprintf("%s require %s", subj, obj)
+		}
+		return fmt.Sprintf("%s requires %s", subj, obj)
+	case RelProduces:
+		if plural {
+			return fmt.Sprintf("%s produce %s", subj, obj)
+		}
+		return fmt.Sprintf("%s produces %s", subj, obj)
 	default:
 		return fmt.Sprintf("%s → %s → %s", subj, edge.Relation, obj)
 	}

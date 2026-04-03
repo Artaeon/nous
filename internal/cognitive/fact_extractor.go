@@ -157,7 +157,7 @@ func buildExtractionPatterns() []ExtractionPattern {
 
 	// "X enables/facilitates Y"
 	add(`(?i)^(.+?)\s+(?:enables?|facilitates?|allows?|permits?)\s+(.+?)$`,
-		RelUsedFor, 1, 2, 0.7)
+		RelEnables, 1, 2, 0.7)
 
 	// "X is designed for Y"
 	add(`(?i)^(.+?)\s+(?:is|are)\s+designed\s+(?:for|to)\s+(.+?)$`,
@@ -304,11 +304,11 @@ func buildExtractionPatterns() []ExtractionPattern {
 
 	// "... governs/underpins/enables Y"
 	add(`(?i)(.+?)\s+(?:governs?|underpins?|enables?|powers?|drives?)\s+(.+?)$`,
-		RelRelatedTo, 1, 2, 0.5)
+		RelEnables, 1, 2, 0.6)
 
 	// "... the basis for/of Y"
 	add(`(?i)(.+?)\s+(?:is|are|forms?)\s+the\s+(?:basis|foundation|cornerstone|bedrock)\s+(?:for|of)\s+(.+?)$`,
-		RelRelatedTo, 1, 2, 0.5)
+		RelEnables, 1, 2, 0.6)
 
 	// "... classified into Y"
 	add(`(?i)(.+?)\s+(?:is|are)\s+(?:classified|divided|categorized|organized|grouped)\s+into\s+(.+?)$`,
@@ -599,8 +599,8 @@ var topicScopedPatterns = []struct {
 	// "applications in Y" — used_for
 	{regexp.MustCompile(`(?i)\bapplications?\s+(?:in|including)\s+(.{5,80}?)(?:\.|;|$)`), RelUsedFor, 1},
 
-	// "enables/allows Y"
-	{regexp.MustCompile(`(?i)\b(?:enabling|allowing|permitting|facilitating)\s+(.{5,60}?)(?:\.|,|;|$)`), RelUsedFor, 1},
+	// "enabling/allowing Y" (gerund form)
+	{regexp.MustCompile(`(?i)\b(?:enabling|allowing|permitting|facilitating)\s+(.{5,60}?)(?:\.|,|;|$)`), RelEnables, 1},
 
 	// "including X, Y, and Z" — has components
 	{regexp.MustCompile(`(?i)\bincluding\s+(.{5,100}?)(?:\.|;|$)`), RelHas, 1},
@@ -654,7 +654,7 @@ var topicScopedPatterns = []struct {
 	{regexp.MustCompile(`(?i)\b(?:key|major|significant|important|primary|principal)\s+(?:features?|aspects?|characteristics?|properties|elements?|components?|factors?|principles?)\s+(?:include|are)\s+(.{5,100}?)(?:\.|;|$)`), RelHas, 1},
 
 	// "produces/generates Y"
-	{regexp.MustCompile(`(?i)\b(?:produces?|generates?|yields?|creates?|synthesizes?)\s+(.{3,60}?)(?:\.|,|;|$)`), RelHas, 1},
+	{regexp.MustCompile(`(?i)\b(?:produces?|generates?|yields?|creates?|synthesizes?)\s+(.{3,60}?)(?:\.|,|;|$)`), RelProduces, 1},
 
 	// "derives from Y" / "originates from Y"
 	{regexp.MustCompile(`(?i)\b(?:derives?|originates?|stems?|evolved?|descended?)\s+from\s+(.{3,60}?)(?:\.|,|;|$)`), RelDerivedFrom, 1},
@@ -699,7 +699,7 @@ var topicScopedPatterns = []struct {
 	{regexp.MustCompile(`(?i)\b(?:employs?|utilizes?|uses?|relies?\s+on|depends?\s+on)\s+(.{5,60}?)(?:\.|,|;|$)`), RelHas, 1},
 
 	// "requires Y"
-	{regexp.MustCompile(`(?i)\brequires?\s+(.{5,60}?)(?:\.|,|;|$)`), RelHas, 1},
+	{regexp.MustCompile(`(?i)\brequires?\s+(.{5,60}?)(?:\.|,|;|$)`), RelRequires, 1},
 
 	// "combines Y" / "integrates Y" / "incorporates Y"
 	{regexp.MustCompile(`(?i)\b(?:combines?|integrates?|incorporates?|merges?|unifies?)\s+(.{5,80}?)(?:\.|,|;|$)`), RelHas, 1},
@@ -714,7 +714,10 @@ var topicScopedPatterns = []struct {
 	{regexp.MustCompile(`(?i)\b(?:a\s+)?(?:measure|indicator|marker|sign|symptom)\s+of\s+(.{3,60}?)(?:\.|,|;|$)`), RelRelatedTo, 1},
 
 	// "prevents/inhibits Y"
-	{regexp.MustCompile(`(?i)\b(?:prevents?|inhibits?|blocks?|suppresses?|reduces?|limits?|restricts?)\s+(.{5,60}?)(?:\.|,|;|$)`), RelRelatedTo, 1},
+	{regexp.MustCompile(`(?i)\b(?:prevents?|inhibits?|blocks?|suppresses?)\s+(.{5,60}?)(?:\.|,|;|$)`), RelPrevents, 1},
+
+	// "reduces/limits/restricts Y" — weaker form of prevents
+	{regexp.MustCompile(`(?i)\b(?:reduces?|limits?|restricts?|diminishes?)\s+(.{5,60}?)(?:\.|,|;|$)`), RelPrevents, 1},
 
 	// "enhances/improves/increases Y"
 	{regexp.MustCompile(`(?i)\b(?:enhances?|improves?|increases?|boosts?|strengthens?|promotes?|accelerates?|amplifies?)\s+(.{5,60}?)(?:\.|,|;|$)`), RelRelatedTo, 1},
@@ -764,8 +767,18 @@ var topicScopedPatterns = []struct {
 	// "formalized by Y" / "codified by Y"
 	{regexp.MustCompile(`(?i)\b(?:formalized|codified|standardized|systematized)\s+by\s+([A-Z][\w]+(?:\s+(?:and\s+)?[A-Z][\w]+){0,4})`), RelCreatedBy, 1},
 
-	// "enables/supports Y" — used_for (mid-sentence)
-	{regexp.MustCompile(`(?i)\b(?:enables?|supports?|facilitates?|permits?|provides?\s+for)\s+(.{5,60}?)(?:\.|,|;|$)`), RelUsedFor, 1},
+	// "enables/supports Y" (mid-sentence)
+	{regexp.MustCompile(`(?i)\b(?:enables?|supports?|facilitates?|permits?|provides?\s+for)\s+(.{5,60}?)(?:\.|,|;|$)`), RelEnables, 1},
+
+	// Complex causal clause patterns (conditional, purpose, prerequisite)
+	// "without X, Y cannot Z" → X required for Y
+	{regexp.MustCompile(`(?i)\bwithout\s+(.{3,40}?),\s+(.{3,60}?)\s+cannot\b`), RelRequires, 2},
+	// "essential for Y" / "necessary for Y" / "crucial for Y"
+	{regexp.MustCompile(`(?i)\b(?:essential|necessary|crucial|vital|critical|indispensable)\s+(?:for|to)\s+(.{5,60}?)(?:\.|,|;|$)`), RelRequires, 1},
+	// "X in order to Y" / "X so that Y"
+	{regexp.MustCompile(`(?i)\bin\s+order\s+to\s+(.{5,60}?)(?:\.|,|;|$)`), RelEnables, 1},
+	// "X contributes to Y"
+	{regexp.MustCompile(`(?i)\b(?:contributes?\s+to|plays?\s+a\s+role\s+in)\s+(.{5,60}?)(?:\.|,|;|$)`), RelEnables, 1},
 }
 
 // listSplittingRels tracks which relations should have their objects split

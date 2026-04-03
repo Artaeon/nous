@@ -456,6 +456,14 @@ func humanizeRelation(rel string) string {
 		return "was created by"
 	case "known_for":
 		return "is known for"
+	case "prevents":
+		return "prevents"
+	case "enables":
+		return "enables"
+	case "requires":
+		return "requires"
+	case "produces":
+		return "produces"
 	default:
 		if strings.HasPrefix(rel, "affected_by_") {
 			return "would be affected through " + strings.TrimPrefix(rel, "affected_by_")
