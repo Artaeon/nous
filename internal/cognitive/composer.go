@@ -4571,10 +4571,14 @@ var empatheticActions = []string{
 	"Would it help to talk it through?",
 	"I can check in with you later if you'd like.",
 	"I'm not going anywhere.",
-	"Whatever you need — I'm here.",
+	"Take your time — no rush.",
 	"Want to talk about what's on your mind, or would a quick distraction help?",
 	"Sometimes just naming it helps — what's the biggest thing weighing on you?",
 	"Would it help to make a quick to-do list to organize things, or do you just need to vent?",
+	"One step at a time. What's the first thing on your mind?",
+	"You don't have to have it all figured out right now.",
+	"I'm listening. Keep going if you want.",
+	"That sounds rough. Want to unpack it or just vent?",
 }
 
 // Mood-aware sad phrases
