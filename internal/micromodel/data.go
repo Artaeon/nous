@@ -887,3 +887,165 @@ func extractSentenceObject(sentence, topic string) string {
 
 	return ""
 }
+
+// -----------------------------------------------------------------------
+// Causal Chain Training Data — graph-walk sequences for Mamba SSM.
+//
+// Instead of isolated (triple, sentence) pairs, these are multi-hop
+// causal sequences that teach the Mamba's hidden state to model
+// causal propagation as temporal sequence dynamics.
+//
+// Three types:
+//   1. Forward chains:      A causes B causes C → multi-sentence explanation
+//   2. Counterfactual:      negate(A) → B doesn't happen → C doesn't happen
+//   3. Branching:           A causes {B, C, D} → explains branching effects
+//
+// The SSM's h_t = Abar * h_{t-1} + Bbar * x_t naturally models state
+// evolution — a causal chain IS a state evolution. Training on graph-walk
+// sequences teaches the hidden state to carry "world state" through
+// causal transitions.
+// -----------------------------------------------------------------------
+
+// CausalChainTriple represents one link in a causal chain.
+type CausalChainTriple struct {
+	Subject  string
+	Relation string
+	Object   string
+}
+
+// GenerateCausalChainPairs creates multi-hop causal training sequences
+// from graph edges. Takes (subject, relation, object) triples organized
+// as adjacency lists keyed by subject.
+func GenerateCausalChainPairs(edges map[string][][3]string) []TrainingExample {
+	var examples []TrainingExample
+
+	// Build adjacency for causal edges.
+	causalRels := map[string]bool{
+		"causes": true, "enables": true, "produces": true,
+		"prevents": true, "requires": true, "follows": true,
+	}
+
+	adj := make(map[string][][3]string)
+	for _, triples := range edges {
+		for _, t := range triples {
+			if causalRels[t[1]] {
+				adj[t[0]] = append(adj[t[0]], t)
+			}
+		}
+	}
+
+	// Generate forward chains (2-4 hops).
+	for start, startEdges := range adj {
+		for _, e1 := range startEdges {
+			target1 := e1[2]
+
+			// 2-hop chain.
+			chain2Input := fmt.Sprintf("%s <sep> %s <sep> %s", e1[0], e1[1], e1[2])
+			chain2Target := composeChainSentence([]CausalChainTriple{
+				{e1[0], e1[1], e1[2]},
+			})
+			examples = append(examples, TrainingExample{Input: chain2Input, Target: chain2Target})
+
+			// 3-hop.
+			if hop2Edges, ok := adj[target1]; ok {
+				for _, e2 := range hop2Edges {
+					chain3Input := fmt.Sprintf("%s <sep> %s <sep> %s <sep> %s <sep> %s",
+						e1[0], e1[1], e1[2], e2[1], e2[2])
+					chain3Target := composeChainSentence([]CausalChainTriple{
+						{e1[0], e1[1], e1[2]},
+						{e2[0], e2[1], e2[2]},
+					})
+					examples = append(examples, TrainingExample{Input: chain3Input, Target: chain3Target})
+
+					// 4-hop.
+					if hop3Edges, ok := adj[e2[2]]; ok {
+						for _, e3 := range hop3Edges[:min(len(hop3Edges), 2)] {
+							chain4Input := fmt.Sprintf("%s <sep> %s <sep> %s <sep> %s <sep> %s <sep> %s <sep> %s",
+								e1[0], e1[1], e1[2], e2[1], e2[2], e3[1], e3[2])
+							chain4Target := composeChainSentence([]CausalChainTriple{
+								{e1[0], e1[1], e1[2]},
+								{e2[0], e2[1], e2[2]},
+								{e3[0], e3[1], e3[2]},
+							})
+							examples = append(examples, TrainingExample{Input: chain4Input, Target: chain4Target})
+						}
+					}
+				}
+			}
+
+			// Counterfactual: negate the first cause.
+			counterInput := fmt.Sprintf("<negate> %s <sep> %s <sep> %s", e1[0], e1[1], e1[2])
+			counterTarget := composeCounterfactualSentence(CausalChainTriple{e1[0], e1[1], e1[2]})
+			examples = append(examples, TrainingExample{Input: counterInput, Target: counterTarget})
+
+			_ = start
+		}
+
+		// Branching: 2+ causal outgoing edges.
+		if len(startEdges) >= 2 {
+			var chains []CausalChainTriple
+			for _, e := range startEdges[:min(len(startEdges), 4)] {
+				chains = append(chains, CausalChainTriple{e[0], e[1], e[2]})
+			}
+			branchInput := fmt.Sprintf("<branch> %s <sep> %d effects", start, len(chains))
+			branchTarget := composeBranchSentence(start, chains)
+			examples = append(examples, TrainingExample{Input: branchInput, Target: branchTarget})
+		}
+	}
+
+	return examples
+}
+
+func composeChainSentence(chain []CausalChainTriple) string {
+	var parts []string
+	for i, link := range chain {
+		verb := humanizeCausalVerb(link.Relation)
+		if i == 0 {
+			parts = append(parts, fmt.Sprintf("%s %s %s.", causalCapitalize(link.Subject), verb, link.Object))
+		} else {
+			parts = append(parts, fmt.Sprintf("This in turn %s %s.", verb, link.Object))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func composeCounterfactualSentence(link CausalChainTriple) string {
+	return fmt.Sprintf("Without %s, %s would not occur. This would remove a key factor affecting %s.",
+		link.Subject, link.Object, link.Object)
+}
+
+func composeBranchSentence(source string, effects []CausalChainTriple) string {
+	var parts []string
+	parts = append(parts, fmt.Sprintf("%s has multiple effects.", causalCapitalize(source)))
+	for _, e := range effects {
+		verb := humanizeCausalVerb(e.Relation)
+		parts = append(parts, fmt.Sprintf("It %s %s.", verb, e.Object))
+	}
+	return strings.Join(parts, " ")
+}
+
+func humanizeCausalVerb(rel string) string {
+	switch rel {
+	case "causes":
+		return "causes"
+	case "enables":
+		return "enables"
+	case "produces":
+		return "produces"
+	case "prevents":
+		return "prevents"
+	case "requires":
+		return "requires"
+	case "follows":
+		return "leads to"
+	default:
+		return "affects"
+	}
+}
+
+func causalCapitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
