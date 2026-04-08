@@ -1,7 +1,7 @@
-# Nous (νοῦς) — Architecture Reference
+# NOUS (νοῦς) — Architecture Reference
 
-**Native Orchestration of Unified Streams**
-Version 1.2.0 | Go 1.22+ | Zero External Dependencies | ~20MB Static Binary | 175 Cognitive Modules | 52 Built-in Tools | Mamba SSM
+**N**ative **O**rchestration of **U**nified **S**treams
+Version 1.2.0 | Go 1.22+ | Zero External Dependencies | ~20MB Static Binary | 175 Cognitive Modules | 52 Built-in Tools | Mamba SSM | 235K Lines of Go
 
 ---
 
