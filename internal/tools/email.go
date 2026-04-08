@@ -74,7 +74,7 @@ func CheckEmail(config *EmailConfig, maxMessages int) (string, error) {
 		maxMessages = 5
 	}
 
-	addr := fmt.Sprintf("%s:%d", config.Host, config.Port)
+	addr := net.JoinHostPort(config.Host, fmt.Sprintf("%d", config.Port))
 
 	var conn net.Conn
 	var err error

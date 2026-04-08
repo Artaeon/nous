@@ -228,9 +228,8 @@ func (sc *SentenceCorpus) RetrieveVaried(subject string, rel RelType, object str
 				best = j
 			}
 		}
-		top[i], top[best] = top[best], top[best]
 		if best != i {
-			top[i], top[best] = scored{top[best].idx, top[best].score}, scored{top[i].idx, top[i].score}
+			top[i], top[best] = top[best], top[i]
 		}
 	}
 

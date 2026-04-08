@@ -343,11 +343,22 @@ func (s *AgentState) CurrentPhase() *Phase {
 }
 
 // Snapshot returns a deep copy of the state safe for reading without locks.
-func (s *AgentState) Snapshot() AgentState {
+// Returns a pointer to avoid copying the embedded sync.RWMutex.
+func (s *AgentState) Snapshot() *AgentState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	cp := *s
+	cp := &AgentState{
+		CurrentGoal:    s.CurrentGoal,
+		Phase:          s.Phase,
+		Task:           s.Task,
+		StartedAt:      s.StartedAt,
+		LastActivity:   s.LastActivity,
+		TotalToolCalls: s.TotalToolCalls,
+		Finished:       s.Finished,
+		path:           s.path,
+	}
+
 	cp.Results = make(map[string]string, len(s.Results))
 	for k, v := range s.Results {
 		cp.Results[k] = v
