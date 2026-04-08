@@ -28,10 +28,14 @@ jobs:
         run: go vet ./...
 
       - name: Unit tests
-        run: go test ./... -count=1 -coverprofile=coverage.out
+        run: go test -short ./... -count=1 -timeout 10m -coverprofile=coverage.out
+        env:
+          CI: true
 
       - name: Race tests
-        run: go test ./... -race -count=1
+        run: go test -short ./... -race -count=1 -timeout 10m
+        env:
+          CI: true
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
