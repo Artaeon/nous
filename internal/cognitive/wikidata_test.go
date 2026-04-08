@@ -279,10 +279,18 @@ func TestWikidataImportDomain(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
+	if os.Getenv("CI") != "" {
+		t.Skip("skipping network-dependent test in CI")
+	}
 
 	wi := NewWikidataImporter()
 	pkg, err := wi.ImportDomain("science", 20)
 	if err != nil {
+		// Network failures are not test failures — skip gracefully.
+		if strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "dial") ||
+			strings.Contains(err.Error(), "connection refused") || strings.Contains(err.Error(), "no such host") {
+			t.Skipf("skipping: network unavailable: %v", err)
+		}
 		t.Fatalf("ImportDomain error: %v", err)
 	}
 
