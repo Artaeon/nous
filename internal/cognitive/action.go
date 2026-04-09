@@ -3014,6 +3014,18 @@ func (ar *ActionRouter) handleLookupKnowledge(nlu *NLUResult) *ActionResult {
 		}
 	}
 
+	// Tier 5b: Extractive QA from conversation tracker — uses facts ingested
+	// during the session (e.g. from web pages, documents, prior answers).
+	if ar.Tracker != nil {
+		answer := ar.Tracker.AnswerQuestion(nlu.Raw)
+		if answer != "" {
+			return &ActionResult{
+				DirectResponse: answer,
+				Source:         "extractive",
+			}
+		}
+	}
+
 	// Tier 6: Honest fallback — we don't have relevant information.
 	return &ActionResult{
 		DirectResponse: composeHonestFallback(nlu.Raw),

@@ -265,7 +265,7 @@ var recipientRe = regexp.MustCompile(`(?i)(?:to|for)\s+(?:my\s+)?(\w+)(?:\s+(?:a
 var aboutRe = regexp.MustCompile(`(?i)(?:about|regarding|for|on)\s+(.+?)(?:\s*[.!?]?\s*$)`)
 var askingRe = regexp.MustCompile(`(?i)asking\s+(?:for|about|if)\s+(.+?)(?:\s*[.!?]?\s*$)`)
 var audienceRe = regexp.MustCompile(`(?i)(?:to|for|like)\s+(?:a\s+)?([\w-]+(?:\s+[\w-]+)?)`)
-var vsRe = regexp.MustCompile(`(?i)(\w[\w\s]*?)\s+(?:vs\.?|versus|or|compared to)\s+(\w[\w\s]*?)(?:\s*[.!?]?\s*$)`)
+var vsRe = regexp.MustCompile(`(?i)(\w[\w\s]*?)\s+(?:vs\.?|versus|or|and|compared to)\s+(\w[\w\s]*?)(?:\s*[.!?]?\s*$)`)
 
 func (te *ThinkingEngine) extractParams(query string, task ThinkTask) *TaskParams {
 	params := &TaskParams{
@@ -301,7 +301,19 @@ func (te *ThinkingEngine) extractParams(query string, task ThinkTask) *TaskParam
 
 	// For comparisons, extract both items
 	if task == TaskCompare {
-		if m := vsRe.FindStringSubmatch(query); len(m) > 2 {
+		// Strip comparison prefixes before extracting items
+		cleaned := query
+		for _, prefix := range []string{
+			"compare ", "contrast ", "what's the difference between ",
+			"what is the difference between ", "differences between ",
+			"difference between ", "pros and cons of ",
+		} {
+			if strings.HasPrefix(strings.ToLower(cleaned), prefix) {
+				cleaned = cleaned[len(prefix):]
+				break
+			}
+		}
+		if m := vsRe.FindStringSubmatch(cleaned); len(m) > 2 {
 			params.ItemA = strings.TrimSpace(m[1])
 			params.ItemB = strings.TrimSpace(m[2])
 		}
@@ -564,6 +576,7 @@ func (te *ThinkingEngine) Think(query string, ctx *ThinkContext) *ThoughtResult 
 
 	// 6. Non-LLM semantic reranking for knowledge-heavy tasks.
 	if te.shouldUsePlanRerank(task) {
+		baseline := text
 		// Try multi-pass generation first — plan→draft→verify→refine.
 		config := DefaultMultiPassConfig()
 		mpResult := te.MultiPassGenerate(query, task, params, config)
@@ -578,6 +591,10 @@ func (te *ThinkingEngine) Think(query string, ctx *ThinkContext) *ThoughtResult 
 				text = te.SelectBestCandidate(plan, candidates)
 				trace.WriteString(fmt.Sprintf("Plan rerank: %d candidates selected\n", len(candidates)))
 			}
+		}
+		// Guard: never replace a reasonable baseline with a degenerate result.
+		if len(text) < len(baseline)/2 && len(baseline) > 50 {
+			text = baseline
 		}
 	}
 

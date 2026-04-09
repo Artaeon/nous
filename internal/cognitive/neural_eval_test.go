@@ -10,6 +10,9 @@ import (
 // TestNeuralEvaluation is a comprehensive evaluation of the neural NLU system.
 // All test inputs are NOVEL — not in the training data — to measure true generalization.
 func TestNeuralEvaluation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping neural evaluation in short mode")
+	}
 	nlu := NewNLU()
 	examples := GenerateTrainingData(nlu)
 	augmented := AugmentExamples(examples)
@@ -279,6 +282,9 @@ func TestNeuralEvaluation(t *testing.T) {
 
 // TestNeuralVsPatternComparison compares neural and pattern NLU on the same inputs.
 func TestNeuralVsPatternComparison(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping neural comparison in short mode")
+	}
 	nlu := NewNLU()
 
 	// Train neural
@@ -389,6 +395,9 @@ func TestNeuralVsPatternComparison(t *testing.T) {
 
 // TestFullPipelineE2E tests the entire NLU→Action pipeline end-to-end with neural.
 func TestFullPipelineE2E(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping full pipeline E2E in short mode")
+	}
 	nlu := NewNLU()
 	if err := nlu.InitNeural(""); err != nil {
 		t.Fatalf("InitNeural: %v", err)

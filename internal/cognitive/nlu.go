@@ -1827,7 +1827,8 @@ func (n *NLU) postClassifyCorrections(lower string, r *NLUResult) {
 	}
 
 	// Code generation: "write a python function", "generate code", "code a ..."
-	if isCodeRequest(lower) {
+	// But not QR code requests — those are a tool, not code generation.
+	if r.Intent != "qrcode" && isCodeRequest(lower) {
 		r.Intent = "code"
 	}
 
