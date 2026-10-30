@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -30,13 +31,13 @@ func AuthMiddleware(apiKey string, next http.Handler) http.Handler {
 		}
 
 		// Check Authorization header first.
-		if extractBearerToken(r) == apiKey {
+		if subtle.ConstantTimeCompare([]byte(extractBearerToken(r)), []byte(apiKey)) == 1 {
 			next.ServeHTTP(w, r)
 			return
 		}
 
 		// Fallback: query parameter.
-		if r.URL.Query().Get("api_key") == apiKey {
+		if subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("api_key")), []byte(apiKey)) == 1 {
 			next.ServeHTTP(w, r)
 			return
 		}
