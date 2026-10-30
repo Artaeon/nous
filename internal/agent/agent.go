@@ -36,15 +36,15 @@ func DefaultConfig() AgentConfig {
 
 // AgentStatus is a snapshot of the agent's current state.
 type AgentStatus struct {
-	Running    bool   `json:"running"`
-	Goal       string `json:"goal"`
-	Phase      string `json:"phase"`
-	Task       string `json:"task"`
-	Progress   string `json:"progress"` // human-readable progress report
-	PausedFor  string `json:"paused_for,omitempty"`
-	ToolCalls  int    `json:"tool_calls"`
-	StartedAt  string `json:"started_at,omitempty"`
-	Duration   string `json:"duration,omitempty"`
+	Running   bool   `json:"running"`
+	Goal      string `json:"goal"`
+	Phase     string `json:"phase"`
+	Task      string `json:"task"`
+	Progress  string `json:"progress"` // human-readable progress report
+	PausedFor string `json:"paused_for,omitempty"`
+	ToolCalls int    `json:"tool_calls"`
+	StartedAt string `json:"started_at,omitempty"`
+	Duration  string `json:"duration,omitempty"`
 }
 
 // Agent is an autonomous executor that takes goals and works toward them
@@ -56,14 +56,15 @@ type Agent struct {
 	State      *AgentState
 	Reporter   *Reporter
 	Config     AgentConfig
-	Brain      *CognitiveBridge // cognitive systems for thinking, not just tool running
+	Brain      *CognitiveBridge  // cognitive systems for thinking, not just tool running
 	Experience *ExperienceMemory // learns from past executions
 
 	mu        sync.Mutex
+	workers   sync.WaitGroup
 	running   bool
 	pausedFor string // reason agent is paused (waiting for human input)
 	stopCh    chan struct{}
-	resumeCh  chan string // human input arrives here
+	resumeCh  chan string  // human input arrives here
 	reportFn  func(string) // callback for progress reports
 }
 
@@ -144,12 +145,16 @@ func (a *Agent) Start(goal string) error {
 	a.running = true
 	a.pausedFor = ""
 	a.stopCh = make(chan struct{})
+	a.workers.Add(1)
 	a.mu.Unlock()
 
 	a.State.Reset(goal)
 	a.report(fmt.Sprintf("[STARTING] Goal: %s", goal))
 
-	go a.run()
+	go func() {
+		defer a.workers.Done()
+		a.run()
+	}()
 	return nil
 }
 
@@ -169,6 +174,10 @@ func (a *Agent) Stop() {
 	a.report("[STOPPED] Agent stopped by user. State saved — can be resumed.")
 	a.State.Save()
 }
+
+// Wait waits for execution and final state writes to finish after Stop.
+// Callers must not start another run concurrently with Wait.
+func (a *Agent) Wait() { a.workers.Wait() }
 
 // Resume continues after the agent paused for human input.
 func (a *Agent) Resume(humanInput string) {
@@ -622,11 +631,15 @@ func (a *Agent) LoadAndResume() error {
 	}
 	a.running = true
 	a.stopCh = make(chan struct{})
+	a.workers.Add(1)
 	a.mu.Unlock()
 
 	a.report(fmt.Sprintf("[RESUMING] Goal: %s (phase %d, task %d)",
 		a.State.CurrentGoal, a.State.Phase+1, a.State.Task+1))
 
-	go a.run()
+	go func() {
+		defer a.workers.Done()
+		a.run()
+	}()
 	return nil
 }
