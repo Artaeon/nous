@@ -8,27 +8,27 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 	"unicode"
 
 	"github.com/artaeon/nous/internal/agent"
-	"github.com/artaeon/nous/internal/micromodel"
-	"github.com/artaeon/nous/internal/ollama"
 	"github.com/artaeon/nous/internal/assistant"
 	"github.com/artaeon/nous/internal/blackboard"
+	"github.com/artaeon/nous/internal/channels"
 	"github.com/artaeon/nous/internal/cognitive"
 	"github.com/artaeon/nous/internal/compress"
 	"github.com/artaeon/nous/internal/federation"
 	"github.com/artaeon/nous/internal/hands"
 	"github.com/artaeon/nous/internal/index"
 	"github.com/artaeon/nous/internal/memory"
+	"github.com/artaeon/nous/internal/micromodel"
+	"github.com/artaeon/nous/internal/ollama"
 	"github.com/artaeon/nous/internal/sentinel"
 	"github.com/artaeon/nous/internal/server"
-	"github.com/artaeon/nous/internal/channels"
 	"github.com/artaeon/nous/internal/tools"
 	"github.com/artaeon/nous/internal/training"
 )
@@ -128,8 +128,15 @@ func main() {
 	publicMode := flag.Bool("public", false, "Bind the HTTP server to 0.0.0.0 (with --serve)")
 	servePort := flag.String("port", "3333", "HTTP server port (with --serve)")
 	apiKey := flag.String("api-key", "", "API key for HTTP server authentication (with --serve)")
+	apiKeyFile := flag.String("api-key-file", "", "Private file containing the HTTP API key (preferred over --api-key)")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 	flag.Parse()
+	resolvedKey, keyErr := loadAPIKey(*apiKey, *apiKeyFile)
+	if keyErr != nil {
+		fmt.Fprintln(os.Stderr, keyErr)
+		os.Exit(1)
+	}
+	*apiKey = resolvedKey
 
 	if *showVersion {
 		fmt.Printf("nous %s\n", version)
@@ -682,8 +689,8 @@ func main() {
 	// Runs in background so startup isn't blocked by embedding calls.
 	if reasoner.Knowledge.Size() == 0 {
 		knowledgeDirs := []string{
-			filepath.Join(workDir, "knowledge"),  // repo checkout
-			"/app/knowledge",                      // Docker container
+			filepath.Join(workDir, "knowledge"), // repo checkout
+			"/app/knowledge",                    // Docker container
 		}
 		for _, kdir := range knowledgeDirs {
 			files, _ := filepath.Glob(filepath.Join(kdir, "*.txt"))
@@ -1089,12 +1096,12 @@ func main() {
 		srv := server.New(addr, board, perceiver, assistantStore, *apiKey)
 		srv.SetFastPath(&cognitive.FastPathResponder{
 			LLM:              nil,
-			WorkingMem:        wm,
-			LongTermMem:       ltm,
-			Knowledge:         reasoner.Knowledge,
-			VCtx:              reasoner.VCtx,
-			Growth:            reasoner.Growth,
-			ResponseCrystals:  responseCrystals,
+			WorkingMem:       wm,
+			LongTermMem:      ltm,
+			Knowledge:        reasoner.Knowledge,
+			VCtx:             reasoner.VCtx,
+			Growth:           reasoner.Growth,
+			ResponseCrystals: responseCrystals,
 		}, reasoner.Conv)
 		srv.SetNLU(nlu)
 		srv.SetActions(actions) // pass the fully-wired action router
@@ -4148,4 +4155,3 @@ func defaultMemoryPath() string {
 	}
 	return filepath.Join(home, ".nous")
 }
-

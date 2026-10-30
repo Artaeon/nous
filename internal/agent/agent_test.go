@@ -11,6 +11,15 @@ import (
 	"github.com/artaeon/nous/internal/tools"
 )
 
+// Stop signals asynchronously; join the worker before TempDir cleanup removes
+// files that the worker's final state save can still be writing.
+func newTestAgent(t *testing.T, reg *tools.Registry, config AgentConfig) *Agent {
+	t.Helper()
+	a := NewAgent(reg, config)
+	t.Cleanup(func() { a.Stop(); a.Wait() })
+	return a
+}
+
 // mockRegistry creates a tool registry with mock tools for testing.
 func mockRegistry() *tools.Registry {
 	reg := tools.NewRegistry()
@@ -280,7 +289,7 @@ func TestAgentRun_SimpleGoal(t *testing.T) {
 		StepTimeout:  5 * time.Second,
 	}
 
-	a := NewAgent(reg, config)
+	a := newTestAgent(t, reg, config)
 
 	var mu sync.Mutex
 	var reports []string
@@ -341,7 +350,7 @@ func TestAgent_HumanInLoop(t *testing.T) {
 		StepTimeout:  5 * time.Second,
 	}
 
-	a := NewAgent(reg, config)
+	a := newTestAgent(t, reg, config)
 	defer a.Stop() // ensure goroutine cleanup
 
 	// Override planner to produce a plan that needs human input
@@ -575,7 +584,7 @@ func TestAgent_DoubleStart(t *testing.T) {
 		MaxRetries:   1,
 		StepTimeout:  5 * time.Second,
 	}
-	a := NewAgent(reg, config)
+	a := newTestAgent(t, reg, config)
 
 	// Start first goal
 	if err := a.Start("Research Go programming"); err != nil {
@@ -596,21 +605,21 @@ func TestAgent_DoubleStart(t *testing.T) {
 
 func TestAgent_StopWhileIdle(t *testing.T) {
 	reg := mockRegistry()
-	a := NewAgent(reg, AgentConfig{Workspace: t.TempDir()})
+	a := newTestAgent(t, reg, AgentConfig{Workspace: t.TempDir()})
 	// Stopping an idle agent should not panic
 	a.Stop()
 }
 
 func TestAgent_ResumeWhileNotPaused(t *testing.T) {
 	reg := mockRegistry()
-	a := NewAgent(reg, AgentConfig{Workspace: t.TempDir()})
+	a := newTestAgent(t, reg, AgentConfig{Workspace: t.TempDir()})
 	// Resume when not paused should be a no-op
 	a.Resume("some input")
 }
 
 func TestAgent_StatusWhileIdle(t *testing.T) {
 	reg := mockRegistry()
-	a := NewAgent(reg, AgentConfig{Workspace: t.TempDir()})
+	a := newTestAgent(t, reg, AgentConfig{Workspace: t.TempDir()})
 	status := a.Status()
 	if status.Running {
 		t.Error("idle agent should not be running")
@@ -622,7 +631,7 @@ func TestAgent_StatusWhileIdle(t *testing.T) {
 
 func TestAgent_EmptyGoalStart(t *testing.T) {
 	reg := mockRegistry()
-	a := NewAgent(reg, AgentConfig{Workspace: t.TempDir()})
+	a := newTestAgent(t, reg, AgentConfig{Workspace: t.TempDir()})
 
 	err := a.Start("")
 	if err != nil {
@@ -647,7 +656,7 @@ func TestAgent_ConfigDefaults(t *testing.T) {
 		MaxToolCalls: 42,
 		MaxRetries:   7,
 	}
-	a := NewAgent(reg, config)
+	a := newTestAgent(t, reg, config)
 
 	// Workspace should be defaulted
 	if a.Config.Workspace == "" {
@@ -852,7 +861,7 @@ func TestDecomposeGoal_AllTypes(t *testing.T) {
 	planner := NewPlanner([]string{"websearch", "write", "read"})
 
 	goals := []struct {
-		goal     string
+		goal      string
 		minPhases int
 	}{
 		{"Research the history of cryptocurrency", 2},
@@ -888,7 +897,7 @@ func TestDecomposeGoal_AllTypes(t *testing.T) {
 
 func TestScheduler_AddRemoveList(t *testing.T) {
 	reg := mockRegistry()
-	a := NewAgent(reg, AgentConfig{Workspace: t.TempDir()})
+	a := newTestAgent(t, reg, AgentConfig{Workspace: t.TempDir()})
 	s := NewScheduler(a)
 
 	// Add two jobs
@@ -927,7 +936,7 @@ func TestScheduler_AddRemoveList(t *testing.T) {
 func TestScheduler_Persistence(t *testing.T) {
 	dir := t.TempDir()
 	reg := mockRegistry()
-	a := NewAgent(reg, AgentConfig{Workspace: dir})
+	a := newTestAgent(t, reg, AgentConfig{Workspace: dir})
 
 	s1 := NewScheduler(a)
 	_, err := s1.AddJob("daily check", "daily 9:00")
@@ -948,7 +957,7 @@ func TestScheduler_Persistence(t *testing.T) {
 
 func TestScheduler_InvalidSchedule(t *testing.T) {
 	reg := mockRegistry()
-	a := NewAgent(reg, AgentConfig{Workspace: t.TempDir()})
+	a := newTestAgent(t, reg, AgentConfig{Workspace: t.TempDir()})
 	s := NewScheduler(a)
 
 	_, err := s.AddJob("test", "garbage")
@@ -982,7 +991,7 @@ func TestIsInWorkspace(t *testing.T) {
 
 func TestAgent_LoadAndResume_NoState(t *testing.T) {
 	reg := mockRegistry()
-	a := NewAgent(reg, AgentConfig{Workspace: t.TempDir()})
+	a := newTestAgent(t, reg, AgentConfig{Workspace: t.TempDir()})
 	err := a.LoadAndResume()
 	if err == nil {
 		t.Error("expected error when no saved state exists")
@@ -994,7 +1003,7 @@ func TestAgent_LoadAndResume_FinishedState(t *testing.T) {
 	reg := mockRegistry()
 
 	// Create agent, run to completion, then try to resume
-	a := NewAgent(reg, AgentConfig{
+	a := newTestAgent(t, reg, AgentConfig{
 		Workspace:    dir,
 		MaxToolCalls: 50,
 		MaxRetries:   1,
@@ -1015,7 +1024,7 @@ func TestAgent_LoadAndResume_FinishedState(t *testing.T) {
 	}
 
 	// Now try to resume — should fail since it's finished
-	a2 := NewAgent(reg, AgentConfig{Workspace: dir})
+	a2 := newTestAgent(t, reg, AgentConfig{Workspace: dir})
 	err := a2.LoadAndResume()
 	if err == nil {
 		t.Error("expected error when resuming finished state")
@@ -1113,7 +1122,7 @@ func TestExecutor_CognitiveSteps_WithMockBrain(t *testing.T) {
 
 func TestAgent_ConcurrentStatusCalls(t *testing.T) {
 	reg := mockRegistry()
-	a := NewAgent(reg, AgentConfig{
+	a := newTestAgent(t, reg, AgentConfig{
 		Workspace:    t.TempDir(),
 		MaxToolCalls: 50,
 	})

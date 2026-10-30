@@ -221,8 +221,16 @@ go build -o nous-train ./cmd/nous-train
 
 ### Server mode
 
+Provision a random API key through your secret manager, with at least 32
+characters and owner-only file permissions (`0600` or `0400`). Mount that file
+read-only into a container. Its contents are never included in Docker command
+metadata; do not commit the file or put the key in a URL. Existing `--api-key`
+clients remain compatible, but arguments can be exposed by process inspection.
+Only one key source may be configured. File read or validation errors stop
+startup instead of silently disabling authentication.
+
 ```bash
-./nous --serve --port 3333 --api-key yoursecretkey
+./nous --serve --port 3333 --api-key-file /run/secrets/nous-api-key
 
 curl -X POST http://localhost:3333/api/chat \
   -H "Authorization: Bearer yoursecretkey" \
